@@ -17,6 +17,7 @@ type Item struct {
 	Type    string
 	Created time.Time
 	Creator string
+	Depends []string // IDs of items that must be done before this is available
 	Title   string
 	Body    string // everything after frontmatter (raw markdown)
 }
@@ -30,8 +31,9 @@ func GenerateID(title string, created time.Time) string {
 	return fmt.Sprintf("gt-%x", sum[:2])
 }
 
-// Create writes a new work item file to available/.
-func Create(root, typ, title string) (*Item, error) {
+// Create writes a new work item file. Items with no dependencies go to
+// available/; items with unmet dependencies go to pending/.
+func Create(root, typ, title string, depends []string) (*Item, error) {
 	now := time.Now().UTC()
 	id := GenerateID(title, now)
 
@@ -42,21 +44,33 @@ func Create(root, typ, title string) (*Item, error) {
 		Type:    typ,
 		Created: now,
 		Creator: creator,
+		Depends: depends,
 		Title:   title,
 	}
 
-	dir := filepath.Join(root, "work", "available")
+	// Items with dependencies start in pending/; others in available/
+	subdir := "available"
+	if len(depends) > 0 {
+		subdir = "pending"
+	}
+	dir := filepath.Join(root, "work", subdir)
 	path := filepath.Join(dir, id+".md")
+
+	depsLine := "[]"
+	if len(depends) > 0 {
+		depsLine = "[" + strings.Join(depends, ", ") + "]"
+	}
 
 	content := fmt.Sprintf(`---
 id: %s
 type: %s
 created: %s
 creator: %s
+depends: %s
 ---
 
 # %s
-`, item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, item.Title)
+`, item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, depsLine, item.Title)
 
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return nil, fmt.Errorf("writing work item: %w", err)
@@ -71,6 +85,7 @@ func Read(root, id string) (*Item, error) {
 		filepath.Join(root, "work", "available"),
 		filepath.Join(root, "work", "claimed"),
 		filepath.Join(root, "work", "done"),
+		filepath.Join(root, "work", "pending"),
 	}
 
 	for _, dir := range dirs {
@@ -159,6 +174,8 @@ func Parse(content string) (*Item, error) {
 			}
 		case "creator":
 			item.Creator = val
+		case "depends":
+			item.Depends = parseDependsList(val)
 		}
 	}
 
@@ -175,6 +192,25 @@ func Parse(content string) (*Item, error) {
 	}
 
 	return item, nil
+}
+
+// parseDependsList parses a YAML-style list like "[gt-aaa, gt-bbb]" into a slice.
+func parseDependsList(val string) []string {
+	val = strings.TrimSpace(val)
+	val = strings.TrimPrefix(val, "[")
+	val = strings.TrimSuffix(val, "]")
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return nil
+	}
+	var deps []string
+	for _, d := range strings.Split(val, ",") {
+		d = strings.TrimSpace(d)
+		if d != "" {
+			deps = append(deps, d)
+		}
+	}
+	return deps
 }
 
 func currentUser() string {

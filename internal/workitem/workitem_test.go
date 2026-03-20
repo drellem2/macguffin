@@ -37,7 +37,7 @@ func TestCreate(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "bug", "Auth tokens broken")
+	item, err := Create(root, "bug", "Auth tokens broken", nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestRead(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	created, err := Create(root, "task", "Implement feature X")
+	created, err := Create(root, "task", "Implement feature X", nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -107,11 +107,11 @@ func TestList(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	_, err := Create(root, "bug", "First item")
+	_, err := Create(root, "bug", "First item", nil)
 	if err != nil {
 		t.Fatalf("Create 1 failed: %v", err)
 	}
-	_, err = Create(root, "task", "Second item")
+	_, err = Create(root, "task", "Second item", nil)
 	if err != nil {
 		t.Fatalf("Create 2 failed: %v", err)
 	}
@@ -201,6 +201,7 @@ func setupDirs(t *testing.T, root string) {
 		filepath.Join(root, "work", "available"),
 		filepath.Join(root, "work", "claimed"),
 		filepath.Join(root, "work", "done"),
+		filepath.Join(root, "work", "pending"),
 	} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", d, err)

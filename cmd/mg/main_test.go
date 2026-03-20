@@ -521,6 +521,7 @@ func TestCLI_Init(t *testing.T) {
 		".macguffin/work/available",
 		".macguffin/work/claimed",
 		".macguffin/work/done",
+		".macguffin/work/pending",
 		".macguffin/agents",
 		".macguffin/mail",
 		".macguffin/log",
@@ -698,6 +699,93 @@ func TestCLI_SnapshotAndLog(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	if len(lines) < 2 {
 		t.Errorf("expected >= 2 commits, got %d: %s", len(lines), out)
+	}
+}
+
+func TestCLI_ScheduleE2E(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	// Init
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create Phase 1 (no deps) → available/
+	cmd = exec.Command(bin, "new", "Phase 1")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new phase1 failed: %v\n%s", err, out)
+	}
+	id1 := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// Create Phase 2 (depends on Phase 1) → pending/
+	cmd = exec.Command(bin, "new", "--depends="+id1, "Phase 2")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new phase2 failed: %v\n%s", err, out)
+	}
+	id2 := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// Phase 2 should NOT be in available/
+	cmd = exec.Command(bin, "list", "--status=available")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list available failed: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), id2) {
+		t.Errorf("Phase 2 should not be in available/ yet, got:\n%s", out)
+	}
+
+	// Phase 2 should be in pending/
+	cmd = exec.Command(bin, "list", "--status=pending")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list pending failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), id2) {
+		t.Errorf("Phase 2 should be in pending/, got:\n%s", out)
+	}
+
+	// Complete Phase 1: claim + done
+	cmd = exec.Command(bin, "claim", id1)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg claim phase1 failed: %v\n%s", err, out)
+	}
+	cmd = exec.Command(bin, "done", id1)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg done phase1 failed: %v\n%s", err, out)
+	}
+
+	// Schedule — should promote Phase 2
+	cmd = exec.Command(bin, "schedule")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg schedule failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "Promoted "+id2) {
+		t.Errorf("expected 'Promoted %s' output, got %q", id2, out)
+	}
+
+	// Phase 2 should now be in available/
+	cmd = exec.Command(bin, "list", "--status=available")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list available failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), id2) {
+		t.Errorf("Phase 2 should now be in available/, got:\n%s", out)
 	}
 }
 

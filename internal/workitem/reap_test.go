@@ -13,7 +13,7 @@ func TestReapDeadPID(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "bug", "Will be abandoned")
+	item, err := Create(root, "bug", "Will be abandoned", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestReapLivePID(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "task", "Active work")
+	item, err := Create(root, "task", "Active work", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestReapMultiple(t *testing.T) {
 
 	// Create two items and simulate dead claims
 	for i, title := range []string{"Abandoned one", "Abandoned two"} {
-		item, err := Create(root, "bug", title)
+		item, err := Create(root, "bug", title, nil)
 		if err != nil {
 			t.Fatalf("Create %d: %v", i, err)
 		}
@@ -146,7 +146,7 @@ func TestReapE2E(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "task", "E2E reap target")
+	item, err := Create(root, "task", "E2E reap target", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

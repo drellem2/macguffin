@@ -46,7 +46,7 @@ var listCmd = &cobra.Command{
 			return nil
 		}
 
-		order := []string{"available", "claimed", "done"}
+		order := []string{"available", "claimed", "done", "pending"}
 		for _, s := range order {
 			items := grouped[s]
 			if len(items) == 0 {

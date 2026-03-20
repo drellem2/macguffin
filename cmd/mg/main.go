@@ -42,6 +42,7 @@ func init() {
 	rootCmd.AddCommand(reapCmd)
 	rootCmd.AddCommand(snapshotCmd)
 	rootCmd.AddCommand(logCmd)
+	rootCmd.AddCommand(scheduleCmd)
 }
 
 func main() {

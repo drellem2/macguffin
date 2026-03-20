@@ -12,7 +12,7 @@ func TestDone(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "bug", "Fix the widget")
+	item, err := Create(root, "bug", "Fix the widget", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestDoneNoResult(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "task", "Simple task")
+	item, err := Create(root, "task", "Simple task", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestDoneNotClaimed(t *testing.T) {
 	setupDirs(t, root)
 
 	// Create but don't claim
-	item, err := Create(root, "bug", "Not claimed yet")
+	item, err := Create(root, "bug", "Not claimed yet", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestDoneReadable(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "task", "Readable after done")
+	item, err := Create(root, "task", "Readable after done", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestStatus(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "bug", "Status check")
+	item, err := Create(root, "bug", "Status check", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -219,9 +219,9 @@ func TestListByStatus(t *testing.T) {
 	setupDirs(t, root)
 
 	// Create 3 items
-	item1, _ := Create(root, "bug", "Item one")
-	item2, _ := Create(root, "task", "Item two")
-	item3, _ := Create(root, "bug", "Item three")
+	item1, _ := Create(root, "bug", "Item one", nil)
+	item2, _ := Create(root, "task", "Item two", nil)
+	item3, _ := Create(root, "bug", "Item three", nil)
 
 	// All should be available
 	avail, err := ListByStatus(root, "available")
@@ -279,7 +279,7 @@ func TestFullLifecycle(t *testing.T) {
 	setupDirs(t, root)
 
 	// Create
-	item, err := Create(root, "bug", "Full lifecycle test")
+	item, err := Create(root, "bug", "Full lifecycle test", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
