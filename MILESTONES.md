@@ -13,7 +13,6 @@ correctness without any future milestone existing.
 ```
 ~/.macguffin/
 ├── work/{available,claimed,done}/
-├── agents/
 ├── mail/
 └── log/
 ```
@@ -24,7 +23,6 @@ mg init
 test -d ~/.macguffin/work/available
 test -d ~/.macguffin/work/claimed
 test -d ~/.macguffin/work/done
-test -d ~/.macguffin/agents
 test -d ~/.macguffin/mail
 test -d ~/.macguffin/log
 ```
@@ -141,75 +139,14 @@ ls ~/.macguffin/work/available/ | grep "$id"
 ```
 
 **Why this is a milestone:** Crash safety is proven. Without this, any
-agent death permanently loses a work item. With this, the system
-self-heals. This must work before agents run unattended.
+claimant crash permanently loses a work item. With this, the system
+self-heals.
 
 **Delivers:** `mg reap` (one-shot), testable in isolation.
 
 ---
 
-## M5 — Agent Registration + Liveness
-
-**Ship:** An agent can register (PID file + optional socket), and the system
-can report who's alive. `mg ps` lists agents with liveness status.
-
-**End-to-end test:**
-```bash
-# Start a fake agent (just a sleep process that registers)
-mg agent register arch &
-agent_pid=$!
-# Verify: PID file exists
-test -f ~/.macguffin/agents/arch.pid
-test "$(cat ~/.macguffin/agents/arch.pid)" = "$agent_pid"
-# ps shows it alive
-mg ps | grep "arch.*alive"
-# Kill it
-kill $agent_pid
-# ps shows it dead
-mg ps | grep "arch.*dead"
-```
-
-**Why this is a milestone:** You can now see who's running. This is the
-minimum observability needed before building agent work loops. It also
-validates the PID-file convention that the reaper (M4) already uses.
-
-**Delivers:** `mg agent register <name>`, `mg ps`, PID file
-lifecycle (write on start, remove on clean exit, detect on dirty exit).
-
----
-
-## M6 — Agent Work Loop
-
-**Ship:** A long-running agent process that watches `available/`, claims
-work, runs a handler, and completes it. Integrates M2 + M3 + M4 + M5.
-
-**End-to-end test:**
-```bash
-# Start an agent with a trivial handler (just appends "handled")
-mg agent start arch --handler='echo handled >> /tmp/test.log'
-# Drop work into the queue
-mg new "Auto-process me"
-# Wait briefly for fswatch to fire
-sleep 2
-# Verify: item is in done/
-mg list --status=done | grep "Auto-process"
-# Verify: handler ran
-grep "handled" /tmp/test.log
-# Verify: agent is still alive and idle
-mg ps | grep "arch.*alive"
-```
-
-**Why this is a milestone:** This is the first milestone where an agent
-runs autonomously. Work goes in, results come out, no human in the loop.
-It's the proof that the filesystem-as-queue architecture actually works
-as a runtime, not just a data model.
-
-**Delivers:** `mg agent start <name> --handler=CMD`, fswatch-based
-work loop, integration of claim + complete + reap.
-
----
-
-## M7 — Mail
+## M5 — Mail
 
 **Ship:** Maildir-style message delivery between agents. Atomic write to
 `new/`, read marks to `cur/`.
@@ -239,7 +176,7 @@ Maildir layout with tmp→new atomic delivery.
 
 ---
 
-## M8 — Dependency Scheduling
+## M6 — Dependency Scheduling
 
 **Ship:** Work items declare `depends: [id1, id2]` in frontmatter. A
 scheduler holds dependent items out of `available/` until their dependencies
@@ -273,7 +210,7 @@ to `available/`. The claim primitive never sees pending items.
 
 ---
 
-## M9 — Git Cold Path
+## M7 — Git Cold Path
 
 **Ship:** Background snapshots of `~/.macguffin/` to git. Configurable
 interval. `mg log` shows the audit trail.
@@ -283,11 +220,11 @@ interval. `mg log` shows the audit trail.
 mg init --git   # also runs git init
 mg new "Tracked item"
 mg snapshot     # manual trigger
-git -C ~/.mg log --oneline | head -1  # snapshot commit exists
+git -C ~/.macguffin log --oneline | head -1  # snapshot commit exists
 mg claim <id> && mg done <id>
 mg snapshot
 # Two commits, showing the item's lifecycle
-git -C ~/.mg log --oneline | wc -l  # >= 2
+git -C ~/.macguffin log --oneline | wc -l  # >= 2
 ```
 
 **Why this is a milestone:** Durability and audit without touching the hot
@@ -299,47 +236,17 @@ around git log), optional cron/timer setup for periodic snapshots.
 
 ---
 
-## M10 — Pogo Integration
-
-**Ship:** Per-project `.macguffin/` directories are discoverable by pogo's
-indexer. Work items across repos are aggregated into a unified view.
-
-**End-to-end test:**
-```bash
-# Two repos, each with project-local work items
-cd ~/repo-a && mg init --project && mg new "Fix repo-a bug"
-cd ~/repo-b && mg init --project && mg new "Fix repo-b bug"
-# Pogo discovers them
-pogo index
-# Aggregated view
-mg list --all-projects
-# Shows items from both repos with project context
-```
-
-**Why this is a milestone:** MacGuffin becomes multi-project-aware. Work
-is co-located with code (per-project), but you can still see everything
-from one place. This is the bridge between "task tracker" and "development
-environment."
-
-**Delivers:** `--project` mode (`.macguffin/` in repo root), pogo discovery
-hook, `mg list --all-projects` aggregation.
-
----
-
 ## Dependency Graph
 
 ```
-M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4 ─┐
-                               ├─→ M6 ─→ M8
-                   M5 ─────────┘
-                   M7 (independent after M0)
-                   M9 (independent after M0)
-                   M10 (independent after M1, requires pogo)
+M0 ─→ M1 ─→ M2 ─→ M3 ─→ M4
+                          │
+                          └─→ M6
+M5 (independent after M0)
+M7 (independent after M0)
 ```
 
 M0–M3 are strictly sequential (each builds on the last).
-M4 and M5 can run in parallel after M3.
-M6 integrates M2–M5.
-M7 and M9 only need M0 and can be built anytime.
-M8 needs M6 (agents must exist to schedule for).
-M10 needs M1 (work items must exist) plus pogo.
+M4 follows M3 (reaper needs the claim lifecycle).
+M5 and M7 only need M0 and can be built anytime.
+M6 needs M3 (complete lifecycle must exist to schedule against).
