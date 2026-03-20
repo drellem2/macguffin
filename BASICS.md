@@ -10,5 +10,9 @@
 - UNIX philosophy.
 - Ergonomic for both humans and agents. Scales with agentic workloads.
 
+# Dev Basics
+- Unit tests for all new golang functionality.
+- Shell script coverage of the CLI functionality.
+
 # Requirements
 - Runs on POSIX-y machines like BSD/Mac/Linux. If supporting a certain architecture will require much additional complexity this should be discussed and acknowledge in the architecture documentation before continuing.
