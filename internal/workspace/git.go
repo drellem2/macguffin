@@ -26,6 +26,28 @@ func InitGit(root string) error {
 	return nil
 }
 
+// ensureGitIdentity sets user.name and user.email in the local git config
+// if they are not already configured. CI environments (like GitHub Actions)
+// often lack a global git identity, which causes commits to fail.
+func ensureGitIdentity(root string) error {
+	for _, kv := range [][2]string{
+		{"user.name", "macguffin"},
+		{"user.email", "macguffin@localhost"},
+	} {
+		check := exec.Command("git", "config", kv[0])
+		check.Dir = root
+		if err := check.Run(); err == nil {
+			continue // already set
+		}
+		set := exec.Command("git", "config", kv[0], kv[1])
+		set.Dir = root
+		if out, err := set.CombinedOutput(); err != nil {
+			return fmt.Errorf("git config %s: %s: %w", kv[0], out, err)
+		}
+	}
+	return nil
+}
+
 // Snapshot stages all files and creates a commit in the macguffin root.
 // The commit message includes an ISO-8601 timestamp.
 // Returns nil if there is nothing to commit.
@@ -48,6 +70,11 @@ func Snapshot(root string) error {
 	if err := diff.Run(); err == nil {
 		fmt.Println("nothing to snapshot")
 		return nil
+	}
+
+	// Ensure git identity is configured (CI may lack user.name/email)
+	if err := ensureGitIdentity(root); err != nil {
+		return err
 	}
 
 	// Commit
