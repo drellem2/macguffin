@@ -1,0 +1,18 @@
+#!/bin/sh
+# Pre-commit hook: build + format check
+# Install: cp scripts/pre-commit .git/hooks/pre-commit
+
+set -e
+
+echo "pre-commit: checking build..."
+go build ./...
+
+echo "pre-commit: checking format..."
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+    echo "pre-commit: these files need gofmt:"
+    echo "$unformatted"
+    exit 1
+fi
+
+echo "pre-commit: ok"

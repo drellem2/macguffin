@@ -1,0 +1,11 @@
+# Binaries
+macguffin
+*.exe
+
+# Runtime state (local only)
+.runtime/
+.beads/
+.claude/
+
+# OS files
+.DS_Store
