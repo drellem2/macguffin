@@ -16,22 +16,22 @@ func main() {
 	switch os.Args[1] {
 	case "init":
 		if err := runInit(); err != nil {
-			fmt.Fprintf(os.Stderr, "macguffin init: %v\n", err)
+			fmt.Fprintf(os.Stderr, "mg init: %v\n", err)
 			os.Exit(1)
 		}
 	case "version":
-		fmt.Printf("macguffin %s\n", version)
+		fmt.Printf("mg %s\n", version)
 	case "help", "--help", "-h":
 		usage()
 	default:
-		fmt.Fprintf(os.Stderr, "macguffin: unknown command %q\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "mg: unknown command %q\n", os.Args[1])
 		usage()
 		os.Exit(1)
 	}
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `Usage: macguffin <command>
+	fmt.Fprintf(os.Stderr, `Usage: mg <command>
 
 Commands:
   init      Initialize ~/.macguffin directory tree

@@ -54,14 +54,14 @@ main() {
         exit 1
     fi
 
-    url="https://github.com/${REPO}/releases/download/${version}/macguffin_${platform}"
-    echo "Downloading macguffin ${version} for ${platform}..."
+    url="https://github.com/${REPO}/releases/download/${version}/mg_${platform}"
+    echo "Downloading mg ${version} for ${platform}..."
 
     mkdir -p "$INSTALL_DIR"
-    curl -sSfL "$url" -o "${INSTALL_DIR}/macguffin"
-    chmod +x "${INSTALL_DIR}/macguffin"
+    curl -sSfL "$url" -o "${INSTALL_DIR}/mg"
+    chmod +x "${INSTALL_DIR}/mg"
 
-    echo "Installed macguffin to ${INSTALL_DIR}/macguffin"
+    echo "Installed mg to ${INSTALL_DIR}/mg"
 
     # Check if INSTALL_DIR is in PATH
     case ":$PATH:" in

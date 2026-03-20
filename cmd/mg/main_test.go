@@ -11,9 +11,9 @@ func TestCLI_Version(t *testing.T) {
 	bin := buildBinary(t)
 	out, err := exec.Command(bin, "version").CombinedOutput()
 	if err != nil {
-		t.Fatalf("macguffin version failed: %v\n%s", err, out)
+		t.Fatalf("mg version failed: %v\n%s", err, out)
 	}
-	if want := "macguffin " + version + "\n"; string(out) != want {
+	if want := "mg " + version + "\n"; string(out) != want {
 		t.Errorf("version output = %q, want %q", out, want)
 	}
 }
@@ -22,7 +22,7 @@ func TestCLI_Help(t *testing.T) {
 	bin := buildBinary(t)
 	out, err := exec.Command(bin, "help").CombinedOutput()
 	if err != nil {
-		t.Fatalf("macguffin help failed: %v\n%s", err, out)
+		t.Fatalf("mg help failed: %v\n%s", err, out)
 	}
 	if len(out) == 0 {
 		t.Error("help output should not be empty")
@@ -54,7 +54,7 @@ func TestCLI_Init(t *testing.T) {
 	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("macguffin init failed: %v\n%s", err, out)
+		t.Fatalf("mg init failed: %v\n%s", err, out)
 	}
 
 	expected := []string{
@@ -80,9 +80,9 @@ func TestCLI_Init(t *testing.T) {
 
 func buildBinary(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "macguffin")
+	bin := filepath.Join(t.TempDir(), "mg")
 	cmd := exec.Command("go", "build", "-o", bin, ".")
-	cmd.Dir = filepath.Join(testProjectRoot(t), "cmd", "macguffin")
+	cmd.Dir = filepath.Join(testProjectRoot(t), "cmd", "mg")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go build failed: %v\n%s", err, out)
@@ -92,7 +92,7 @@ func buildBinary(t *testing.T) string {
 
 func testProjectRoot(t *testing.T) string {
 	t.Helper()
-	// Walk up from cmd/macguffin to find go.mod
+	// Walk up from cmd/mg to find go.mod
 	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)

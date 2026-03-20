@@ -1,5 +1,5 @@
 # Binaries
-macguffin
+mg
 *.exe
 
 # Runtime state (local only)

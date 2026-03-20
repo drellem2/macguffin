@@ -364,13 +364,13 @@ The design above is single-machine. Cross-machine coordination is harder because
 Build and test the atomic claim loop. Five concurrent processes racing to claim items. Exactly one wins each time. Stale claims are reaped. This is the proof that the foundation works.
 
 ### M1: Agent lifecycle
-PID files, startup/shutdown, liveness detection. `macguffin ps` shows running agents. `macguffin spawn` starts one. An agent that dies has its claims reaped.
+PID files, startup/shutdown, liveness detection. `mg ps` shows running agents. `mg spawn` starts one. An agent that dies has its claims reaped.
 
 ### M2: Work item format + CLI
-The Markdown+frontmatter format. `macguffin new "title"` creates a work item. `macguffin list` shows available work. `macguffin show <id>` reads one. All backed by files — the CLI is convenience, not gatekeeper.
+The Markdown+frontmatter format. `mg new "title"` creates a work item. `mg list` shows available work. `mg show <id>` reads one. All backed by files — the CLI is convenience, not gatekeeper.
 
 ### M3: Mail
-Maildir-style messaging. `macguffin send <agent> "message"`. Agents watch their inbox with fswatch. Delivery is atomic.
+Maildir-style messaging. `mg send <agent> "message"`. Agents watch their inbox with fswatch. Delivery is atomic.
 
 ### M4: Pogo integration
 Work items in repos are discoverable by pogo. Cross-repo work aggregation. `pose` can search work items alongside code.
