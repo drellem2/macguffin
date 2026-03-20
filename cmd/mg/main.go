@@ -19,6 +19,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "mg init: %v\n", err)
 			os.Exit(1)
 		}
+	case "mail":
+		if err := runMail(); err != nil {
+			fmt.Fprintf(os.Stderr, "mg mail: %v\n", err)
+			os.Exit(1)
+		}
 	case "version":
 		fmt.Printf("mg %s\n", version)
 	case "help", "--help", "-h":
@@ -35,6 +40,7 @@ func usage() {
 
 Commands:
   init      Initialize ~/.macguffin directory tree
+  mail      Maildir-style messaging (send, list, read)
   version   Print version
   help      Show this message
 `)
