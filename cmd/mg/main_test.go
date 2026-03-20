@@ -46,6 +46,183 @@ func TestCLI_NoArgs(t *testing.T) {
 	}
 }
 
+func TestCLI_New(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+
+	// Init first
+	cmd := exec.Command(bin, "init")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create a work item
+	cmd = exec.Command(bin, "new", "--type=bug", "Auth tokens not refreshing")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+
+	output := string(out)
+	if !strings.Contains(output, "Created gt-") {
+		t.Errorf("expected 'Created gt-...' output, got %q", output)
+	}
+
+	// Verify exactly one .md file in available/
+	avail := filepath.Join(tmpHome, ".macguffin", "work", "available")
+	entries, err := os.ReadDir(avail)
+	if err != nil {
+		t.Fatalf("reading available/: %v", err)
+	}
+	mdCount := 0
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".md") {
+			mdCount++
+		}
+	}
+	if mdCount != 1 {
+		t.Errorf("expected 1 .md file in available/, got %d", mdCount)
+	}
+
+	// Verify frontmatter has required fields
+	var mdFile string
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".md") {
+			mdFile = filepath.Join(avail, e.Name())
+		}
+	}
+	data, err := os.ReadFile(mdFile)
+	if err != nil {
+		t.Fatalf("reading work item file: %v", err)
+	}
+	content := string(data)
+	for _, field := range []string{"id:", "type:", "created:", "creator:"} {
+		if !strings.Contains(content, field) {
+			t.Errorf("frontmatter missing %q in:\n%s", field, content)
+		}
+	}
+}
+
+func TestCLI_Show(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+
+	// Init + create
+	cmd := exec.Command(bin, "init")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "new", "--type=bug", "Test show item")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+
+	// Extract ID from "Created gt-XXXX: ..."
+	output := string(out)
+	id := strings.TrimPrefix(strings.Split(output, ":")[0], "Created ")
+
+	// Show it
+	cmd = exec.Command(bin, "show", id)
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show failed: %v\n%s", err, out)
+	}
+
+	showOutput := string(out)
+	if !strings.Contains(showOutput, id) {
+		t.Errorf("show output should contain ID %q, got:\n%s", id, showOutput)
+	}
+	if !strings.Contains(showOutput, "bug") {
+		t.Errorf("show output should contain type 'bug', got:\n%s", showOutput)
+	}
+	if !strings.Contains(showOutput, "Test show item") {
+		t.Errorf("show output should contain title, got:\n%s", showOutput)
+	}
+}
+
+func TestCLI_ShowNotFound(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "show", "gt-000")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	err := cmd.Run()
+	if err == nil {
+		t.Error("expected non-zero exit for nonexistent ID")
+	}
+}
+
+func TestCLI_List(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Empty list
+	cmd = exec.Command(bin, "list")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "No work items") {
+		t.Errorf("expected 'No work items' for empty list, got %q", out)
+	}
+
+	// Create two items
+	cmd = exec.Command(bin, "new", "--type=bug", "First bug")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "new", "--type=task", "Second task")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+
+	// List should show both
+	cmd = exec.Command(bin, "list")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list failed: %v\n%s", err, out)
+	}
+	listOutput := string(out)
+	if !strings.Contains(listOutput, "First bug") {
+		t.Errorf("list output should contain 'First bug', got:\n%s", listOutput)
+	}
+	if !strings.Contains(listOutput, "Second task") {
+		t.Errorf("list output should contain 'Second task', got:\n%s", listOutput)
+	}
+}
+
+func TestCLI_NewNoTitle(t *testing.T) {
+	bin := buildBinary(t)
+	err := exec.Command(bin, "new").Run()
+	if err == nil {
+		t.Error("expected non-zero exit for new without title")
+	}
+}
+
 func TestCLI_Init(t *testing.T) {
 	// Init uses $HOME, so override it with a temp dir
 	tmpHome := t.TempDir()
