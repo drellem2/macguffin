@@ -4,16 +4,10 @@ import (
 	"github.com/drellem2/macguffin/internal/workspace"
 )
 
-func runInit(git bool) error {
+func runLog(args []string) error {
 	root, err := workspace.DefaultRoot()
 	if err != nil {
 		return err
 	}
-	if err := workspace.Init(root); err != nil {
-		return err
-	}
-	if git {
-		return workspace.InitGit(root)
-	}
-	return nil
+	return workspace.Log(root, args)
 }

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -155,6 +156,90 @@ func containsStr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestCLI_InitGit(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+
+	cmd := exec.Command(bin, "init", "--git")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg init --git failed: %v\n%s", err, out)
+	}
+
+	gitDir := filepath.Join(tmpHome, ".macguffin", ".git")
+	info, err := os.Stat(gitDir)
+	if err != nil {
+		t.Fatalf(".git should exist after init --git: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatal(".git should be a directory")
+	}
+}
+
+func TestCLI_SnapshotAndLog(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+
+	// Init with git
+	cmd := exec.Command(bin, "init", "--git")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg init --git failed: %v\n%s", err, out)
+	}
+
+	// Create a work item file
+	itemPath := filepath.Join(tmpHome, ".macguffin", "work", "available", "gt-test.md")
+	if err := os.WriteFile(itemPath, []byte("---\nid: gt-test\n---\nTracked item\n"), 0o644); err != nil {
+		t.Fatalf("writing item: %v", err)
+	}
+
+	// Snapshot
+	cmd = exec.Command(bin, "snapshot")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg snapshot failed: %v\n%s", err, out)
+	}
+
+	// Verify git log shows the commit
+	cmd = exec.Command(bin, "log", "--oneline")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg log failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "state snapshot") {
+		t.Errorf("expected 'state snapshot' in log output, got: %s", out)
+	}
+
+	// Move item to done and snapshot again
+	donePath := filepath.Join(tmpHome, ".macguffin", "work", "done", "gt-test.md")
+	if err := os.Rename(itemPath, donePath); err != nil {
+		t.Fatalf("moving item to done: %v", err)
+	}
+
+	cmd = exec.Command(bin, "snapshot")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("second snapshot failed: %v\n%s", err, out)
+	}
+
+	// Verify >= 2 commits
+	cmd = exec.Command(bin, "log", "--oneline")
+	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg log failed: %v\n%s", err, out)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) < 2 {
+		t.Errorf("expected >= 2 commits, got %d: %s", len(lines), out)
+	}
 }
 
 func buildBinary(t *testing.T) string {
