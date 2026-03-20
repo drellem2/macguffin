@@ -35,6 +35,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "mg list: %v\n", err)
 			os.Exit(1)
 		}
+	case "claim":
+		if err := runClaim(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "mg claim: %v\n", err)
+			os.Exit(1)
+		}
 	case "mail":
 		if err := runMail(); err != nil {
 			fmt.Fprintf(os.Stderr, "mg mail: %v\n", err)
@@ -68,6 +73,7 @@ Commands:
   init [--git]   Initialize ~/.macguffin directory tree (--git enables git snapshots)
   new            Create a new work item
   show           Show a work item by ID
+  claim          Atomically claim a work item by ID
   list           List available work items
   mail           Maildir-style messaging (send, list, read)
   snapshot       Create a git snapshot of current state

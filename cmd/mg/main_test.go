@@ -215,6 +215,81 @@ func TestCLI_List(t *testing.T) {
 	}
 }
 
+func TestCLI_Claim(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	// Init
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create a work item
+	cmd = exec.Command(bin, "new", "--type=bug", "Claimable item")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// Claim it
+	cmd = exec.Command(bin, "claim", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg claim failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "Claimed "+id) {
+		t.Errorf("expected 'Claimed %s' output, got %q", id, out)
+	}
+
+	// available/ should be empty
+	avail := filepath.Join(tmpHome, ".macguffin", "work", "available")
+	entries, _ := os.ReadDir(avail)
+	mdCount := 0
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".md") {
+			mdCount++
+		}
+	}
+	if mdCount != 0 {
+		t.Errorf("expected 0 .md files in available/ after claim, got %d", mdCount)
+	}
+
+	// claimed/ should have 1 file with PID suffix
+	claimed := filepath.Join(tmpHome, ".macguffin", "work", "claimed")
+	entries, _ = os.ReadDir(claimed)
+	found := false
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), id+".md.") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected claimed file with PID suffix in claimed/")
+	}
+
+	// Second claim should fail
+	cmd = exec.Command(bin, "claim", id)
+	cmd.Env = env
+	err = cmd.Run()
+	if err == nil {
+		t.Error("expected non-zero exit for already-claimed item")
+	}
+}
+
+func TestCLI_ClaimNoID(t *testing.T) {
+	bin := buildBinary(t)
+	err := exec.Command(bin, "claim").Run()
+	if err == nil {
+		t.Error("expected non-zero exit for claim without ID")
+	}
+}
+
 func TestCLI_NewNoTitle(t *testing.T) {
 	bin := buildBinary(t)
 	err := exec.Command(bin, "new").Run()
