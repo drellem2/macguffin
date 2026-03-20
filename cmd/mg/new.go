@@ -6,41 +6,36 @@ import (
 
 	"github.com/drellem2/macguffin/internal/workitem"
 	"github.com/drellem2/macguffin/internal/workspace"
+	"github.com/spf13/cobra"
 )
 
-func runNew(args []string) error {
-	typ := "task" // default type
-	var title string
+var newType string
 
-	// Parse --type=X flag and collect remaining args as title
-	var rest []string
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if strings.HasPrefix(arg, "--type=") {
-			typ = strings.TrimPrefix(arg, "--type=")
-		} else if arg == "--type" && i+1 < len(args) {
-			i++
-			typ = args[i]
-		} else {
-			rest = append(rest, arg)
+var newCmd = &cobra.Command{
+	Use:   "new [--type=TYPE] TITLE...",
+	Short: "Create a new work item",
+	Args:  cobra.MinimumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		title := strings.Join(args, " ")
+		if title == "" {
+			return fmt.Errorf("title is required")
 		}
-	}
 
-	title = strings.Join(rest, " ")
-	if title == "" {
-		return fmt.Errorf("title is required\nUsage: mg new [--type=TYPE] TITLE")
-	}
+		root, err := workspace.DefaultRoot()
+		if err != nil {
+			return err
+		}
 
-	root, err := workspace.DefaultRoot()
-	if err != nil {
-		return err
-	}
+		item, err := workitem.Create(root, newType, title)
+		if err != nil {
+			return err
+		}
 
-	item, err := workitem.Create(root, typ, title)
-	if err != nil {
-		return err
-	}
+		fmt.Printf("Created %s: %s\n", item.ID, item.Title)
+		return nil
+	},
+}
 
-	fmt.Printf("Created %s: %s\n", item.ID, item.Title)
-	return nil
+func init() {
+	newCmd.Flags().StringVar(&newType, "type", "task", "work item type")
 }
