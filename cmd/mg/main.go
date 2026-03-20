@@ -39,6 +39,7 @@ func init() {
 	rootCmd.AddCommand(claimCmd)
 	rootCmd.AddCommand(doneCmd)
 	rootCmd.AddCommand(mailCmd)
+	rootCmd.AddCommand(reapCmd)
 	rootCmd.AddCommand(snapshotCmd)
 	rootCmd.AddCommand(logCmd)
 }
