@@ -31,13 +31,18 @@ func main() {
 			os.Exit(1)
 		}
 	case "list":
-		if err := runList(); err != nil {
+		if err := runList(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "mg list: %v\n", err)
 			os.Exit(1)
 		}
 	case "claim":
 		if err := runClaim(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "mg claim: %v\n", err)
+			os.Exit(1)
+		}
+	case "done":
+		if err := runDone(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "mg done: %v\n", err)
 			os.Exit(1)
 		}
 	case "mail":
@@ -74,7 +79,8 @@ Commands:
   new            Create a new work item
   show           Show a work item by ID
   claim          Atomically claim a work item by ID
-  list           List available work items
+  done           Mark a claimed work item as done
+  list           List work items [--status=STATE]
   mail           Maildir-style messaging (send, list, read)
   snapshot       Create a git snapshot of current state
   log [args]     Show git snapshot history (passes args to git log)

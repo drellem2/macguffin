@@ -282,6 +282,213 @@ func TestCLI_Claim(t *testing.T) {
 	}
 }
 
+func TestCLI_Done(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	// Init
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create
+	cmd = exec.Command(bin, "new", "--type=bug", "Done test item")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// Claim
+	cmd = exec.Command(bin, "claim", id)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg claim failed: %v\n%s", err, out)
+	}
+
+	// Done with result
+	cmd = exec.Command(bin, "done", id, "--result", `{"status":"fixed","commit":"abc123"}`)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg done failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "Done "+id) {
+		t.Errorf("expected 'Done %s' output, got %q", id, out)
+	}
+
+	// Verify: item in done/
+	donePath := filepath.Join(tmpHome, ".macguffin", "work", "done", id+".md")
+	if _, err := os.Stat(donePath); err != nil {
+		t.Errorf("expected done file at %s: %v", donePath, err)
+	}
+
+	// Verify: result sidecar exists
+	sidecarPath := filepath.Join(tmpHome, ".macguffin", "work", "done", id+".result.json")
+	if _, err := os.Stat(sidecarPath); err != nil {
+		t.Errorf("expected sidecar at %s: %v", sidecarPath, err)
+	}
+
+	// Verify: not in available/ or claimed/
+	availDir := filepath.Join(tmpHome, ".macguffin", "work", "available")
+	entries, _ := os.ReadDir(availDir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), id) {
+			t.Errorf("item still in available/: %s", e.Name())
+		}
+	}
+	claimedDir := filepath.Join(tmpHome, ".macguffin", "work", "claimed")
+	entries, _ = os.ReadDir(claimedDir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), id) {
+			t.Errorf("item still in claimed/: %s", e.Name())
+		}
+	}
+}
+
+func TestCLI_DoneNoID(t *testing.T) {
+	bin := buildBinary(t)
+	err := exec.Command(bin, "done").Run()
+	if err == nil {
+		t.Error("expected non-zero exit for done without ID")
+	}
+}
+
+func TestCLI_FullLifecycle(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	// Init
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create
+	cmd = exec.Command(bin, "new", "--type=task", "Full lifecycle")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// List --status=available should show it
+	cmd = exec.Command(bin, "list", "--status=available")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --status=available failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), id) {
+		t.Errorf("list --status=available should contain %s, got %q", id, out)
+	}
+
+	// Claim
+	cmd = exec.Command(bin, "claim", id)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg claim failed: %v\n%s", err, out)
+	}
+
+	// List --status=claimed should show it
+	cmd = exec.Command(bin, "list", "--status=claimed")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --status=claimed failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), id) {
+		t.Errorf("list --status=claimed should contain %s, got %q", id, out)
+	}
+
+	// Done
+	cmd = exec.Command(bin, "done", id, "--result", `{"status":"fixed","commit":"abc123"}`)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg done failed: %v\n%s", err, out)
+	}
+
+	// List --status=done should show it
+	cmd = exec.Command(bin, "list", "--status=done")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --status=done failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), id) {
+		t.Errorf("list --status=done should contain %s, got %q", id, out)
+	}
+
+	// List --status=available should be empty
+	cmd = exec.Command(bin, "list", "--status=available")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --status=available failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "No available work items") {
+		t.Errorf("expected 'No available work items', got %q", out)
+	}
+}
+
+func TestCLI_ListGrouped(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	// Init
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create two items
+	cmd = exec.Command(bin, "new", "--type=bug", "Available item")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "new", "--type=task", "To be claimed")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id2 := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// Claim one
+	cmd = exec.Command(bin, "claim", id2)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg claim failed: %v\n%s", err, out)
+	}
+
+	// List without --status shows grouped
+	cmd = exec.Command(bin, "list")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list failed: %v\n%s", err, out)
+	}
+	listOutput := string(out)
+	if !strings.Contains(listOutput, "available:") {
+		t.Errorf("grouped list should contain 'available:', got:\n%s", listOutput)
+	}
+	if !strings.Contains(listOutput, "claimed:") {
+		t.Errorf("grouped list should contain 'claimed:', got:\n%s", listOutput)
+	}
+}
+
 func TestCLI_ClaimNoID(t *testing.T) {
 	bin := buildBinary(t)
 	err := exec.Command(bin, "claim").Run()
