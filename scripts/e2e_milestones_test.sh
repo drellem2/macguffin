@@ -11,7 +11,7 @@ FAILURES=""
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); FAILURES="${FAILURES}\n  - $1"; }
 clean() { rm -rf ~/.macguffin; }
-extract_id() { grep -oE 'gt-[a-f0-9]+' | head -1; }
+extract_id() { grep -oE 'mg-[a-f0-9]+' | head -1; }
 
 echo "=== MacGuffin E2E Milestone Tests ==="
 echo "Binary: $MG"
@@ -62,7 +62,7 @@ $MG done "$id" --result '{"status":"fixed","commit":"abc123"}' >/dev/null 2>&1
 test -f ~/.macguffin/work/done/${id}.md && pass "item in done/" || fail "item not in done/"
 test -f ~/.macguffin/work/done/${id}.result.json && pass "result sidecar exists" || fail "result sidecar missing"
 $MG list --status=done 2>&1 | grep -q "$id" && pass "list --status=done shows item" || fail "list --status=done missing item"
-AVAIL=$($MG list --status=available 2>&1 | grep -c "gt-" || true)
+AVAIL=$($MG list --status=available 2>&1 | grep -c "mg-" || true)
 test "$AVAIL" -eq 0 && pass "nothing available after done" || fail "still items available"
 
 # ---------------------------------------------------------------------------

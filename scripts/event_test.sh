@@ -32,8 +32,8 @@ echo "--- Event Append: multiple events ---"
 clean
 $MG init >/dev/null 2>&1
 $MG event append agent.start --agent=cat-a3f >/dev/null 2>&1
-$MG event append work.claim --agent=cat-a3f --item=gt-abc >/dev/null 2>&1
-$MG event append work.done --agent=cat-a3f --item=gt-abc >/dev/null 2>&1
+$MG event append work.claim --agent=cat-a3f --item=mg-abc >/dev/null 2>&1
+$MG event append work.done --agent=cat-a3f --item=mg-abc >/dev/null 2>&1
 LINES=$(wc -l < ~/.macguffin/events.jsonl | tr -d ' ')
 test "$LINES" -eq 3 && pass "3 lines in events.jsonl" || fail "expected 3 lines, got $LINES"
 
