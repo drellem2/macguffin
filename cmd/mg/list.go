@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/drellem2/macguffin/internal/workitem"
 	"github.com/drellem2/macguffin/internal/workspace"
@@ -10,6 +11,7 @@ import (
 
 var listStatus string
 var listAll bool
+var listRepo string
 
 var listCmd = &cobra.Command{
 	Use:   "list",
@@ -30,6 +32,8 @@ var listCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
+
+			items = filterByRepo(items, listRepo)
 
 			if len(items) == 0 {
 				fmt.Printf("No %s work items.\n", listStatus)
@@ -55,6 +59,13 @@ var listCmd = &cobra.Command{
 			}
 			if len(archived) > 0 {
 				grouped["archived"] = archived
+			}
+		}
+
+		// Apply repo filter to each group
+		if listRepo != "" {
+			for s, items := range grouped {
+				grouped[s] = filterByRepo(items, listRepo)
 			}
 		}
 
@@ -85,4 +96,20 @@ var listCmd = &cobra.Command{
 func init() {
 	listCmd.Flags().StringVar(&listStatus, "status", "", "filter by status (available, claimed, done, archived)")
 	listCmd.Flags().BoolVar(&listAll, "all", false, "include done and archived items")
+	listCmd.Flags().StringVar(&listRepo, "repo", "", "filter by repository path (substring match)")
+}
+
+// filterByRepo returns only items whose Repo contains the given substring.
+// If repo is empty, all items are returned.
+func filterByRepo(items []*workitem.Item, repo string) []*workitem.Item {
+	if repo == "" {
+		return items
+	}
+	var filtered []*workitem.Item
+	for _, item := range items {
+		if strings.Contains(item.Repo, repo) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
 }

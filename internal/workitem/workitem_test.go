@@ -195,6 +195,75 @@ created: 2026-03-20T16:00:00Z
 	}
 }
 
+func TestCreateWithRepo(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "task", "Repo tagged item", nil, WithRepo("/home/user/myproject"))
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if item.Repo != "/home/user/myproject" {
+		t.Errorf("Repo = %q, want %q", item.Repo, "/home/user/myproject")
+	}
+
+	// Read it back and verify repo is persisted
+	read, err := Read(root, item.ID)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if read.Repo != "/home/user/myproject" {
+		t.Errorf("Read Repo = %q, want %q", read.Repo, "/home/user/myproject")
+	}
+}
+
+func TestCreateWithoutRepo(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "task", "No repo item", nil)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if item.Repo != "" {
+		t.Errorf("Repo should be empty, got %q", item.Repo)
+	}
+
+	// Verify frontmatter does not contain repo line
+	path := filepath.Join(root, "work", "available", item.ID+".md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading file: %v", err)
+	}
+	if strings.Contains(string(data), "repo:") {
+		t.Error("frontmatter should not contain repo: when repo is empty")
+	}
+}
+
+func TestParseWithRepo(t *testing.T) {
+	content := `---
+id: gt-abc
+type: task
+created: 2026-03-20T16:00:00Z
+creator: bob
+depends: []
+repo: /home/bob/project
+---
+
+# Tagged item
+`
+
+	item, err := Parse(content)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if item.Repo != "/home/bob/project" {
+		t.Errorf("Repo = %q, want %q", item.Repo, "/home/bob/project")
+	}
+}
+
 func setupDirs(t *testing.T, root string) {
 	t.Helper()
 	for _, d := range []string{
