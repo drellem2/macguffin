@@ -9,6 +9,7 @@ import (
 )
 
 var listStatus string
+var listAll bool
 
 var listCmd = &cobra.Command{
 	Use:   "list",
@@ -20,7 +21,12 @@ var listCmd = &cobra.Command{
 		}
 
 		if listStatus != "" {
-			items, err := workitem.ListByStatus(root, listStatus)
+			var items []*workitem.Item
+			if listStatus == "archived" {
+				items, err = workitem.ListArchived(root)
+			} else {
+				items, err = workitem.ListByStatus(root, listStatus)
+			}
 			if err != nil {
 				return err
 			}
@@ -41,12 +47,26 @@ var listCmd = &cobra.Command{
 			return err
 		}
 
+		// Include archived items if --all is set
+		if listAll {
+			archived, err := workitem.ListArchived(root)
+			if err != nil {
+				return err
+			}
+			if len(archived) > 0 {
+				grouped["archived"] = archived
+			}
+		}
+
 		if len(grouped) == 0 {
 			fmt.Println("No work items.")
 			return nil
 		}
 
-		order := []string{"available", "claimed", "done", "pending"}
+		order := []string{"available", "claimed", "pending"}
+		if listAll {
+			order = append(order, "done", "archived")
+		}
 		for _, s := range order {
 			items := grouped[s]
 			if len(items) == 0 {
@@ -63,5 +83,6 @@ var listCmd = &cobra.Command{
 }
 
 func init() {
-	listCmd.Flags().StringVar(&listStatus, "status", "", "filter by status (available, claimed, done)")
+	listCmd.Flags().StringVar(&listStatus, "status", "", "filter by status (available, claimed, done, archived)")
+	listCmd.Flags().BoolVar(&listAll, "all", false, "include done and archived items")
 }

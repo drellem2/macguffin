@@ -79,7 +79,7 @@ depends: %s
 	return item, nil
 }
 
-// Read loads a work item by ID, searching across available/, claimed/, and done/.
+// Read loads a work item by ID, searching across available/, claimed/, done/, pending/, and archive/.
 func Read(root, id string) (*Item, error) {
 	dirs := []string{
 		filepath.Join(root, "work", "available"),
@@ -98,6 +98,27 @@ func Read(root, id string) (*Item, error) {
 			if strings.HasPrefix(name, id+".md") || strings.HasPrefix(name, id+".md.") {
 				path := filepath.Join(dir, name)
 				return readFile(path)
+			}
+		}
+	}
+
+	// Search archive partitions
+	archiveRoot := filepath.Join(root, "work", "archive")
+	partitions, err := os.ReadDir(archiveRoot)
+	if err == nil {
+		for _, p := range partitions {
+			if !p.IsDir() {
+				continue
+			}
+			entries, err := os.ReadDir(filepath.Join(archiveRoot, p.Name()))
+			if err != nil {
+				continue
+			}
+			for _, e := range entries {
+				name := e.Name()
+				if strings.HasPrefix(name, id+".md") {
+					return readFile(filepath.Join(archiveRoot, p.Name(), name))
+				}
 			}
 		}
 	}

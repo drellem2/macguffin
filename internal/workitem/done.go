@@ -50,7 +50,7 @@ func Done(root, id string, resultJSON json.RawMessage) (*Item, error) {
 	return readFile(dstPath)
 }
 
-// Status returns the lifecycle state of a work item: "available", "claimed", or "done".
+// Status returns the lifecycle state of a work item: "available", "claimed", "done", or "archived".
 func Status(root, id string) (string, error) {
 	states := []string{"available", "claimed", "done", "pending"}
 
@@ -63,6 +63,26 @@ func Status(root, id string) (string, error) {
 		for _, e := range entries {
 			if strings.HasPrefix(e.Name(), id+".md") {
 				return state, nil
+			}
+		}
+	}
+
+	// Check archive partitions
+	archiveRoot := filepath.Join(root, "work", "archive")
+	partitions, err := os.ReadDir(archiveRoot)
+	if err == nil {
+		for _, p := range partitions {
+			if !p.IsDir() {
+				continue
+			}
+			entries, err := os.ReadDir(filepath.Join(archiveRoot, p.Name()))
+			if err != nil {
+				continue
+			}
+			for _, e := range entries {
+				if strings.HasPrefix(e.Name(), id+".md") {
+					return "archived", nil
+				}
 			}
 		}
 	}
@@ -105,7 +125,9 @@ func ListByStatus(root, status string) ([]*Item, error) {
 	return items, nil
 }
 
-// ListAll returns all work items across all statuses, grouped by status.
+// ListAll returns all work items across active statuses, grouped by status.
+// Done and archived items are excluded by default — use ListByStatus or
+// ListArchived to retrieve them.
 func ListAll(root string) (map[string][]*Item, error) {
 	result := make(map[string][]*Item)
 	for _, status := range []string{"available", "claimed", "done", "pending"} {
