@@ -44,10 +44,12 @@ INSTALL_DIR=/usr/local/bin sh install.sh  # custom location
 
 Supports Linux (amd64, arm64), macOS (amd64, arm64), and FreeBSD (amd64).
 
+> **macOS note:** macOS ships `/usr/bin/mg` (a micro Emacs clone). If you see `standard input and output must be a terminal` when running `mg`, you're hitting the system binary. Ensure your install location (e.g. `/usr/local/bin`) comes before `/usr/bin` in your PATH, or use the full path to verify: `which mg` should show your install location, not `/usr/bin/mg`.
+
 Requires Go 1.24+ to build from source:
 
 ```bash
-go build -o mg ./cmd/mg
+go install ./cmd/mg
 ```
 
 ## Quick Start
