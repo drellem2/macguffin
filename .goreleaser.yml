@@ -1,0 +1,44 @@
+version: 2
+
+builds:
+  - main: ./cmd/mg
+    binary: mg
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos:
+      - linux
+      - darwin
+      - freebsd
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: freebsd
+        goarch: arm64
+
+archives:
+  - format: binary
+    name_template: "mg_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: drellem2
+    name: macguffin
+
+brews:
+  - repository:
+      owner: drellem2
+      name: homebrew-tap
+    name: mg
+    homepage: "https://github.com/drellem2/macguffin"
+    description: "macguffin work-item tracker"
+    license: "MIT"
+    install: |
+      bin.install "mg"
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/mg version 2>&1", 0)
