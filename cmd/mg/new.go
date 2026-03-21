@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/workitem"
@@ -39,7 +40,12 @@ var newCmd = &cobra.Command{
 			return err
 		}
 
-		item, err := workitem.Create(root, newType, title, deps)
+		var opts []workitem.CreateOption
+		if repo := detectRepo(); repo != "" {
+			opts = append(opts, workitem.WithRepo(repo))
+		}
+
+		item, err := workitem.Create(root, newType, title, deps, opts...)
 		if err != nil {
 			return err
 		}
@@ -55,4 +61,14 @@ var newCmd = &cobra.Command{
 func init() {
 	newCmd.Flags().StringVar(&newType, "type", "task", "work item type")
 	newCmd.Flags().StringVar(&newDepends, "depends", "", "comma-separated list of dependency IDs")
+}
+
+// detectRepo returns the git toplevel of the current working directory, or ""
+// if not inside a git repo.
+func detectRepo() string {
+	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }

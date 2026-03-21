@@ -18,8 +18,19 @@ type Item struct {
 	Created time.Time
 	Creator string
 	Depends []string // IDs of items that must be done before this is available
+	Repo    string   // repository path where this item was created (optional breadcrumb)
 	Title   string
 	Body    string // everything after frontmatter (raw markdown)
+}
+
+// CreateOption configures optional fields on a new work item.
+type CreateOption func(*Item)
+
+// WithRepo sets the repository path on a work item.
+func WithRepo(repo string) CreateOption {
+	return func(item *Item) {
+		item.Repo = repo
+	}
 }
 
 // GenerateID produces a short hash ID in gt-XXX format (3 hex chars).
@@ -33,7 +44,7 @@ func GenerateID(title string, created time.Time) string {
 
 // Create writes a new work item file. Items with no dependencies go to
 // available/; items with unmet dependencies go to pending/.
-func Create(root, typ, title string, depends []string) (*Item, error) {
+func Create(root, typ, title string, depends []string, opts ...CreateOption) (*Item, error) {
 	now := time.Now().UTC()
 	id := GenerateID(title, now)
 
@@ -46,6 +57,10 @@ func Create(root, typ, title string, depends []string) (*Item, error) {
 		Creator: creator,
 		Depends: depends,
 		Title:   title,
+	}
+
+	for _, opt := range opts {
+		opt(item)
 	}
 
 	// Items with dependencies start in pending/; others in available/
@@ -61,16 +76,21 @@ func Create(root, typ, title string, depends []string) (*Item, error) {
 		depsLine = "[" + strings.Join(depends, ", ") + "]"
 	}
 
+	repoLine := ""
+	if item.Repo != "" {
+		repoLine = fmt.Sprintf("repo: %s\n", item.Repo)
+	}
+
 	content := fmt.Sprintf(`---
 id: %s
 type: %s
 created: %s
 creator: %s
 depends: %s
----
+%s---
 
 # %s
-`, item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, depsLine, item.Title)
+`, item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, depsLine, repoLine, item.Title)
 
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return nil, fmt.Errorf("writing work item: %w", err)
@@ -197,6 +217,8 @@ func Parse(content string) (*Item, error) {
 			item.Creator = val
 		case "depends":
 			item.Depends = parseDependsList(val)
+		case "repo":
+			item.Repo = val
 		}
 	}
 
