@@ -45,6 +45,7 @@ func init() {
 	rootCmd.AddCommand(scheduleCmd)
 	rootCmd.AddCommand(eventCmd)
 	rootCmd.AddCommand(archiveCmd)
+	rootCmd.AddCommand(editCmd)
 }
 
 func main() {
