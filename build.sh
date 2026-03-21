@@ -1,7 +1,7 @@
 #!/bin/sh
-# Build the mg binary
+# Build and install the mg binary to $GOPATH/bin
 set -e
 
 cd "$(dirname "$0")"
-go build -o mg ./cmd/mg
-echo "Built: ./mg"
+go install ./cmd/mg
+echo "Installed: $(go env GOPATH)/bin/mg"
