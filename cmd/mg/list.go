@@ -13,6 +13,7 @@ var listStatus string
 var listAll bool
 var listArchived bool
 var listRepo string
+var listTag string
 
 var listCmd = &cobra.Command{
 	Use:   "list",
@@ -35,6 +36,7 @@ var listCmd = &cobra.Command{
 			}
 
 			items = filterByRepo(items, listRepo)
+			items = filterByTag(items, listTag)
 
 			if len(items) == 0 {
 				fmt.Printf("No %s work items.\n", listStatus)
@@ -70,24 +72,32 @@ var listCmd = &cobra.Command{
 			}
 		}
 
-		if len(grouped) == 0 {
-			fmt.Println("No work items.")
-			return nil
+		// Apply tag filter to each group
+		if listTag != "" {
+			for s, items := range grouped {
+				grouped[s] = filterByTag(items, listTag)
+			}
 		}
 
 		order := []string{"available", "claimed", "pending"}
 		if listAll || listArchived {
 			order = append(order, "done", "archived")
 		}
+
+		printed := false
 		for _, s := range order {
 			items := grouped[s]
 			if len(items) == 0 {
 				continue
 			}
+			printed = true
 			fmt.Printf("%s:\n", s)
 			for _, item := range items {
 				fmt.Printf("  %-10s %-8s %s\n", item.ID, item.Type, item.Title)
 			}
+		}
+		if !printed {
+			fmt.Println("No work items.")
 		}
 
 		return nil
@@ -99,6 +109,7 @@ func init() {
 	listCmd.Flags().BoolVar(&listAll, "all", false, "include done and archived items")
 	listCmd.Flags().BoolVarP(&listArchived, "archived", "a", false, "include done and archived items")
 	listCmd.Flags().StringVar(&listRepo, "repo", "", "filter by repository path (substring match)")
+	listCmd.Flags().StringVar(&listTag, "tag", "", "filter by tag")
 }
 
 // filterByRepo returns only items whose Repo contains the given substring.
@@ -111,6 +122,24 @@ func filterByRepo(items []*workitem.Item, repo string) []*workitem.Item {
 	for _, item := range items {
 		if strings.Contains(item.Repo, repo) {
 			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+// filterByTag returns only items that have the given tag.
+// If tag is empty, all items are returned.
+func filterByTag(items []*workitem.Item, tag string) []*workitem.Item {
+	if tag == "" {
+		return items
+	}
+	var filtered []*workitem.Item
+	for _, item := range items {
+		for _, t := range item.Tags {
+			if t == tag {
+				filtered = append(filtered, item)
+				break
+			}
 		}
 	}
 	return filtered

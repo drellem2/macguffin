@@ -572,6 +572,83 @@ func TestCLI_ListArchived(t *testing.T) {
 	}
 }
 
+func TestCLI_ListTag(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	// Init
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create two items
+	cmd = exec.Command(bin, "new", "--type=bug", "Tagged bug")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id1 := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	cmd = exec.Command(bin, "new", "--type=task", "Untagged task")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+
+	// Tag the first item
+	cmd = exec.Command(bin, "edit", id1, "--tags=urgent")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg edit failed: %v\n%s", err, out)
+	}
+
+	// List with --tag=urgent should show only the tagged item
+	cmd = exec.Command(bin, "list", "--tag=urgent")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --tag failed: %v\n%s", err, out)
+	}
+	listOutput := string(out)
+	if !strings.Contains(listOutput, "Tagged bug") {
+		t.Errorf("list --tag=urgent should show 'Tagged bug', got:\n%s", listOutput)
+	}
+	if strings.Contains(listOutput, "Untagged task") {
+		t.Errorf("list --tag=urgent should NOT show 'Untagged task', got:\n%s", listOutput)
+	}
+
+	// List with --tag=nonexistent should show no items
+	cmd = exec.Command(bin, "list", "--tag=nonexistent")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --tag failed: %v\n%s", err, out)
+	}
+	listOutput = string(out)
+	if !strings.Contains(listOutput, "No work items") {
+		t.Errorf("list --tag=nonexistent should show 'No work items', got:\n%s", listOutput)
+	}
+
+	// List with --status and --tag combined
+	cmd = exec.Command(bin, "list", "--status=available", "--tag=urgent")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --status --tag failed: %v\n%s", err, out)
+	}
+	listOutput = string(out)
+	if !strings.Contains(listOutput, "Tagged bug") {
+		t.Errorf("list --status=available --tag=urgent should show 'Tagged bug', got:\n%s", listOutput)
+	}
+	if strings.Contains(listOutput, "Untagged task") {
+		t.Errorf("list --status=available --tag=urgent should NOT show 'Untagged task', got:\n%s", listOutput)
+	}
+}
+
 func TestCLI_ClaimNoID(t *testing.T) {
 	bin := buildBinary(t)
 	err := exec.Command(bin, "claim").Run()
