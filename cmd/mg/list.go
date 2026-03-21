@@ -11,6 +11,7 @@ import (
 
 var listStatus string
 var listAll bool
+var listArchived bool
 var listRepo string
 
 var listCmd = &cobra.Command{
@@ -51,8 +52,8 @@ var listCmd = &cobra.Command{
 			return err
 		}
 
-		// Include archived items if --all is set
-		if listAll {
+		// Include archived items if --all or --archived is set
+		if listAll || listArchived {
 			archived, err := workitem.ListArchived(root)
 			if err != nil {
 				return err
@@ -75,7 +76,7 @@ var listCmd = &cobra.Command{
 		}
 
 		order := []string{"available", "claimed", "pending"}
-		if listAll {
+		if listAll || listArchived {
 			order = append(order, "done", "archived")
 		}
 		for _, s := range order {
@@ -96,6 +97,7 @@ var listCmd = &cobra.Command{
 func init() {
 	listCmd.Flags().StringVar(&listStatus, "status", "", "filter by status (available, claimed, done, archived)")
 	listCmd.Flags().BoolVar(&listAll, "all", false, "include done and archived items")
+	listCmd.Flags().BoolVarP(&listArchived, "archived", "a", false, "include done and archived items")
 	listCmd.Flags().StringVar(&listRepo, "repo", "", "filter by repository path (substring match)")
 }
 

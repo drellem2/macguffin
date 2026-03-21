@@ -489,6 +489,89 @@ func TestCLI_ListGrouped(t *testing.T) {
 	}
 }
 
+func TestCLI_ListArchived(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	// Init
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create an item, claim it, mark done
+	cmd = exec.Command(bin, "new", "--type=task", "Archived item")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	cmd = exec.Command(bin, "claim", id)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg claim failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "done", id)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg done failed: %v\n%s", err, out)
+	}
+
+	// Create a second item that stays available
+	cmd = exec.Command(bin, "new", "--type=bug", "Active item")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+
+	// Without --archived, done item should NOT appear in grouped list
+	cmd = exec.Command(bin, "list")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list failed: %v\n%s", err, out)
+	}
+	listOutput := string(out)
+	if strings.Contains(listOutput, "Archived item") {
+		t.Errorf("list without --archived should not show done items, got:\n%s", listOutput)
+	}
+	if !strings.Contains(listOutput, "Active item") {
+		t.Errorf("list should show active items, got:\n%s", listOutput)
+	}
+
+	// With --archived, done item SHOULD appear
+	cmd = exec.Command(bin, "list", "--archived")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --archived failed: %v\n%s", err, out)
+	}
+	listOutput = string(out)
+	if !strings.Contains(listOutput, "Archived item") {
+		t.Errorf("list --archived should show done items, got:\n%s", listOutput)
+	}
+	if !strings.Contains(listOutput, "done:") {
+		t.Errorf("list --archived should contain 'done:' group, got:\n%s", listOutput)
+	}
+
+	// With -a (short form), done item SHOULD also appear
+	cmd = exec.Command(bin, "list", "-a")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list -a failed: %v\n%s", err, out)
+	}
+	listOutput = string(out)
+	if !strings.Contains(listOutput, "Archived item") {
+		t.Errorf("list -a should show done items, got:\n%s", listOutput)
+	}
+}
+
 func TestCLI_ClaimNoID(t *testing.T) {
 	bin := buildBinary(t)
 	err := exec.Command(bin, "claim").Run()
