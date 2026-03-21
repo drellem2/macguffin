@@ -327,3 +327,99 @@ func TestSchedule_E2E(t *testing.T) {
 		t.Fatal("Phase 2 should be available after Phase 1 done + schedule")
 	}
 }
+
+func TestSchedule_ArchivedDepSatisfied(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	// Create dep (no deps) and a child that depends on it
+	dep, err := Create(root, "mg-", "task", "Dep", nil)
+	if err != nil {
+		t.Fatalf("Create dep: %v", err)
+	}
+	child, err := Create(root, "mg-", "task", "Child", []string{dep.ID})
+	if err != nil {
+		t.Fatalf("Create child: %v", err)
+	}
+
+	// Complete the dep
+	_, err = Claim(root, dep.ID)
+	if err != nil {
+		t.Fatalf("Claim dep: %v", err)
+	}
+	_, err = Done(root, dep.ID, nil)
+	if err != nil {
+		t.Fatalf("Done dep: %v", err)
+	}
+
+	// Simulate archiving: move dep from done/ to archive/2026-03/
+	archiveDir := filepath.Join(root, "work", "archive", "2026-03")
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		t.Fatalf("mkdir archive: %v", err)
+	}
+	src := filepath.Join(root, "work", "done", dep.ID+".md")
+	dst := filepath.Join(archiveDir, dep.ID+".md")
+	if err := os.Rename(src, dst); err != nil {
+		t.Fatalf("archive rename: %v", err)
+	}
+
+	// Schedule should still promote child since dep is in archive/
+	promoted, err := Schedule(root)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	if len(promoted) != 1 {
+		t.Fatalf("expected 1 promoted, got %d", len(promoted))
+	}
+	if promoted[0].ID != child.ID {
+		t.Errorf("promoted ID = %q, want %q", promoted[0].ID, child.ID)
+	}
+}
+
+func TestSchedule_MixedDoneAndArchivedDeps(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	// Create two deps and a child depending on both
+	dep1, err := Create(root, "mg-", "task", "Dep 1", nil)
+	if err != nil {
+		t.Fatalf("Create dep1: %v", err)
+	}
+	dep2, err := Create(root, "mg-", "task", "Dep 2", nil)
+	if err != nil {
+		t.Fatalf("Create dep2: %v", err)
+	}
+	child, err := Create(root, "mg-", "task", "Child", []string{dep1.ID, dep2.ID})
+	if err != nil {
+		t.Fatalf("Create child: %v", err)
+	}
+
+	// Complete both deps
+	Claim(root, dep1.ID)
+	Done(root, dep1.ID, nil)
+	Claim(root, dep2.ID)
+	Done(root, dep2.ID, nil)
+
+	// Archive only dep1, leave dep2 in done/
+	archiveDir := filepath.Join(root, "work", "archive", "2026-03")
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		t.Fatalf("mkdir archive: %v", err)
+	}
+	src := filepath.Join(root, "work", "done", dep1.ID+".md")
+	dst := filepath.Join(archiveDir, dep1.ID+".md")
+	if err := os.Rename(src, dst); err != nil {
+		t.Fatalf("archive rename: %v", err)
+	}
+
+	// Schedule should promote child (dep1 archived, dep2 done)
+	promoted, err := Schedule(root)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	if len(promoted) != 1 {
+		t.Fatalf("expected 1 promoted, got %d", len(promoted))
+	}
+	if promoted[0].ID != child.ID {
+		t.Errorf("promoted ID = %q, want %q", promoted[0].ID, child.ID)
+	}
+}

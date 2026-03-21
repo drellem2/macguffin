@@ -8,7 +8,7 @@ import (
 )
 
 // Schedule checks all items in pending/ and promotes any whose dependencies
-// have all landed in done/ to available/. Returns the list of promoted items.
+// have all landed in done/ or archive/ to available/. Returns the list of promoted items.
 func Schedule(root string) ([]*Item, error) {
 	pendingDir := filepath.Join(root, "work", "pending")
 	entries, err := os.ReadDir(pendingDir)
@@ -45,22 +45,50 @@ func Schedule(root string) ([]*Item, error) {
 	return promoted, nil
 }
 
-// doneIDSet returns a set of all item IDs in done/.
+// doneIDSet returns a set of all item IDs that are completed,
+// checking both done/ and archive/ directories.
 func doneIDSet(root string) (map[string]bool, error) {
+	ids := make(map[string]bool)
+
+	// Scan done/
 	doneDir := filepath.Join(root, "work", "done")
 	entries, err := os.ReadDir(doneDir)
 	if err != nil {
 		return nil, fmt.Errorf("reading done/: %w", err)
 	}
-
-	ids := make(map[string]bool)
 	for _, e := range entries {
 		name := e.Name()
-		// Extract ID: gt-XXXX from gt-XXXX.md or gt-XXXX.result.json
 		if idx := strings.Index(name, ".md"); idx > 0 {
 			ids[name[:idx]] = true
 		}
 	}
+
+	// Scan archive/ partitions
+	archiveRoot := filepath.Join(root, "work", "archive")
+	partitions, err := os.ReadDir(archiveRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ids, nil
+		}
+		return nil, fmt.Errorf("reading archive/: %w", err)
+	}
+	for _, p := range partitions {
+		if !p.IsDir() {
+			continue
+		}
+		dir := filepath.Join(archiveRoot, p.Name())
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if idx := strings.Index(name, ".md"); idx > 0 {
+				ids[name[:idx]] = true
+			}
+		}
+	}
+
 	return ids, nil
 }
 
