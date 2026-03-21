@@ -18,6 +18,7 @@ type Item struct {
 	Created time.Time
 	Creator string
 	Depends []string // IDs of items that must be done before this is available
+	Tags    []string // free-form labels
 	Repo    string   // repository path where this item was created (optional breadcrumb)
 	Title   string
 	Body    string // everything after frontmatter (raw markdown)
@@ -71,9 +72,20 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 	dir := filepath.Join(root, "work", subdir)
 	path := filepath.Join(dir, id+".md")
 
+	content := Render(item)
+
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return nil, fmt.Errorf("writing work item: %w", err)
+	}
+
+	return item, nil
+}
+
+// Render serialises an Item back to markdown with YAML frontmatter.
+func Render(item *Item) string {
 	depsLine := "[]"
-	if len(depends) > 0 {
-		depsLine = "[" + strings.Join(depends, ", ") + "]"
+	if len(item.Depends) > 0 {
+		depsLine = "[" + strings.Join(item.Depends, ", ") + "]"
 	}
 
 	repoLine := ""
@@ -81,22 +93,64 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 		repoLine = fmt.Sprintf("repo: %s\n", item.Repo)
 	}
 
-	content := fmt.Sprintf(`---
-id: %s
-type: %s
-created: %s
-creator: %s
-depends: %s
-%s---
-
-# %s
-`, item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, depsLine, repoLine, item.Title)
-
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return nil, fmt.Errorf("writing work item: %w", err)
+	tagsLine := ""
+	if len(item.Tags) > 0 {
+		tagsLine = fmt.Sprintf("tags: [%s]\n", strings.Join(item.Tags, ", "))
 	}
 
-	return item, nil
+	body := item.Body
+	// If body is empty or doesn't start with the title heading, generate it
+	if body == "" || !strings.Contains(body, "# "+item.Title) {
+		body = fmt.Sprintf("\n# %s\n", item.Title)
+		if item.Body != "" {
+			body += item.Body
+		}
+	}
+
+	return fmt.Sprintf("---\nid: %s\ntype: %s\ncreated: %s\ncreator: %s\ndepends: %s\n%s%s---\n%s",
+		item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, depsLine, tagsLine, repoLine, body)
+}
+
+// FindPath returns the filesystem path and status directory for a work item by ID.
+func FindPath(root, id string) (path string, status string, err error) {
+	states := []string{"available", "claimed", "done", "pending"}
+
+	for _, state := range states {
+		dir := filepath.Join(root, "work", state)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if strings.HasPrefix(name, id+".md") || strings.HasPrefix(name, id+".md.") {
+				return filepath.Join(dir, name), state, nil
+			}
+		}
+	}
+
+	// Search archive partitions
+	archiveRoot := filepath.Join(root, "work", "archive")
+	partitions, err2 := os.ReadDir(archiveRoot)
+	if err2 == nil {
+		for _, p := range partitions {
+			if !p.IsDir() {
+				continue
+			}
+			entries, err := os.ReadDir(filepath.Join(archiveRoot, p.Name()))
+			if err != nil {
+				continue
+			}
+			for _, e := range entries {
+				name := e.Name()
+				if strings.HasPrefix(name, id+".md") {
+					return filepath.Join(archiveRoot, p.Name(), name), "archived", nil
+				}
+			}
+		}
+	}
+
+	return "", "", fmt.Errorf("work item %s not found", id)
 }
 
 // Read loads a work item by ID, searching across available/, claimed/, done/, pending/, and archive/.
@@ -217,6 +271,8 @@ func Parse(content string) (*Item, error) {
 			item.Creator = val
 		case "depends":
 			item.Depends = parseDependsList(val)
+		case "tags":
+			item.Tags = parseDependsList(val) // same [a, b] format
 		case "repo":
 			item.Repo = val
 		}
