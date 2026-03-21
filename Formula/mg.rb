@@ -9,22 +9,22 @@ class Mg < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/drellem2/macguffin/releases/download/v0.1.0/mg_darwin_arm64"
+      url "https://github.com/drellem2/macguffin/releases/download/v#{version}/mg_darwin_arm64"
       sha256 "9f4d86f52063aa3aab714ce51368bd956b5d0daf37b0aea7bf7ca133d6d66cf2"
     end
     on_intel do
-      url "https://github.com/drellem2/macguffin/releases/download/v0.1.0/mg_darwin_amd64"
+      url "https://github.com/drellem2/macguffin/releases/download/v#{version}/mg_darwin_amd64"
       sha256 "3497876803a19c2b4e3fcf8bc1169ed7c79db3e15d4360b63375b849713e8e62"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/drellem2/macguffin/releases/download/v0.1.0/mg_linux_arm64"
+      url "https://github.com/drellem2/macguffin/releases/download/v#{version}/mg_linux_arm64"
       sha256 "c4b5a57d8e06ca0519d728c50595f2196e93d4a37f4ead325b899a56451dcf76"
     end
     on_intel do
-      url "https://github.com/drellem2/macguffin/releases/download/v0.1.0/mg_linux_amd64"
+      url "https://github.com/drellem2/macguffin/releases/download/v#{version}/mg_linux_amd64"
       sha256 "dd1fc3d185c2810ceea4f3b9e3799d3f79d87d3dd88490570ae9d8d5dea8ee7d"
     end
   end

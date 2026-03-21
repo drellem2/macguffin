@@ -22,6 +22,15 @@ query language. Just files, directories, and `rename(2)`.
 
 ## Installation
 
+### Homebrew (macOS and Linux)
+
+```bash
+brew tap drellem2/macguffin
+brew install mg
+```
+
+### Shell installer
+
 ```bash
 curl -sSfL https://raw.githubusercontent.com/drellem2/macguffin/main/install.sh | sh
 ```
