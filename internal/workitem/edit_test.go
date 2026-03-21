@@ -328,10 +328,10 @@ func TestUpdateMultipleFields(t *testing.T) {
 	newTitle := "New title"
 	newType := "bug"
 	updated, err := Update(root, item.ID, UpdateField{
-		Title:    &newTitle,
-		Type:     &newType,
-		AddTags:  []string{"critical"},
-		Depends:  []string{"mg-aaa"},
+		Title:   &newTitle,
+		Type:    &newType,
+		AddTags: []string{"critical"},
+		Depends: []string{"mg-aaa"},
 	})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
@@ -427,4 +427,3 @@ func TestRenderNoTags(t *testing.T) {
 		t.Error("rendered output should not contain tags: when tags are empty")
 	}
 }
-
