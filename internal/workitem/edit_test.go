@@ -351,6 +351,64 @@ func TestUpdateMultipleFields(t *testing.T) {
 	}
 }
 
+func TestUpdateAssignee(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "mg-", "task", "Assignee test", nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	assignee := "alice"
+	updated, err := Update(root, item.ID, UpdateField{Assignee: &assignee})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	if updated.Assignee != "alice" {
+		t.Errorf("Assignee = %q, want %q", updated.Assignee, "alice")
+	}
+
+	// Verify persistence
+	read, err := Read(root, item.ID)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if read.Assignee != "alice" {
+		t.Errorf("persisted Assignee = %q, want %q", read.Assignee, "alice")
+	}
+}
+
+func TestUpdateAssigneeClear(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "mg-", "task", "Clear assignee", nil, WithAssignee("bob"))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	empty := ""
+	updated, err := Update(root, item.ID, UpdateField{Assignee: &empty})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	if updated.Assignee != "" {
+		t.Errorf("Assignee = %q, want empty", updated.Assignee)
+	}
+
+	// Verify frontmatter no longer has assignee
+	read, err := Read(root, item.ID)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if read.Assignee != "" {
+		t.Errorf("persisted Assignee = %q, want empty", read.Assignee)
+	}
+}
+
 func TestFindPath(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
