@@ -20,6 +20,7 @@ var (
 	editTags       string
 	editAddTags    string
 	editRmTags     string
+	editAssignee   string
 )
 
 var editCmd = &cobra.Command{
@@ -27,7 +28,7 @@ var editCmd = &cobra.Command{
 	Short: "Update fields on an existing work item",
 	Long: `Update fields on an existing work item.
 
-Use --title, --body, --type, --repo to replace fields directly.
+Use --title, --body, --type, --repo, --assignee to replace fields directly.
 Use --depends to replace all dependencies, or --add-depends / --rm-depends for incremental changes.
 Use --tags to replace all tags, or --add-tags / --rm-tags for incremental changes.`,
 	Args: cobra.ExactArgs(1),
@@ -80,9 +81,13 @@ Use --tags to replace all tags, or --add-tags / --rm-tags for incremental change
 			fields.RmTags = splitCSV(editRmTags)
 			changed = true
 		}
+		if cmd.Flags().Changed("assignee") {
+			fields.Assignee = &editAssignee
+			changed = true
+		}
 
 		if !changed {
-			return fmt.Errorf("no fields specified; use --title, --body, --type, --depends, --tags, etc.")
+			return fmt.Errorf("no fields specified; use --title, --body, --type, --assignee, --depends, --tags, etc.")
 		}
 
 		item, err := workitem.Update(root, args[0], fields)
@@ -106,6 +111,7 @@ func init() {
 	editCmd.Flags().StringVar(&editTags, "tags", "", "replace all tags (comma-separated)")
 	editCmd.Flags().StringVar(&editAddTags, "add-tags", "", "add tags (comma-separated)")
 	editCmd.Flags().StringVar(&editRmTags, "rm-tags", "", "remove tags (comma-separated)")
+	editCmd.Flags().StringVar(&editAssignee, "assignee", "", "person to assign this item to")
 }
 
 // splitCSV splits a comma-separated string into trimmed non-empty parts.
