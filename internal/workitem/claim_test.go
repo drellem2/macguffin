@@ -14,7 +14,7 @@ func TestClaim(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "bug", "Fix the widget", nil)
+	item, err := Create(root, "mg-", "bug", "Fix the widget", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestClaimAlreadyClaimed(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "task", "Do the thing", nil)
+	item, err := Create(root, "mg-", "task", "Do the thing", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestClaimReadable(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "bug", "Readable after claim", nil)
+	item, err := Create(root, "mg-", "bug", "Readable after claim", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestClaimConcurrent(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "task", "Race condition target", nil)
+	item, err := Create(root, "mg-", "task", "Race condition target", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

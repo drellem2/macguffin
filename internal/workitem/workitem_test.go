@@ -10,26 +10,38 @@ import (
 
 func TestGenerateID(t *testing.T) {
 	now := time.Now()
-	id := GenerateID("test title", now)
+	id := GenerateID("mg-", "test title", now)
 
-	if !strings.HasPrefix(id, "gt-") {
-		t.Errorf("ID should start with gt-, got %q", id)
+	if !strings.HasPrefix(id, "mg-") {
+		t.Errorf("ID should start with mg-, got %q", id)
 	}
-	// gt- plus 4 hex chars (2 bytes)
+	// mg- plus 4 hex chars (2 bytes)
 	if len(id) != 7 {
-		t.Errorf("ID length should be 7 (gt-XXXX), got %d: %q", len(id), id)
+		t.Errorf("ID length should be 7 (mg-XXXX), got %d: %q", len(id), id)
 	}
 
 	// Same inputs produce same ID
-	id2 := GenerateID("test title", now)
+	id2 := GenerateID("mg-", "test title", now)
 	if id != id2 {
 		t.Errorf("same inputs should produce same ID: %q != %q", id, id2)
 	}
 
 	// Different inputs produce different IDs
-	id3 := GenerateID("different title", now)
+	id3 := GenerateID("mg-", "different title", now)
 	if id == id3 {
 		t.Errorf("different inputs should produce different IDs")
+	}
+}
+
+func TestGenerateID_CustomPrefix(t *testing.T) {
+	now := time.Now()
+	id := GenerateID("po-", "test title", now)
+
+	if !strings.HasPrefix(id, "po-") {
+		t.Errorf("ID should start with po-, got %q", id)
+	}
+	if len(id) != 7 {
+		t.Errorf("ID length should be 7 (po-XXXX), got %d: %q", len(id), id)
 	}
 }
 
@@ -37,13 +49,13 @@ func TestCreate(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "bug", "Auth tokens broken", nil)
+	item, err := Create(root, "mg-", "bug", "Auth tokens broken", nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	if !strings.HasPrefix(item.ID, "gt-") {
-		t.Errorf("ID should start with gt-, got %q", item.ID)
+	if !strings.HasPrefix(item.ID, "mg-") {
+		t.Errorf("ID should start with mg-, got %q", item.ID)
 	}
 	if item.Type != "bug" {
 		t.Errorf("Type = %q, want %q", item.Type, "bug")
@@ -69,7 +81,7 @@ func TestRead(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	created, err := Create(root, "task", "Implement feature X", nil)
+	created, err := Create(root, "mg-", "task", "Implement feature X", nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -97,7 +109,7 @@ func TestReadNotFound(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	_, err := Read(root, "gt-000")
+	_, err := Read(root, "mg-000")
 	if err == nil {
 		t.Error("expected error for nonexistent ID")
 	}
@@ -107,11 +119,11 @@ func TestList(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	_, err := Create(root, "bug", "First item", nil)
+	_, err := Create(root, "mg-", "bug", "First item", nil)
 	if err != nil {
 		t.Fatalf("Create 1 failed: %v", err)
 	}
-	_, err = Create(root, "task", "Second item", nil)
+	_, err = Create(root, "mg-", "task", "Second item", nil)
 	if err != nil {
 		t.Fatalf("Create 2 failed: %v", err)
 	}
@@ -199,7 +211,7 @@ func TestCreateWithRepo(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "task", "Repo tagged item", nil, WithRepo("/home/user/myproject"))
+	item, err := Create(root, "mg-", "task", "Repo tagged item", nil, WithRepo("/home/user/myproject"))
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -222,7 +234,7 @@ func TestCreateWithoutRepo(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "task", "No repo item", nil)
+	item, err := Create(root, "mg-", "task", "No repo item", nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}

@@ -12,13 +12,13 @@ func TestSchedule_PromotesWhenDepsMet(t *testing.T) {
 	setupDirs(t, root)
 
 	// Create Phase 1 (no deps) — lands in available/
-	phase1, err := Create(root, "task", "Phase 1", nil)
+	phase1, err := Create(root, "mg-", "task", "Phase 1", nil)
 	if err != nil {
 		t.Fatalf("Create phase1: %v", err)
 	}
 
 	// Create Phase 2 (depends on Phase 1) — lands in pending/
-	phase2, err := Create(root, "task", "Phase 2", []string{phase1.ID})
+	phase2, err := Create(root, "mg-", "task", "Phase 2", []string{phase1.ID})
 	if err != nil {
 		t.Fatalf("Create phase2: %v", err)
 	}
@@ -77,17 +77,17 @@ func TestSchedule_MultipleDeps(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	dep1, err := Create(root, "task", "Dep A", nil)
+	dep1, err := Create(root, "mg-", "task", "Dep A", nil)
 	if err != nil {
 		t.Fatalf("Create dep1: %v", err)
 	}
-	dep2, err := Create(root, "task", "Dep B", nil)
+	dep2, err := Create(root, "mg-", "task", "Dep B", nil)
 	if err != nil {
 		t.Fatalf("Create dep2: %v", err)
 	}
 
 	// Item depends on both
-	item, err := Create(root, "task", "Depends on both", []string{dep1.ID, dep2.ID})
+	item, err := Create(root, "mg-", "task", "Depends on both", []string{dep1.ID, dep2.ID})
 	if err != nil {
 		t.Fatalf("Create item: %v", err)
 	}
@@ -134,8 +134,8 @@ func TestSchedule_Idempotent(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	dep, _ := Create(root, "task", "Dep", nil)
-	Create(root, "task", "Child", []string{dep.ID})
+	dep, _ := Create(root, "mg-", "task", "Dep", nil)
+	Create(root, "mg-", "task", "Child", []string{dep.ID})
 
 	Claim(root, dep.ID)
 	Done(root, dep.ID, nil)
@@ -157,7 +157,7 @@ func TestCreate_WithDeps_GoesToPending(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "task", "Has deps", []string{"gt-abc"})
+	item, err := Create(root, "mg-", "task", "Has deps", []string{"gt-abc"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestCreate_NoDeps_GoesToAvailable(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "task", "No deps", nil)
+	item, err := Create(root, "mg-", "task", "No deps", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -264,13 +264,13 @@ func TestSchedule_E2E(t *testing.T) {
 	setupDirs(t, root)
 
 	// Create Phase 1 — lands in available/
-	phase1, err := Create(root, "task", "Phase 1", nil)
+	phase1, err := Create(root, "mg-", "task", "Phase 1", nil)
 	if err != nil {
 		t.Fatalf("Create phase1: %v", err)
 	}
 
 	// Create Phase 2 depending on Phase 1
-	phase2, err := Create(root, "task", "Phase 2", []string{phase1.ID})
+	phase2, err := Create(root, "mg-", "task", "Phase 2", []string{phase1.ID})
 	if err != nil {
 		t.Fatalf("Create phase2: %v", err)
 	}

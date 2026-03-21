@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 )
 
 // DefaultRoot returns the default macguffin root directory (~/.macguffin).
@@ -46,4 +48,56 @@ func Init(root string) error {
 
 	fmt.Printf("Initialized macguffin at %s\n", root)
 	return nil
+}
+
+const configFile = "config"
+
+// DefaultPrefix is the default work item ID prefix.
+const DefaultPrefix = "mg-"
+
+// WriteConfig writes a key=value pair to the workspace config file.
+func WriteConfig(root, key, value string) error {
+	cfg := readConfigMap(root)
+	cfg[key] = value
+	return writeConfigMap(root, cfg)
+}
+
+// ReadConfig reads a value from the workspace config file.
+func ReadConfig(root, key string) string {
+	cfg := readConfigMap(root)
+	return cfg[key]
+}
+
+// Prefix returns the configured work item ID prefix, or DefaultPrefix if unset.
+func Prefix(root string) string {
+	if p := ReadConfig(root, "prefix"); p != "" {
+		return p
+	}
+	return DefaultPrefix
+}
+
+func readConfigMap(root string) map[string]string {
+	cfg := make(map[string]string)
+	data, err := os.ReadFile(filepath.Join(root, configFile))
+	if err != nil {
+		return cfg
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if ok {
+			cfg[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+	}
+	return cfg
+}
+
+func writeConfigMap(root string, cfg map[string]string) error {
+	var lines []string
+	for k, v := range cfg {
+		lines = append(lines, k+"="+v)
+	}
+	// Sort for deterministic output
+	sort.Strings(lines)
+	data := strings.Join(lines, "\n") + "\n"
+	return os.WriteFile(filepath.Join(root, configFile), []byte(data), 0o644)
 }

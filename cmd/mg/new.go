@@ -40,12 +40,14 @@ var newCmd = &cobra.Command{
 			return err
 		}
 
+		prefix := workspace.Prefix(root)
+
 		var opts []workitem.CreateOption
 		if repo := detectRepo(); repo != "" {
 			opts = append(opts, workitem.WithRepo(repo))
 		}
 
-		item, err := workitem.Create(root, newType, title, deps, opts...)
+		item, err := workitem.Create(root, prefix, newType, title, deps, opts...)
 		if err != nil {
 			return err
 		}

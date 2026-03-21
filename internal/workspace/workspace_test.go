@@ -60,6 +60,50 @@ func TestInit_Idempotent(t *testing.T) {
 	}
 }
 
+func TestWriteReadConfig(t *testing.T) {
+	root := t.TempDir()
+	mgRoot := filepath.Join(root, ".macguffin")
+	if err := Init(mgRoot); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	if err := WriteConfig(mgRoot, "prefix", "po-"); err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+
+	got := ReadConfig(mgRoot, "prefix")
+	if got != "po-" {
+		t.Errorf("ReadConfig prefix = %q, want %q", got, "po-")
+	}
+}
+
+func TestPrefix_Default(t *testing.T) {
+	root := t.TempDir()
+	mgRoot := filepath.Join(root, ".macguffin")
+	if err := Init(mgRoot); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	got := Prefix(mgRoot)
+	if got != DefaultPrefix {
+		t.Errorf("Prefix = %q, want %q", got, DefaultPrefix)
+	}
+}
+
+func TestPrefix_Custom(t *testing.T) {
+	root := t.TempDir()
+	mgRoot := filepath.Join(root, ".macguffin")
+	if err := Init(mgRoot); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	WriteConfig(mgRoot, "prefix", "po-")
+	got := Prefix(mgRoot)
+	if got != "po-" {
+		t.Errorf("Prefix = %q, want %q", got, "po-")
+	}
+}
+
 func TestDefaultRoot(t *testing.T) {
 	root, err := DefaultRoot()
 	if err != nil {

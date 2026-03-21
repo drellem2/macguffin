@@ -33,20 +33,20 @@ func WithRepo(repo string) CreateOption {
 	}
 }
 
-// GenerateID produces a short hash ID in gt-XXX format (3 hex chars).
-func GenerateID(title string, created time.Time) string {
+// GenerateID produces a short hash ID with the given prefix (e.g. "mg-a3f0").
+func GenerateID(prefix, title string, created time.Time) string {
 	h := sha256.New()
 	h.Write([]byte(title))
 	h.Write([]byte(created.Format(time.RFC3339Nano)))
 	sum := h.Sum(nil)
-	return fmt.Sprintf("gt-%x", sum[:2])
+	return fmt.Sprintf("%s%x", prefix, sum[:2])
 }
 
 // Create writes a new work item file. Items with no dependencies go to
 // available/; items with unmet dependencies go to pending/.
-func Create(root, typ, title string, depends []string, opts ...CreateOption) (*Item, error) {
+func Create(root, prefix, typ, title string, depends []string, opts ...CreateOption) (*Item, error) {
 	now := time.Now().UTC()
-	id := GenerateID(title, now)
+	id := GenerateID(prefix, title, now)
 
 	creator := currentUser()
 

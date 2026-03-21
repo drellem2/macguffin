@@ -66,8 +66,8 @@ func TestCLI_New(t *testing.T) {
 	}
 
 	output := string(out)
-	if !strings.Contains(output, "Created gt-") {
-		t.Errorf("expected 'Created gt-...' output, got %q", output)
+	if !strings.Contains(output, "Created mg-") {
+		t.Errorf("expected 'Created mg-...' output, got %q", output)
 	}
 
 	// Verify exactly one .md file in available/

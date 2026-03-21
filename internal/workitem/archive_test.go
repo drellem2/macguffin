@@ -12,7 +12,7 @@ func TestArchive(t *testing.T) {
 	setupDirs(t, root)
 
 	// Create, claim, and complete an item
-	item, err := Create(root, "bug", "Old bug", nil)
+	item, err := Create(root, "mg-", "bug", "Old bug", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestArchiveSkipsRecent(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "task", "Recent task", nil)
+	item, err := Create(root, "mg-", "task", "Recent task", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestArchiveWithSidecar(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "bug", "Bug with result", nil)
+	item, err := Create(root, "mg-", "bug", "Bug with result", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestListArchived(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "task", "Archived task", nil)
+	item, err := Create(root, "mg-", "task", "Archived task", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestArchivedItemReadable(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	item, err := Create(root, "task", "Will be archived", nil)
+	item, err := Create(root, "mg-", "task", "Will be archived", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
