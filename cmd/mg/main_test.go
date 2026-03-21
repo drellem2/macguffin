@@ -32,17 +32,40 @@ func TestCLI_Help(t *testing.T) {
 
 func TestCLI_UnknownCommand(t *testing.T) {
 	bin := buildBinary(t)
-	err := exec.Command(bin, "bogus").Run()
+	cmd := exec.Command(bin, "bogus")
+	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Error("expected non-zero exit for unknown command")
+	}
+	if !strings.Contains(string(out), "Error:") {
+		t.Errorf("expected error message on stderr, got %q", out)
 	}
 }
 
 func TestCLI_NoArgs(t *testing.T) {
 	bin := buildBinary(t)
-	err := exec.Command(bin).Run()
+	cmd := exec.Command(bin)
+	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Error("expected non-zero exit for no args")
+	}
+	if !strings.Contains(string(out), "Error:") {
+		t.Errorf("expected error message on stderr, got %q", out)
+	}
+}
+
+func TestCLI_ErrorOnStderr(t *testing.T) {
+	bin := buildBinary(t)
+	cmd := exec.Command(bin, "bogus")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	cmd.Stdout = nil
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("expected non-zero exit")
+	}
+	if !strings.Contains(stderr.String(), "Error:") {
+		t.Errorf("expected error on stderr, got %q", stderr.String())
 	}
 }
 
