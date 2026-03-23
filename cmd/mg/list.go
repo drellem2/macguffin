@@ -146,16 +146,22 @@ func filterByAssignee(items []*workitem.Item, assignee string) []*workitem.Item 
 	if assignee == "" {
 		return items
 	}
+	resolvedAssignee := assignee
 	if assignee == "me" {
 		if u, err := user.Current(); err == nil {
-			assignee = u.Username
+			resolvedAssignee = u.Username
 		} else if u := os.Getenv("USER"); u != "" {
-			assignee = u
+			resolvedAssignee = u
 		}
 	}
 	var filtered []*workitem.Item
 	for _, item := range items {
-		if item.Assignee != "" && item.Assignee == assignee {
+		if item.Assignee == "" {
+			continue
+		}
+		// Match both the literal value and the resolved username
+		// (e.g. assignee "me" in the file should match --assignee=me)
+		if item.Assignee == resolvedAssignee || item.Assignee == assignee {
 			filtered = append(filtered, item)
 		}
 	}
