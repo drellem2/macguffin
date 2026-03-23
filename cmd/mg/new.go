@@ -14,8 +14,9 @@ var (
 	newType     string
 	newDepends  string
 	newAssignee string
-	newBranch   string
-	newTags     string
+	newBranch    string
+	newPriority  string
+	newTags      string
 )
 
 var newCmd = &cobra.Command{
@@ -56,6 +57,10 @@ var newCmd = &cobra.Command{
 		if newBranch != "" {
 			opts = append(opts, workitem.WithBranch(newBranch))
 		}
+		if newPriority == "" {
+			newPriority = "medium"
+		}
+		opts = append(opts, workitem.WithPriority(newPriority))
 		if newTags != "" {
 			var tags []string
 			for _, t := range strings.Split(newTags, ",") {
@@ -85,6 +90,7 @@ func init() {
 	newCmd.Flags().StringVar(&newDepends, "depends", "", "comma-separated list of dependency IDs")
 	newCmd.Flags().StringVar(&newAssignee, "assignee", "", "person to assign this item to")
 	newCmd.Flags().StringVar(&newBranch, "branch", "", "branch name for this work item")
+	newCmd.Flags().StringVar(&newPriority, "priority", "", "priority level: low, medium, high (default: medium)")
 	newCmd.Flags().StringVar(&newTags, "tag", "", "comma-separated list of tags")
 }
 

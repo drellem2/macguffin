@@ -21,6 +21,7 @@ type Item struct {
 	Tags     []string // free-form labels
 	Repo     string   // repository path where this item was created (optional breadcrumb)
 	Assignee string   // person assigned to this item (optional)
+	Priority string   // priority level: low, medium, high (optional, default: medium)
 	Branch   string   // branch name associated with this item (optional)
 	Title    string
 	Body     string // everything after frontmatter (raw markdown)
@@ -40,6 +41,13 @@ func WithRepo(repo string) CreateOption {
 func WithAssignee(assignee string) CreateOption {
 	return func(item *Item) {
 		item.Assignee = assignee
+	}
+}
+
+// WithPriority sets the priority on a work item.
+func WithPriority(priority string) CreateOption {
+	return func(item *Item) {
+		item.Priority = priority
 	}
 }
 
@@ -121,6 +129,11 @@ func Render(item *Item) string {
 		assigneeLine = fmt.Sprintf("assignee: %s\n", item.Assignee)
 	}
 
+	priorityLine := ""
+	if item.Priority != "" {
+		priorityLine = fmt.Sprintf("priority: %s\n", item.Priority)
+	}
+
 	branchLine := ""
 	if item.Branch != "" {
 		branchLine = fmt.Sprintf("branch: %s\n", item.Branch)
@@ -140,8 +153,8 @@ func Render(item *Item) string {
 		}
 	}
 
-	return fmt.Sprintf("---\nid: %s\ntype: %s\ncreated: %s\ncreator: %s\ndepends: %s\n%s%s%s%s---\n%s",
-		item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, depsLine, tagsLine, repoLine, assigneeLine, branchLine, body)
+	return fmt.Sprintf("---\nid: %s\ntype: %s\ncreated: %s\ncreator: %s\ndepends: %s\n%s%s%s%s%s---\n%s",
+		item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, depsLine, tagsLine, repoLine, assigneeLine, priorityLine, branchLine, body)
 }
 
 // FindPath returns the filesystem path and status directory for a work item by ID.
@@ -310,6 +323,8 @@ func Parse(content string) (*Item, error) {
 			item.Repo = val
 		case "assignee":
 			item.Assignee = val
+		case "priority":
+			item.Priority = val
 		case "branch":
 			item.Branch = val
 		}
