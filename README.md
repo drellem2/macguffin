@@ -44,7 +44,17 @@ INSTALL_DIR=/usr/local/bin sh install.sh  # custom location
 
 Supports Linux (amd64, arm64), macOS (amd64, arm64), and FreeBSD (amd64).
 
-> **macOS note:** macOS ships `/usr/bin/mg` (a micro Emacs clone). If you see `standard input and output must be a terminal` when running `mg`, you're hitting the system binary. Ensure your install location (e.g. `/usr/local/bin`) comes before `/usr/bin` in your PATH, or use the full path to verify: `which mg` should show your install location, not `/usr/bin/mg`.
+> **macOS note:** macOS ships `/usr/bin/mg` (MicroGnuEmacs, a tiny Emacs clone). If you see `standard input and output must be a terminal` when running `mg`, you're hitting the system binary instead of MacGuffin. Run `which mg` to check — it should **not** print `/usr/bin/mg`.
+>
+> Fix: ensure your install location comes before `/usr/bin` in your `PATH`:
+> ```bash
+> # Homebrew / shell installer (typically /usr/local/bin or ~/.local/bin)
+> export PATH="/usr/local/bin:$PATH"
+>
+> # Go install (typically ~/go/bin)
+> export PATH="$HOME/go/bin:$PATH"
+> ```
+> Add the appropriate line to your `~/.zshrc` or `~/.bashrc` to make it permanent.
 
 Requires Go 1.24+ to build from source:
 
