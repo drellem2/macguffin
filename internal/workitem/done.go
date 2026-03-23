@@ -11,13 +11,15 @@ import (
 // Done atomically moves a claimed work item to done/ and writes an optional
 // result sidecar JSON file. The item must currently be in claimed/.
 // resultJSON may be nil if no result metadata is provided.
-func Done(root, id string, resultJSON json.RawMessage) (*Item, error) {
+// After completing the item, any pending items whose dependencies are now
+// fully satisfied are auto-promoted to available.
+func Done(root, id string, resultJSON json.RawMessage) (*Item, []*Item, error) {
 	claimedDir := filepath.Join(root, "work", "claimed")
 
 	// Find the claimed file (has PID suffix: <id>.md.<pid>)
 	entries, err := os.ReadDir(claimedDir)
 	if err != nil {
-		return nil, fmt.Errorf("reading claimed/: %w", err)
+		return nil, nil, fmt.Errorf("reading claimed/: %w", err)
 	}
 
 	var srcPath string
@@ -29,25 +31,36 @@ func Done(root, id string, resultJSON json.RawMessage) (*Item, error) {
 	}
 
 	if srcPath == "" {
-		return nil, fmt.Errorf("work item %s not found in claimed/", id)
+		return nil, nil, fmt.Errorf("work item %s not found in claimed/", id)
 	}
 
 	dstPath := filepath.Join(root, "work", "done", id+".md")
 
 	// rename(2) is atomic on local filesystems.
 	if err := os.Rename(srcPath, dstPath); err != nil {
-		return nil, fmt.Errorf("completing %s: %w", id, err)
+		return nil, nil, fmt.Errorf("completing %s: %w", id, err)
 	}
 
 	// Write result sidecar if provided
 	if len(resultJSON) > 0 {
 		sidecarPath := filepath.Join(root, "work", "done", id+".result.json")
 		if err := os.WriteFile(sidecarPath, resultJSON, 0o644); err != nil {
-			return nil, fmt.Errorf("writing result sidecar: %w", err)
+			return nil, nil, fmt.Errorf("writing result sidecar: %w", err)
 		}
 	}
 
-	return readFile(dstPath)
+	item, err := readFile(dstPath)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Auto-promote pending items whose dependencies are now satisfied.
+	promoted, err := Schedule(root)
+	if err != nil {
+		return nil, nil, fmt.Errorf("auto-promoting pending items: %w", err)
+	}
+
+	return item, promoted, nil
 }
 
 // Status returns the lifecycle state of a work item: "available", "claimed", "done", or "archived".

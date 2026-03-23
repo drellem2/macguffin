@@ -23,7 +23,7 @@ func TestDone(t *testing.T) {
 	}
 
 	result := json.RawMessage(`{"status":"fixed","commit":"abc123"}`)
-	done, err := Done(root, item.ID, result)
+	done, _, err := Done(root, item.ID, result)
 	if err != nil {
 		t.Fatalf("Done: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestDoneNoResult(t *testing.T) {
 		t.Fatalf("Claim: %v", err)
 	}
 
-	done, err := Done(root, item.ID, nil)
+	done, _, err := Done(root, item.ID, nil)
 	if err != nil {
 		t.Fatalf("Done: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestDoneNotClaimed(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, err = Done(root, item.ID, nil)
+	_, _, err = Done(root, item.ID, nil)
 	if err == nil {
 		t.Error("expected error for unclaimed item")
 	}
@@ -125,7 +125,7 @@ func TestDoneNotFound(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	_, err := Done(root, "gt-000", nil)
+	_, _, err := Done(root, "gt-000", nil)
 	if err == nil {
 		t.Error("expected error for nonexistent item")
 	}
@@ -145,7 +145,7 @@ func TestDoneReadable(t *testing.T) {
 		t.Fatalf("Claim: %v", err)
 	}
 
-	_, err = Done(root, item.ID, nil)
+	_, _, err = Done(root, item.ID, nil)
 	if err != nil {
 		t.Fatalf("Done: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestStatus(t *testing.T) {
 		t.Errorf("status = %q, want %q", status, "claimed")
 	}
 
-	_, err = Done(root, item.ID, nil)
+	_, _, err = Done(root, item.ID, nil)
 	if err != nil {
 		t.Fatalf("Done: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestFullLifecycle(t *testing.T) {
 
 	// Done with result
 	result := json.RawMessage(`{"status":"fixed","commit":"abc123"}`)
-	_, err = Done(root, item.ID, result)
+	_, _, err = Done(root, item.ID, result)
 	if err != nil {
 		t.Fatalf("Done: %v", err)
 	}

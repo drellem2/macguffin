@@ -20,7 +20,7 @@ func TestArchive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	_, err = Done(root, item.ID, nil)
+	_, _, err = Done(root, item.ID, nil)
 	if err != nil {
 		t.Fatalf("Done: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestArchiveSkipsRecent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	_, err = Done(root, item.ID, nil)
+	_, _, err = Done(root, item.ID, nil)
 	if err != nil {
 		t.Fatalf("Done: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestArchiveWithSidecar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	_, err = Done(root, item.ID, []byte(`{"branch":"fix-123"}`))
+	_, _, err = Done(root, item.ID, []byte(`{"branch":"fix-123"}`))
 	if err != nil {
 		t.Fatalf("Done: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestListArchived(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	_, err = Done(root, item.ID, nil)
+	_, _, err = Done(root, item.ID, nil)
 	if err != nil {
 		t.Fatalf("Done: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestArchivedItemReadable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	_, err = Done(root, item.ID, nil)
+	_, _, err = Done(root, item.ID, nil)
 	if err != nil {
 		t.Fatalf("Done: %v", err)
 	}

@@ -32,7 +32,7 @@ var doneCmd = &cobra.Command{
 			return err
 		}
 
-		item, err := workitem.Done(root, id, resultJSON)
+		item, promoted, err := workitem.Done(root, id, resultJSON)
 		if err != nil {
 			return err
 		}
@@ -40,6 +40,9 @@ var doneCmd = &cobra.Command{
 		fmt.Printf("Done %s: %s\n", item.ID, item.Title)
 		if len(resultJSON) > 0 {
 			fmt.Printf("Result written to %s.result.json\n", item.ID)
+		}
+		for _, p := range promoted {
+			fmt.Printf("Promoted %s: %s (pending → available)\n", p.ID, p.Title)
 		}
 		return nil
 	},

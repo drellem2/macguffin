@@ -1040,19 +1040,14 @@ func TestCLI_ScheduleE2E(t *testing.T) {
 	}
 	cmd = exec.Command(bin, "done", id1)
 	cmd.Env = env
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err = cmd.CombinedOutput()
+	if err != nil {
 		t.Fatalf("mg done phase1 failed: %v\n%s", err, out)
 	}
 
-	// Schedule — should promote Phase 2
-	cmd = exec.Command(bin, "schedule")
-	cmd.Env = env
-	out, err = cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("mg schedule failed: %v\n%s", err, out)
-	}
+	// done should auto-promote Phase 2
 	if !strings.Contains(string(out), "Promoted "+id2) {
-		t.Errorf("expected 'Promoted %s' output, got %q", id2, out)
+		t.Errorf("expected 'Promoted %s' in done output, got %q", id2, out)
 	}
 
 	// Phase 2 should now be in available/
