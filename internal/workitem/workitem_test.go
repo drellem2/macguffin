@@ -370,6 +370,76 @@ func TestRenderWithAssignee(t *testing.T) {
 	}
 }
 
+func TestRenderParseBranchRoundTrip(t *testing.T) {
+	item := &Item{
+		ID:      "mg-abcd",
+		Type:    "task",
+		Creator: "alice",
+		Branch:  "polecat-mg-abcd",
+		Title:   "Branch task",
+		Body:    "\n# Branch task\n",
+	}
+	item.Created, _ = time.Parse(time.RFC3339, "2026-03-20T16:00:00Z")
+
+	rendered := Render(item)
+	if !strings.Contains(rendered, "branch: polecat-mg-abcd") {
+		t.Error("rendered output should contain branch: polecat-mg-abcd")
+	}
+
+	parsed, err := Parse(rendered)
+	if err != nil {
+		t.Fatalf("Parse(Render()): %v", err)
+	}
+	if parsed.Branch != "polecat-mg-abcd" {
+		t.Errorf("Branch = %q, want %q", parsed.Branch, "polecat-mg-abcd")
+	}
+}
+
+func TestCreateWithBranch(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "mg-", "task", "Branch item", nil, WithBranch("feature-branch"))
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if item.Branch != "feature-branch" {
+		t.Errorf("Branch = %q, want %q", item.Branch, "feature-branch")
+	}
+
+	read, err := Read(root, item.ID)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if read.Branch != "feature-branch" {
+		t.Errorf("Read Branch = %q, want %q", read.Branch, "feature-branch")
+	}
+}
+
+func TestCreateWithoutBranch(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "mg-", "task", "No branch item", nil)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if item.Branch != "" {
+		t.Errorf("Branch should be empty, got %q", item.Branch)
+	}
+
+	path := filepath.Join(root, "work", "available", item.ID+".md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading file: %v", err)
+	}
+	if strings.Contains(string(data), "branch:") {
+		t.Error("frontmatter should not contain branch: when branch is empty")
+	}
+}
+
 func setupDirs(t *testing.T, root string) {
 	t.Helper()
 	for _, d := range []string{
