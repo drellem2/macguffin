@@ -14,11 +14,12 @@ var (
 	newType     string
 	newDepends  string
 	newAssignee string
+	newBranch   string
 	newTags     string
 )
 
 var newCmd = &cobra.Command{
-	Use:   "new [--type=TYPE] [--depends=ID,...] TITLE...",
+	Use:   "new [--type=TYPE] [--depends=ID,...] [--branch=BRANCH] TITLE...",
 	Short: "Create a new work item",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -51,6 +52,9 @@ var newCmd = &cobra.Command{
 		if newAssignee != "" {
 			opts = append(opts, workitem.WithAssignee(newAssignee))
 		}
+		if newBranch != "" {
+			opts = append(opts, workitem.WithBranch(newBranch))
+		}
 		if newTags != "" {
 			var tags []string
 			for _, t := range strings.Split(newTags, ",") {
@@ -79,6 +83,7 @@ func init() {
 	newCmd.Flags().StringVar(&newType, "type", "task", "work item type")
 	newCmd.Flags().StringVar(&newDepends, "depends", "", "comma-separated list of dependency IDs")
 	newCmd.Flags().StringVar(&newAssignee, "assignee", "", "person to assign this item to")
+	newCmd.Flags().StringVar(&newBranch, "branch", "", "branch name for this work item")
 	newCmd.Flags().StringVar(&newTags, "tag", "", "comma-separated list of tags")
 }
 
