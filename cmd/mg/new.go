@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	newType    string
-	newDepends string
+	newType     string
+	newDepends  string
+	newAssignee string
 )
 
 var newCmd = &cobra.Command{
@@ -46,6 +47,9 @@ var newCmd = &cobra.Command{
 		if repo := detectRepo(); repo != "" {
 			opts = append(opts, workitem.WithRepo(repo))
 		}
+		if newAssignee != "" {
+			opts = append(opts, workitem.WithAssignee(newAssignee))
+		}
 
 		item, err := workitem.Create(root, prefix, newType, title, deps, opts...)
 		if err != nil {
@@ -63,6 +67,7 @@ var newCmd = &cobra.Command{
 func init() {
 	newCmd.Flags().StringVar(&newType, "type", "task", "work item type")
 	newCmd.Flags().StringVar(&newDepends, "depends", "", "comma-separated list of dependency IDs")
+	newCmd.Flags().StringVar(&newAssignee, "assignee", "", "person to assign this item to")
 }
 
 // detectRepo returns the git toplevel of the current working directory, or ""

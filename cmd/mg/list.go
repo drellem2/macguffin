@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"os/user"
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/workitem"
@@ -14,6 +16,7 @@ var listAll bool
 var listArchived bool
 var listRepo string
 var listTag string
+var listAssignee string
 
 var listCmd = &cobra.Command{
 	Use:   "list",
@@ -37,6 +40,7 @@ var listCmd = &cobra.Command{
 
 			items = filterByRepo(items, listRepo)
 			items = filterByTag(items, listTag)
+			items = filterByAssignee(items, listAssignee)
 
 			if len(items) == 0 {
 				fmt.Printf("No %s work items.\n", listStatus)
@@ -79,6 +83,13 @@ var listCmd = &cobra.Command{
 			}
 		}
 
+		// Apply assignee filter to each group
+		if listAssignee != "" {
+			for s, items := range grouped {
+				grouped[s] = filterByAssignee(items, listAssignee)
+			}
+		}
+
 		order := []string{"available", "claimed", "pending"}
 		if listAll || listArchived {
 			order = append(order, "done", "archived")
@@ -110,6 +121,7 @@ func init() {
 	listCmd.Flags().BoolVarP(&listArchived, "archived", "a", false, "include done and archived items")
 	listCmd.Flags().StringVar(&listRepo, "repo", "", "filter by repository path (substring match)")
 	listCmd.Flags().StringVar(&listTag, "tag", "", "filter by tag")
+	listCmd.Flags().StringVar(&listAssignee, "assignee", "", "filter by assignee (use 'me' for current user)")
 }
 
 // filterByRepo returns only items whose Repo contains the given substring.
@@ -121,6 +133,29 @@ func filterByRepo(items []*workitem.Item, repo string) []*workitem.Item {
 	var filtered []*workitem.Item
 	for _, item := range items {
 		if strings.Contains(item.Repo, repo) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+// filterByAssignee returns only items whose Assignee matches the given name.
+// The special value "me" matches the current OS user. Items with no assignee
+// are excluded when filtering. If assignee is empty, all items are returned.
+func filterByAssignee(items []*workitem.Item, assignee string) []*workitem.Item {
+	if assignee == "" {
+		return items
+	}
+	if assignee == "me" {
+		if u, err := user.Current(); err == nil {
+			assignee = u.Username
+		} else if u := os.Getenv("USER"); u != "" {
+			assignee = u
+		}
+	}
+	var filtered []*workitem.Item
+	for _, item := range items {
+		if item.Assignee != "" && item.Assignee == assignee {
 			filtered = append(filtered, item)
 		}
 	}

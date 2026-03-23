@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -669,6 +670,100 @@ func TestCLI_ListTag(t *testing.T) {
 	}
 	if strings.Contains(listOutput, "Untagged task") {
 		t.Errorf("list --status=available --tag=urgent should NOT show 'Untagged task', got:\n%s", listOutput)
+	}
+}
+
+func TestCLI_ListAssignee(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	// Init
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create two items
+	cmd = exec.Command(bin, "new", "--type=bug", "Assigned bug")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id1 := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	cmd = exec.Command(bin, "new", "--type=task", "Unassigned task")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+
+	// Assign the first item to "alice"
+	cmd = exec.Command(bin, "edit", id1, "--assignee=alice")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg edit failed: %v\n%s", err, out)
+	}
+
+	// List with --assignee=alice should show only the assigned item
+	cmd = exec.Command(bin, "list", "--assignee=alice")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --assignee failed: %v\n%s", err, out)
+	}
+	listOutput := string(out)
+	if !strings.Contains(listOutput, "Assigned bug") {
+		t.Errorf("list --assignee=alice should show 'Assigned bug', got:\n%s", listOutput)
+	}
+	if strings.Contains(listOutput, "Unassigned task") {
+		t.Errorf("list --assignee=alice should NOT show 'Unassigned task', got:\n%s", listOutput)
+	}
+
+	// List with --assignee=nobody should show no items
+	cmd = exec.Command(bin, "list", "--assignee=nobody")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --assignee failed: %v\n%s", err, out)
+	}
+	listOutput = string(out)
+	if !strings.Contains(listOutput, "No work items") {
+		t.Errorf("list --assignee=nobody should show 'No work items', got:\n%s", listOutput)
+	}
+
+	// List with --status and --assignee combined
+	cmd = exec.Command(bin, "list", "--status=available", "--assignee=alice")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --status --assignee failed: %v\n%s", err, out)
+	}
+	listOutput = string(out)
+	if !strings.Contains(listOutput, "Assigned bug") {
+		t.Errorf("list --status=available --assignee=alice should show 'Assigned bug', got:\n%s", listOutput)
+	}
+	if strings.Contains(listOutput, "Unassigned task") {
+		t.Errorf("list --status=available --assignee=alice should NOT show 'Unassigned task', got:\n%s", listOutput)
+	}
+
+	// List with --assignee=me should resolve to current user
+	cmd = exec.Command(bin, "list", "--assignee=me")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --assignee=me failed: %v\n%s", err, out)
+	}
+	// "me" resolves to the current OS user, not "alice", so should not show the item
+	listOutput = string(out)
+	if strings.Contains(listOutput, "Assigned bug") {
+		// Unless current user happens to be "alice", this should not appear
+		u, _ := user.Current()
+		if u == nil || u.Username != "alice" {
+			t.Errorf("list --assignee=me should NOT show 'Assigned bug' (assigned to alice), got:\n%s", listOutput)
+		}
 	}
 }
 

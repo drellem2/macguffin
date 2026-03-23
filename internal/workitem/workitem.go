@@ -19,9 +19,10 @@ type Item struct {
 	Creator string
 	Depends []string // IDs of items that must be done before this is available
 	Tags    []string // free-form labels
-	Repo    string   // repository path where this item was created (optional breadcrumb)
-	Title   string
-	Body    string // everything after frontmatter (raw markdown)
+	Repo     string   // repository path where this item was created (optional breadcrumb)
+	Assignee string   // person assigned to this item (optional)
+	Title    string
+	Body     string // everything after frontmatter (raw markdown)
 }
 
 // CreateOption configures optional fields on a new work item.
@@ -31,6 +32,13 @@ type CreateOption func(*Item)
 func WithRepo(repo string) CreateOption {
 	return func(item *Item) {
 		item.Repo = repo
+	}
+}
+
+// WithAssignee sets the assignee on a work item.
+func WithAssignee(assignee string) CreateOption {
+	return func(item *Item) {
+		item.Assignee = assignee
 	}
 }
 
@@ -93,6 +101,11 @@ func Render(item *Item) string {
 		repoLine = fmt.Sprintf("repo: %s\n", item.Repo)
 	}
 
+	assigneeLine := ""
+	if item.Assignee != "" {
+		assigneeLine = fmt.Sprintf("assignee: %s\n", item.Assignee)
+	}
+
 	tagsLine := ""
 	if len(item.Tags) > 0 {
 		tagsLine = fmt.Sprintf("tags: [%s]\n", strings.Join(item.Tags, ", "))
@@ -107,8 +120,8 @@ func Render(item *Item) string {
 		}
 	}
 
-	return fmt.Sprintf("---\nid: %s\ntype: %s\ncreated: %s\ncreator: %s\ndepends: %s\n%s%s---\n%s",
-		item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, depsLine, tagsLine, repoLine, body)
+	return fmt.Sprintf("---\nid: %s\ntype: %s\ncreated: %s\ncreator: %s\ndepends: %s\n%s%s%s---\n%s",
+		item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, depsLine, tagsLine, repoLine, assigneeLine, body)
 }
 
 // FindPath returns the filesystem path and status directory for a work item by ID.
@@ -275,6 +288,8 @@ func Parse(content string) (*Item, error) {
 			item.Tags = parseDependsList(val) // same [a, b] format
 		case "repo":
 			item.Repo = val
+		case "assignee":
+			item.Assignee = val
 		}
 	}
 

@@ -12,6 +12,7 @@ type UpdateField struct {
 	Body       *string  // replace body
 	Type       *string  // replace type
 	Repo       *string  // replace repo
+	Assignee   *string  // replace assignee
 	Depends    []string // replace all dependencies (nil = no change, empty = clear)
 	AddDepends []string // append to existing dependencies
 	RmDepends  []string // remove from existing dependencies
@@ -57,6 +58,10 @@ func Update(root, id string, fields UpdateField) (*Item, error) {
 
 	if fields.Repo != nil {
 		item.Repo = *fields.Repo
+	}
+
+	if fields.Assignee != nil {
+		item.Assignee = *fields.Assignee
 	}
 
 	// Dependencies: full replacement takes precedence over incremental

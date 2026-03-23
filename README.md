@@ -83,7 +83,13 @@ mg log                 # view snapshot history
 | `mg init [--git]` | Create the `~/.macguffin` directory tree. `--git` enables snapshot tracking. |
 | `mg new` | Create a new work item (Markdown + YAML frontmatter). |
 | `mg show <id>` | Display a work item by ID. |
-| `mg list` | List available work items. |
+| `mg list` | List work items. |
+| `mg claim ID` | Atomically claim a work item by ID. |
+| `mg done ID` | Mark a claimed work item as done. |
+| `mg edit ID [flags]` | Update fields on an existing work item. |
+| `mg archive` | Archive done items older than N days. |
+| `mg reap` | Reclaim work items from dead claimant processes. |
+| `mg schedule` | Promote pending items whose dependencies are met. |
 | `mg mail send\|list\|read` | Maildir-style messaging between agents. |
 | `mg event append <type> [--key=value ...]` | Append a structured event to `events.jsonl`. |
 | `mg event list [--type=T] [--since=TS] [--tail=N]` | List events with optional filtering. |
@@ -97,8 +103,10 @@ mg log                 # view snapshot history
 ~/.macguffin/
 ├── work/
 │   ├── available/        # Unclaimed work items
+│   ├── pending/          # Items waiting on dependencies
 │   ├── claimed/          # Atomically moved here on claim (PID-suffixed)
-│   └── done/             # Completed items + result sidecars
+│   ├── done/             # Completed items + result sidecars
+│   └── archive/          # Archived done items (date-partitioned)
 ├── mail/                 # Maildir-style per-agent inboxes
 │   └── <agent>/
 │       ├── new/          # Unread messages
@@ -120,6 +128,7 @@ internal/
   workitem/      # Work item creation, parsing, ID generation
   workspace/     # Directory layout, init, git operations
   mail/          # Maildir-style message delivery
+  event/         # Structured event logging
 ```
 
 ## License

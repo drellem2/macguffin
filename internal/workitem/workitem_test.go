@@ -276,6 +276,100 @@ repo: /home/bob/project
 	}
 }
 
+func TestCreateWithAssignee(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "mg-", "task", "Assigned item", nil, WithAssignee("alice"))
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if item.Assignee != "alice" {
+		t.Errorf("Assignee = %q, want %q", item.Assignee, "alice")
+	}
+
+	// Read it back and verify assignee is persisted
+	read, err := Read(root, item.ID)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if read.Assignee != "alice" {
+		t.Errorf("Read Assignee = %q, want %q", read.Assignee, "alice")
+	}
+}
+
+func TestCreateWithoutAssignee(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "mg-", "task", "No assignee item", nil)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if item.Assignee != "" {
+		t.Errorf("Assignee should be empty, got %q", item.Assignee)
+	}
+
+	// Verify frontmatter does not contain assignee line
+	path := filepath.Join(root, "work", "available", item.ID+".md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading file: %v", err)
+	}
+	if strings.Contains(string(data), "assignee:") {
+		t.Error("frontmatter should not contain assignee: when assignee is empty")
+	}
+}
+
+func TestParseWithAssignee(t *testing.T) {
+	content := `---
+id: gt-abc
+type: task
+created: 2026-03-20T16:00:00Z
+creator: bob
+depends: []
+assignee: charlie
+---
+
+# Assigned task
+`
+
+	item, err := Parse(content)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if item.Assignee != "charlie" {
+		t.Errorf("Assignee = %q, want %q", item.Assignee, "charlie")
+	}
+}
+
+func TestRenderWithAssignee(t *testing.T) {
+	item := &Item{
+		ID:       "mg-abcd",
+		Type:     "task",
+		Creator:  "alice",
+		Assignee: "bob",
+		Title:    "Assigned task",
+		Body:     "\n# Assigned task\n",
+	}
+	item.Created, _ = time.Parse(time.RFC3339, "2026-03-20T16:00:00Z")
+
+	rendered := Render(item)
+	if !strings.Contains(rendered, "assignee: bob") {
+		t.Error("rendered output should contain assignee: bob")
+	}
+
+	parsed, err := Parse(rendered)
+	if err != nil {
+		t.Fatalf("Parse(Render()): %v", err)
+	}
+	if parsed.Assignee != "bob" {
+		t.Errorf("Assignee = %q, want %q", parsed.Assignee, "bob")
+	}
+}
+
 func setupDirs(t *testing.T, root string) {
 	t.Helper()
 	for _, d := range []string{
