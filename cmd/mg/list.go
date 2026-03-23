@@ -27,6 +27,8 @@ var listCmd = &cobra.Command{
 			return err
 		}
 
+		currentUser := resolveCurrentUser()
+
 		if listStatus != "" {
 			var items []*workitem.Item
 			if listStatus == "archived" {
@@ -48,7 +50,7 @@ var listCmd = &cobra.Command{
 			}
 
 			for _, item := range items {
-				fmt.Printf("%-10s %-8s %s\n", item.ID, item.Type, item.Title)
+				fmt.Printf("%-10s %-8s %s%s\n", item.ID, item.Type, item.Title, meTag(item, currentUser))
 			}
 			return nil
 		}
@@ -104,7 +106,7 @@ var listCmd = &cobra.Command{
 			printed = true
 			fmt.Printf("%s:\n", s)
 			for _, item := range items {
-				fmt.Printf("  %-10s %-8s %s\n", item.ID, item.Type, item.Title)
+				fmt.Printf("  %-10s %-8s %s%s\n", item.ID, item.Type, item.Title, meTag(item, currentUser))
 			}
 		}
 		if !printed {
@@ -184,4 +186,26 @@ func filterByTag(items []*workitem.Item, tag string) []*workitem.Item {
 		}
 	}
 	return filtered
+}
+
+// resolveCurrentUser returns the current OS username.
+func resolveCurrentUser() string {
+	if u, err := user.Current(); err == nil {
+		return u.Username
+	}
+	if u := os.Getenv("USER"); u != "" {
+		return u
+	}
+	return ""
+}
+
+// meTag returns " [ME]" if the item is assigned to the current user, otherwise "".
+func meTag(item *workitem.Item, currentUser string) string {
+	if currentUser == "" || item.Assignee == "" {
+		return ""
+	}
+	if item.Assignee == currentUser || item.Assignee == "me" {
+		return " [ME]"
+	}
+	return ""
 }
