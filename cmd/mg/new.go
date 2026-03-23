@@ -19,8 +19,9 @@ var (
 )
 
 var newCmd = &cobra.Command{
-	Use:   "new [--type=TYPE] [--depends=ID,...] [--branch=BRANCH] TITLE...",
-	Short: "Create a new work item",
+	Use:     "new [--type=TYPE] [--depends=ID,...] [--branch=BRANCH] TITLE...",
+	Aliases: []string{"create"},
+	Short:   "Create a new work item",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		title := strings.Join(args, " ")
