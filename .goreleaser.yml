@@ -34,7 +34,12 @@ brews:
   - repository:
       owner: drellem2
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    folder: Formula
     name: mg
+    commit_author:
+      name: goreleaser
+      email: goreleaser@users.noreply.github.com
     homepage: "https://github.com/drellem2/macguffin"
     description: "macguffin work-item tracker"
     license: "MIT"
