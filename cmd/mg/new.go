@@ -14,9 +14,9 @@ var (
 	newType     string
 	newDepends  string
 	newAssignee string
-	newBranch    string
-	newPriority  string
-	newTags      string
+	newBranch   string
+	newPriority string
+	newTags     string
 )
 
 var newCmd = &cobra.Command{
@@ -57,10 +57,18 @@ var newCmd = &cobra.Command{
 		if newBranch != "" {
 			opts = append(opts, workitem.WithBranch(newBranch))
 		}
-		if newPriority == "" {
-			newPriority = "medium"
+		{
+			priority := newPriority
+			if priority == "" {
+				priority = "medium"
+			}
+			switch priority {
+			case "low", "medium", "high":
+				opts = append(opts, workitem.WithPriority(priority))
+			default:
+				return fmt.Errorf("invalid priority %q: must be low, medium, or high", priority)
+			}
 		}
-		opts = append(opts, workitem.WithPriority(newPriority))
 		if newTags != "" {
 			var tags []string
 			for _, t := range strings.Split(newTags, ",") {

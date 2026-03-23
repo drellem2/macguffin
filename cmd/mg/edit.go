@@ -87,7 +87,12 @@ Use --tags to replace all tags, or --add-tags / --rm-tags for incremental change
 			changed = true
 		}
 		if cmd.Flags().Changed("priority") {
-			fields.Priority = &editPriority
+			switch editPriority {
+			case "low", "medium", "high", "":
+				fields.Priority = &editPriority
+			default:
+				return fmt.Errorf("invalid priority %q: must be low, medium, or high", editPriority)
+			}
 			changed = true
 		}
 
