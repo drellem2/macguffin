@@ -13,12 +13,12 @@ import (
 
 // Item represents a work item with YAML frontmatter fields.
 type Item struct {
-	ID      string
-	Type    string
-	Created time.Time
-	Creator string
-	Depends []string // IDs of items that must be done before this is available
-	Tags    []string // free-form labels
+	ID       string
+	Type     string
+	Created  time.Time
+	Creator  string
+	Depends  []string // IDs of items that must be done before this is available
+	Tags     []string // free-form labels
 	Repo     string   // repository path where this item was created (optional breadcrumb)
 	Assignee string   // person assigned to this item (optional)
 	Title    string
