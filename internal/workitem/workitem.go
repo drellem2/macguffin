@@ -42,6 +42,13 @@ func WithAssignee(assignee string) CreateOption {
 	}
 }
 
+// WithTags sets tags on a work item.
+func WithTags(tags []string) CreateOption {
+	return func(item *Item) {
+		item.Tags = tags
+	}
+}
+
 // GenerateID produces a short hash ID with the given prefix (e.g. "mg-a3f0").
 func GenerateID(prefix, title string, created time.Time) string {
 	h := sha256.New()
