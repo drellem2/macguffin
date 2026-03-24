@@ -29,16 +29,17 @@ func resolveCurrentUser() string {
 	return ""
 }
 
-// formatAssignee returns a formatted assignee suffix for list output.
-// Returns " [ME]" (bold) if assigned to current user, " (name)" (dimmed) for others, or "".
+// formatAssignee returns a styled assignee label to append after the title.
+// If the assignee matches the current user, it shows as lowercase blue "me".
+// Other assignees show as dim. No assignee returns an empty string.
 func formatAssignee(assignee, currentUser string) string {
 	if assignee == "" {
 		return ""
 	}
 	if currentUser != "" && (assignee == currentUser || assignee == "me") {
-		return " \033[1m[ME]\033[0m"
+		return " \033[34mme\033[0m"
 	}
-	return fmt.Sprintf(" \033[2m(%s)\033[0m", assignee)
+	return fmt.Sprintf(" \033[2m%s\033[0m", assignee)
 }
 
 var listCmd = &cobra.Command{
