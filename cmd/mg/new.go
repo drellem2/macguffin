@@ -25,7 +25,7 @@ var newCmd = &cobra.Command{
 	Use:     "new [--title=TITLE] [--body=BODY] [flags] [TITLE...]",
 	Aliases: []string{"create"},
 	Short:   "Create a new work item",
-	Args:  cobra.ArbitraryArgs,
+	Args:    cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		title := newTitle
 		if title == "" {
