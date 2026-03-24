@@ -18,6 +18,29 @@ var listRepo string
 var listTag string
 var listAssignee string
 
+// resolveCurrentUser returns the current OS username.
+func resolveCurrentUser() string {
+	if u, err := user.Current(); err == nil {
+		return u.Username
+	}
+	if u := os.Getenv("USER"); u != "" {
+		return u
+	}
+	return ""
+}
+
+// formatAssignee returns a formatted assignee suffix for list output.
+// Returns " [ME]" (bold) if assigned to current user, " (name)" (dimmed) for others, or "".
+func formatAssignee(assignee, currentUser string) string {
+	if assignee == "" {
+		return ""
+	}
+	if currentUser != "" && (assignee == currentUser || assignee == "me") {
+		return " \033[1m[ME]\033[0m"
+	}
+	return fmt.Sprintf(" \033[2m(%s)\033[0m", assignee)
+}
+
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List work items",
@@ -50,7 +73,7 @@ var listCmd = &cobra.Command{
 			}
 
 			for _, item := range items {
-				fmt.Printf("%-10s %-8s %s%s%s\n", item.ID, item.Type, item.Title, formatTags(item.Tags), meTag(item, currentUser))
+				fmt.Printf("%-10s %-8s %s%s%s\n", item.ID, item.Type, item.Title, formatTags(item.Tags), formatAssignee(item.Assignee, currentUser))
 			}
 			return nil
 		}
@@ -106,7 +129,7 @@ var listCmd = &cobra.Command{
 			printed = true
 			fmt.Printf("%s:\n", s)
 			for _, item := range items {
-				fmt.Printf("  %-10s %-8s %s%s%s\n", item.ID, item.Type, item.Title, formatTags(item.Tags), meTag(item, currentUser))
+				fmt.Printf("  %-10s %-8s %s%s%s\n", item.ID, item.Type, item.Title, formatTags(item.Tags), formatAssignee(item.Assignee, currentUser))
 			}
 		}
 		if !printed {
@@ -195,26 +218,4 @@ func filterByTag(items []*workitem.Item, tag string) []*workitem.Item {
 		}
 	}
 	return filtered
-}
-
-// resolveCurrentUser returns the current OS username.
-func resolveCurrentUser() string {
-	if u, err := user.Current(); err == nil {
-		return u.Username
-	}
-	if u := os.Getenv("USER"); u != "" {
-		return u
-	}
-	return ""
-}
-
-// meTag returns " [ME]" if the item is assigned to the current user, otherwise "".
-func meTag(item *workitem.Item, currentUser string) string {
-	if currentUser == "" || item.Assignee == "" {
-		return ""
-	}
-	if item.Assignee == currentUser || item.Assignee == "me" {
-		return " [ME]"
-	}
-	return ""
 }
