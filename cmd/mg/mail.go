@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/drellem2/macguffin/internal/mail"
 	"github.com/drellem2/macguffin/internal/workspace"
@@ -91,19 +92,29 @@ var mailListCmd = &cobra.Command{
 			if m.Read {
 				status = " "
 			}
-			fmt.Printf("  %s %s  %-12s  %s\n", status, m.ID, m.From, m.Subject)
+			fmt.Printf("  %s %s/%s  %-12s  %s\n", status, agent, m.ID, m.From, m.Subject)
 		}
 		return nil
 	},
 }
 
 var mailReadCmd = &cobra.Command{
-	Use:   "read AGENT MSG-ID",
+	Use:   "read AGENT/MSG-ID",
 	Short: "Read a specific message",
-	Args:  cobra.ExactArgs(2),
+	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		agent := args[0]
-		msgID := args[1]
+		var agent, msgID string
+		if len(args) == 1 {
+			// agent/msgID format
+			parts := strings.SplitN(args[0], "/", 2)
+			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+				return fmt.Errorf("expected AGENT/MSG-ID format, got %q", args[0])
+			}
+			agent, msgID = parts[0], parts[1]
+		} else {
+			agent = args[0]
+			msgID = args[1]
+		}
 
 		mr, err := mailRoot()
 		if err != nil {
