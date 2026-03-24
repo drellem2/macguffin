@@ -470,6 +470,135 @@ func TestRender(t *testing.T) {
 	}
 }
 
+func TestUpdateAddDepsMovesToPending(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	// Create an item with no deps → lands in available/
+	item, err := Create(root, "mg-", "task", "Move to pending", nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Verify it starts in available/
+	_, status, err := FindPath(root, item.ID)
+	if err != nil {
+		t.Fatalf("FindPath: %v", err)
+	}
+	if status != "available" {
+		t.Fatalf("initial status = %q, want available", status)
+	}
+
+	// Add an unmet dependency
+	updated, err := Update(root, item.ID, UpdateField{AddDepends: []string{"mg-xxxx"}})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(updated.Depends) != 1 || updated.Depends[0] != "mg-xxxx" {
+		t.Errorf("Depends = %v, want [mg-xxxx]", updated.Depends)
+	}
+
+	// Should now be in pending/
+	_, status, err = FindPath(root, item.ID)
+	if err != nil {
+		t.Fatalf("FindPath after update: %v", err)
+	}
+	if status != "pending" {
+		t.Errorf("status after adding unmet dep = %q, want pending", status)
+	}
+}
+
+func TestUpdateReplaceDepsMovesToPending(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "mg-", "task", "Replace deps pending", nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Replace deps with unmet ones
+	_, err = Update(root, item.ID, UpdateField{Depends: []string{"mg-yyyy"}})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	_, status, err := FindPath(root, item.ID)
+	if err != nil {
+		t.Fatalf("FindPath: %v", err)
+	}
+	if status != "pending" {
+		t.Errorf("status = %q, want pending", status)
+	}
+}
+
+func TestUpdateRmDepsPromotesToAvailable(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	// Create item with deps → lands in pending/
+	item, err := Create(root, "mg-", "task", "Promote to available", []string{"mg-dep1"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	_, status, _ := FindPath(root, item.ID)
+	if status != "pending" {
+		t.Fatalf("initial status = %q, want pending", status)
+	}
+
+	// Remove the dep
+	_, err = Update(root, item.ID, UpdateField{RmDepends: []string{"mg-dep1"}})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	_, status, err = FindPath(root, item.ID)
+	if err != nil {
+		t.Fatalf("FindPath: %v", err)
+	}
+	if status != "available" {
+		t.Errorf("status after removing all deps = %q, want available", status)
+	}
+}
+
+func TestUpdateAddDepsStaysAvailableWhenDepsDone(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	// Create a "done" dependency
+	dep, err := Create(root, "mg-", "task", "Done dep", nil)
+	if err != nil {
+		t.Fatalf("Create dep: %v", err)
+	}
+	// Move dep to done/
+	src := filepath.Join(root, "work", "available", dep.ID+".md")
+	dst := filepath.Join(root, "work", "done", dep.ID+".md")
+	if err := os.Rename(src, dst); err != nil {
+		t.Fatalf("move to done: %v", err)
+	}
+
+	// Create the item under test
+	item, err := Create(root, "mg-", "task", "Stays available", nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Add a dep that IS done
+	_, err = Update(root, item.ID, UpdateField{AddDepends: []string{dep.ID}})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	_, status, err := FindPath(root, item.ID)
+	if err != nil {
+		t.Fatalf("FindPath: %v", err)
+	}
+	if status != "available" {
+		t.Errorf("status = %q, want available (dep is done)", status)
+	}
+}
+
 func TestRenderNoTags(t *testing.T) {
 	item := &Item{
 		ID:      "mg-abcd",

@@ -3,6 +3,7 @@ package workitem
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -23,8 +24,11 @@ type UpdateField struct {
 }
 
 // Update applies field changes to an existing work item and writes it back.
+// If dependency changes cause the item to have unmet deps, it is moved from
+// available/ to pending/. Conversely, if all deps are now met, it moves from
+// pending/ to available/.
 func Update(root, id string, fields UpdateField) (*Item, error) {
-	itemPath, _, err := FindPath(root, id)
+	itemPath, status, err := FindPath(root, id)
 	if err != nil {
 		return nil, err
 	}
@@ -96,6 +100,37 @@ func Update(root, id string, fields UpdateField) (*Item, error) {
 	content := Render(item)
 	if err := os.WriteFile(itemPath, []byte(content), 0o644); err != nil {
 		return nil, fmt.Errorf("writing work item: %w", err)
+	}
+
+	// After dependency changes, move items between available/ and pending/
+	// as needed based on whether deps are met.
+	depsChanged := fields.Depends != nil || len(fields.AddDepends) > 0 || len(fields.RmDepends) > 0
+	if depsChanged {
+		if status == "available" && len(item.Depends) > 0 {
+			// Check if any dependency is unmet → move to pending/
+			doneIDs, err := doneIDSet(root)
+			if err != nil {
+				return nil, err
+			}
+			if !allDepsMet(item.Depends, doneIDs) {
+				dst := filepath.Join(root, "work", "pending", filepath.Base(itemPath))
+				if err := os.Rename(itemPath, dst); err != nil {
+					return nil, fmt.Errorf("moving %s to pending: %w", id, err)
+				}
+			}
+		} else if status == "pending" {
+			// Check if all deps are now met → move to available/
+			doneIDs, err := doneIDSet(root)
+			if err != nil {
+				return nil, err
+			}
+			if len(item.Depends) == 0 || allDepsMet(item.Depends, doneIDs) {
+				dst := filepath.Join(root, "work", "available", filepath.Base(itemPath))
+				if err := os.Rename(itemPath, dst); err != nil {
+					return nil, fmt.Errorf("promoting %s to available: %w", id, err)
+				}
+			}
+		}
 	}
 
 	return item, nil
