@@ -177,6 +177,61 @@ func TestRead_NotFound(t *testing.T) {
 	}
 }
 
+func TestListAll_IncludesReadAndUnread(t *testing.T) {
+	root := t.TempDir()
+
+	// Send two messages
+	msgID1, err := Send(root, "arch", "mayor", "First", "body1")
+	if err != nil {
+		t.Fatalf("Send 1 failed: %v", err)
+	}
+	_, err = Send(root, "arch", "witness", "Second", "body2")
+	if err != nil {
+		t.Fatalf("Send 2 failed: %v", err)
+	}
+
+	// Read the first message (moves to cur/)
+	_, err = Read(root, "arch", msgID1)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	// List (unread only) should return 1
+	unread, err := List(root, "arch")
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(unread) != 1 {
+		t.Fatalf("expected 1 unread message, got %d", len(unread))
+	}
+
+	// ListAll should return 2
+	all, err := ListAll(root, "arch")
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 total messages, got %d", len(all))
+	}
+
+	// Check read status
+	readCount := 0
+	unreadCount := 0
+	for _, m := range all {
+		if m.Read {
+			readCount++
+		} else {
+			unreadCount++
+		}
+	}
+	if readCount != 1 {
+		t.Errorf("expected 1 read message, got %d", readCount)
+	}
+	if unreadCount != 1 {
+		t.Errorf("expected 1 unread message, got %d", unreadCount)
+	}
+}
+
 func TestE2E_SendListReadLifecycle(t *testing.T) {
 	root := t.TempDir()
 

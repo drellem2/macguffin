@@ -26,6 +26,7 @@ var (
 	mailSendFrom    string
 	mailSendSubject string
 	mailSendBody    string
+	mailListAll     bool
 )
 
 var mailSendCmd = &cobra.Command{
@@ -66,18 +67,31 @@ var mailListCmd = &cobra.Command{
 			return err
 		}
 
-		msgs, err := mail.List(mr, agent)
+		var msgs []mail.Message
+		if mailListAll {
+			msgs, err = mail.ListAll(mr, agent)
+		} else {
+			msgs, err = mail.List(mr, agent)
+		}
 		if err != nil {
 			return err
 		}
 
 		if len(msgs) == 0 {
-			fmt.Printf("No unread messages for %s\n", agent)
+			if mailListAll {
+				fmt.Printf("No messages for %s\n", agent)
+			} else {
+				fmt.Printf("No unread messages for %s\n", agent)
+			}
 			return nil
 		}
 
 		for _, m := range msgs {
-			fmt.Printf("  %s  %-12s  %s\n", m.ID, m.From, m.Subject)
+			status := "●"
+			if m.Read {
+				status = " "
+			}
+			fmt.Printf("  %s %s  %-12s  %s\n", status, m.ID, m.From, m.Subject)
 		}
 		return nil
 	},
@@ -110,6 +124,8 @@ func init() {
 	mailSendCmd.Flags().StringVar(&mailSendFrom, "from", "", "sender name (required)")
 	mailSendCmd.Flags().StringVar(&mailSendSubject, "subject", "", "message subject (required)")
 	mailSendCmd.Flags().StringVar(&mailSendBody, "body", "", "message body (required)")
+
+	mailListCmd.Flags().BoolVarP(&mailListAll, "all", "a", false, "include read messages from cur/")
 
 	mailCmd.AddCommand(mailSendCmd)
 	mailCmd.AddCommand(mailListCmd)
