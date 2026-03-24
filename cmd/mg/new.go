@@ -17,17 +17,24 @@ var (
 	newBranch   string
 	newPriority string
 	newTags     string
+	newTitle    string
+	newBody     string
 )
 
 var newCmd = &cobra.Command{
-	Use:     "new [--type=TYPE] [--depends=ID,...] [--branch=BRANCH] TITLE...",
+	Use:     "new [--title=TITLE] [--body=BODY] [flags] [TITLE...]",
 	Aliases: []string{"create"},
 	Short:   "Create a new work item",
-	Args:  cobra.MinimumNArgs(1),
+	Args:  cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		title := strings.Join(args, " ")
+		title := newTitle
 		if title == "" {
-			return fmt.Errorf("title is required")
+			title = strings.Join(args, " ")
+		} else if len(args) > 0 {
+			return fmt.Errorf("cannot use both --title flag and positional arguments")
+		}
+		if title == "" {
+			return fmt.Errorf("title is required (use --title flag or positional arguments)")
 		}
 
 		var deps []string
@@ -79,6 +86,9 @@ var newCmd = &cobra.Command{
 			}
 			opts = append(opts, workitem.WithTags(tags))
 		}
+		if newBody != "" {
+			opts = append(opts, workitem.WithBody(newBody))
+		}
 
 		item, err := workitem.Create(root, prefix, newType, title, deps, opts...)
 		if err != nil {
@@ -100,6 +110,8 @@ func init() {
 	newCmd.Flags().StringVar(&newBranch, "branch", "", "branch name for this work item")
 	newCmd.Flags().StringVar(&newPriority, "priority", "", "priority level: low, medium, high (default: medium)")
 	newCmd.Flags().StringVar(&newTags, "tag", "", "comma-separated list of tags")
+	newCmd.Flags().StringVar(&newTitle, "title", "", "work item title (alternative to positional args)")
+	newCmd.Flags().StringVar(&newBody, "body", "", "work item body (markdown)")
 }
 
 // detectRepo returns the git toplevel of the current working directory, or ""

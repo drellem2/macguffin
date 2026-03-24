@@ -58,6 +58,13 @@ func WithBranch(branch string) CreateOption {
 	}
 }
 
+// WithBody sets the body on a work item.
+func WithBody(body string) CreateOption {
+	return func(item *Item) {
+		item.Body = body
+	}
+}
+
 // WithTags sets tags on a work item.
 func WithTags(tags []string) CreateOption {
 	return func(item *Item) {
