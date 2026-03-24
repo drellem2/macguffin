@@ -50,7 +50,7 @@ var listCmd = &cobra.Command{
 			}
 
 			for _, item := range items {
-				fmt.Printf("%-10s %-8s %s%s\n", item.ID, item.Type, item.Title, meTag(item, currentUser))
+				fmt.Printf("%-10s %-8s %s%s%s\n", item.ID, item.Type, item.Title, formatTags(item.Tags), meTag(item, currentUser))
 			}
 			return nil
 		}
@@ -106,7 +106,7 @@ var listCmd = &cobra.Command{
 			printed = true
 			fmt.Printf("%s:\n", s)
 			for _, item := range items {
-				fmt.Printf("  %-10s %-8s %s%s\n", item.ID, item.Type, item.Title, meTag(item, currentUser))
+				fmt.Printf("  %-10s %-8s %s%s%s\n", item.ID, item.Type, item.Title, formatTags(item.Tags), meTag(item, currentUser))
 			}
 		}
 		if !printed {
@@ -124,6 +124,15 @@ func init() {
 	listCmd.Flags().StringVar(&listRepo, "repo", "", "filter by repository path (substring match)")
 	listCmd.Flags().StringVar(&listTag, "tag", "", "filter by tag")
 	listCmd.Flags().StringVar(&listAssignee, "assignee", "", "filter by assignee (use 'me' for current user)")
+}
+
+// formatTags returns a dim-styled tag string like " [tag1, tag2]" for display,
+// or an empty string if the item has no tags.
+func formatTags(tags []string) string {
+	if len(tags) == 0 {
+		return ""
+	}
+	return " \033[2m[" + strings.Join(tags, ", ") + "]\033[0m"
 }
 
 // filterByRepo returns only items whose Repo contains the given substring.
