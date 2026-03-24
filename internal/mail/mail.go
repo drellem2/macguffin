@@ -16,6 +16,7 @@ type Message struct {
 	Subject string
 	Date    string
 	Body    string
+	Read    bool
 }
 
 // EnsureMaildir creates the Maildir subdirectories (tmp, new, cur) for an agent.
@@ -58,13 +59,34 @@ func Send(mailRoot, recipient, from, subject, body string) (string, error) {
 
 // List returns all unread messages (in new/) for the given agent.
 func List(mailRoot, agent string) ([]Message, error) {
-	newDir := filepath.Join(mailRoot, agent, "new")
-	entries, err := os.ReadDir(newDir)
+	return listDir(mailRoot, agent, "new", false)
+}
+
+// ListAll returns all messages (both new/ and cur/) for the given agent.
+func ListAll(mailRoot, agent string) ([]Message, error) {
+	unread, err := listDir(mailRoot, agent, "new", false)
+	if err != nil {
+		return nil, err
+	}
+	read, err := listDir(mailRoot, agent, "cur", true)
+	if err != nil {
+		return nil, err
+	}
+	msgs := append(unread, read...)
+	sort.Slice(msgs, func(i, j int) bool {
+		return msgs[i].Date < msgs[j].Date
+	})
+	return msgs, nil
+}
+
+func listDir(mailRoot, agent, subdir string, read bool) ([]Message, error) {
+	dir := filepath.Join(mailRoot, agent, subdir)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("reading new/: %w", err)
+		return nil, fmt.Errorf("reading %s/: %w", subdir, err)
 	}
 
 	var msgs []Message
@@ -72,10 +94,11 @@ func List(mailRoot, agent string) ([]Message, error) {
 		if e.IsDir() {
 			continue
 		}
-		msg, err := parseMessageFile(filepath.Join(newDir, e.Name()), e.Name())
+		msg, err := parseMessageFile(filepath.Join(dir, e.Name()), e.Name())
 		if err != nil {
 			continue // skip malformed messages
 		}
+		msg.Read = read
 		msgs = append(msgs, msg)
 	}
 
