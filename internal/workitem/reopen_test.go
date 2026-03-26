@@ -38,10 +38,10 @@ func TestReopen(t *testing.T) {
 		t.Errorf("Title = %q, want %q", reopened.Title, item.Title)
 	}
 
-	// File should be in available/
-	availPath := filepath.Join(root, "work", "available", item.ID+".md")
-	if _, err := os.Stat(availPath); err != nil {
-		t.Errorf("expected file at %s: %v", availPath, err)
+	// File should be in claimed/
+	claimedPath := filepath.Join(root, "work", "claimed", item.ID+".md")
+	if _, err := os.Stat(claimedPath); err != nil {
+		t.Errorf("expected file at %s: %v", claimedPath, err)
 	}
 
 	// File should NOT be in done/
