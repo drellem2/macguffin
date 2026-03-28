@@ -767,6 +767,50 @@ func TestCLI_ListAssignee(t *testing.T) {
 	}
 }
 
+func TestCLI_UpdateAlias(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	// Init
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create a work item
+	cmd = exec.Command(bin, "new", "--type=bug", "Alias test item")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// Use 'update' alias to change the title
+	cmd = exec.Command(bin, "update", id, "--title=Updated title")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg update (alias for edit) failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "Updated "+id) {
+		t.Errorf("expected 'Updated %s' in output, got: %s", id, out)
+	}
+
+	// Verify the title was changed via show
+	cmd = exec.Command(bin, "show", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "Updated title") {
+		t.Errorf("expected 'Updated title' in show output, got: %s", out)
+	}
+}
+
 func TestCLI_ClaimNoID(t *testing.T) {
 	bin := buildBinary(t)
 	err := exec.Command(bin, "claim").Run()

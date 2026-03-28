@@ -25,8 +25,9 @@ var (
 )
 
 var editCmd = &cobra.Command{
-	Use:   "edit ID [flags]",
-	Short: "Update fields on an existing work item",
+	Use:     "edit ID [flags]",
+	Aliases: []string{"update"},
+	Short:   "Update fields on an existing work item",
 	Long: `Update fields on an existing work item.
 
 Use --title, --body, --type, --repo, --assignee, --priority to replace fields directly.
