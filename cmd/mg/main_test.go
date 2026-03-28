@@ -553,7 +553,7 @@ func TestCLI_ListArchived(t *testing.T) {
 		t.Fatalf("mg new failed: %v\n%s", err, out)
 	}
 
-	// Without --archived, done item should NOT appear in grouped list
+	// Default list should show done items (but not archived)
 	cmd = exec.Command(bin, "list")
 	cmd.Env = env
 	out, err = cmd.CombinedOutput()
@@ -561,14 +561,36 @@ func TestCLI_ListArchived(t *testing.T) {
 		t.Fatalf("mg list failed: %v\n%s", err, out)
 	}
 	listOutput := string(out)
-	if strings.Contains(listOutput, "Archived item") {
-		t.Errorf("list without --archived should not show done items, got:\n%s", listOutput)
+	if !strings.Contains(listOutput, "Archived item") {
+		t.Errorf("list should show done items by default, got:\n%s", listOutput)
+	}
+	if !strings.Contains(listOutput, "done:") {
+		t.Errorf("list should contain 'done:' group by default, got:\n%s", listOutput)
 	}
 	if !strings.Contains(listOutput, "Active item") {
 		t.Errorf("list should show active items, got:\n%s", listOutput)
 	}
 
-	// With --archived, done item SHOULD appear
+	// Archive the done item (--days=0 archives even freshly done items)
+	cmd = exec.Command(bin, "archive", "--days=0")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg archive failed: %v\n%s", err, out)
+	}
+
+	// Default list should NOT show archived items
+	cmd = exec.Command(bin, "list")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list failed: %v\n%s", err, out)
+	}
+	listOutput = string(out)
+	if strings.Contains(listOutput, "Archived item") {
+		t.Errorf("list should not show archived items by default, got:\n%s", listOutput)
+	}
+
+	// With --archived, archived item SHOULD appear
 	cmd = exec.Command(bin, "list", "--archived")
 	cmd.Env = env
 	out, err = cmd.CombinedOutput()
@@ -577,13 +599,13 @@ func TestCLI_ListArchived(t *testing.T) {
 	}
 	listOutput = string(out)
 	if !strings.Contains(listOutput, "Archived item") {
-		t.Errorf("list --archived should show done items, got:\n%s", listOutput)
+		t.Errorf("list --archived should show archived items, got:\n%s", listOutput)
 	}
-	if !strings.Contains(listOutput, "done:") {
-		t.Errorf("list --archived should contain 'done:' group, got:\n%s", listOutput)
+	if !strings.Contains(listOutput, "archived:") {
+		t.Errorf("list --archived should contain 'archived:' group, got:\n%s", listOutput)
 	}
 
-	// With -a (short form), done item SHOULD also appear
+	// With -a (short form), archived item SHOULD also appear
 	cmd = exec.Command(bin, "list", "-a")
 	cmd.Env = env
 	out, err = cmd.CombinedOutput()
@@ -592,7 +614,7 @@ func TestCLI_ListArchived(t *testing.T) {
 	}
 	listOutput = string(out)
 	if !strings.Contains(listOutput, "Archived item") {
-		t.Errorf("list -a should show done items, got:\n%s", listOutput)
+		t.Errorf("list -a should show archived items, got:\n%s", listOutput)
 	}
 }
 

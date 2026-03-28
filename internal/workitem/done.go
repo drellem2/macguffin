@@ -139,8 +139,7 @@ func ListByStatus(root, status string) ([]*Item, error) {
 }
 
 // ListAll returns all work items across active statuses, grouped by status.
-// Done and archived items are excluded by default — use ListByStatus or
-// ListArchived to retrieve them.
+// Archived items are excluded — use ListArchived to retrieve them.
 func ListAll(root string) (map[string][]*Item, error) {
 	result := make(map[string][]*Item)
 	for _, status := range []string{"available", "claimed", "done", "pending"} {

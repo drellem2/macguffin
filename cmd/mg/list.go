@@ -116,9 +116,9 @@ var listCmd = &cobra.Command{
 			}
 		}
 
-		order := []string{"available", "claimed", "pending"}
+		order := []string{"available", "claimed", "pending", "done"}
 		if listAll || listArchived {
-			order = append(order, "done", "archived")
+			order = append(order, "archived")
 		}
 
 		printed := false
@@ -143,8 +143,8 @@ var listCmd = &cobra.Command{
 
 func init() {
 	listCmd.Flags().StringVar(&listStatus, "status", "", "filter by status (available, claimed, done, archived)")
-	listCmd.Flags().BoolVar(&listAll, "all", false, "include done and archived items")
-	listCmd.Flags().BoolVarP(&listArchived, "archived", "a", false, "include done and archived items")
+	listCmd.Flags().BoolVar(&listAll, "all", false, "include archived items")
+	listCmd.Flags().BoolVarP(&listArchived, "archived", "a", false, "include archived items")
 	listCmd.Flags().StringVar(&listRepo, "repo", "", "filter by repository path (substring match)")
 	listCmd.Flags().StringVar(&listTag, "tag", "", "filter by tag")
 	listCmd.Flags().StringVar(&listAssignee, "assignee", "", "filter by assignee (use 'me' for current user)")
