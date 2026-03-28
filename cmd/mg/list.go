@@ -30,14 +30,14 @@ func resolveCurrentUser() string {
 }
 
 // formatAssignee returns a styled assignee label to append after the title.
-// If the assignee matches the current user, it shows as lowercase blue "me".
+// If the assignee matches the current user, it shows as lowercase blue "human".
 // Other assignees show as dim. No assignee returns an empty string.
 func formatAssignee(assignee, currentUser string) string {
 	if assignee == "" {
 		return ""
 	}
-	if currentUser != "" && (assignee == currentUser || assignee == "me") {
-		return " \033[34mme\033[0m"
+	if currentUser != "" && (assignee == currentUser || assignee == "human") {
+		return " \033[34mhuman\033[0m"
 	}
 	return fmt.Sprintf(" \033[2m%s\033[0m", assignee)
 }
@@ -147,7 +147,7 @@ func init() {
 	listCmd.Flags().BoolVarP(&listArchived, "archived", "a", false, "include archived items")
 	listCmd.Flags().StringVar(&listRepo, "repo", "", "filter by repository path (substring match)")
 	listCmd.Flags().StringVar(&listTag, "tag", "", "filter by tag")
-	listCmd.Flags().StringVar(&listAssignee, "assignee", "", "filter by assignee (use 'me' for current user)")
+	listCmd.Flags().StringVar(&listAssignee, "assignee", "", "filter by assignee (use 'human' for current user)")
 }
 
 // formatTags returns a dim-styled tag string like " [tag1, tag2]" for display,
@@ -175,14 +175,14 @@ func filterByRepo(items []*workitem.Item, repo string) []*workitem.Item {
 }
 
 // filterByAssignee returns only items whose Assignee matches the given name.
-// The special value "me" matches the current OS user. Items with no assignee
+// The special value "human" matches the current OS user. Items with no assignee
 // are excluded when filtering. If assignee is empty, all items are returned.
 func filterByAssignee(items []*workitem.Item, assignee string) []*workitem.Item {
 	if assignee == "" {
 		return items
 	}
 	resolvedAssignee := assignee
-	if assignee == "me" {
+	if assignee == "human" {
 		if u, err := user.Current(); err == nil {
 			resolvedAssignee = u.Username
 		} else if u := os.Getenv("USER"); u != "" {
@@ -195,7 +195,7 @@ func filterByAssignee(items []*workitem.Item, assignee string) []*workitem.Item 
 			continue
 		}
 		// Match both the literal value and the resolved username
-		// (e.g. assignee "me" in the file should match --assignee=me)
+		// (e.g. assignee "human" in the file should match --assignee=human)
 		if item.Assignee == resolvedAssignee || item.Assignee == assignee {
 			filtered = append(filtered, item)
 		}

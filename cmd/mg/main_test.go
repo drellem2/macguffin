@@ -771,20 +771,20 @@ func TestCLI_ListAssignee(t *testing.T) {
 		t.Errorf("list --status=available --assignee=alice should NOT show 'Unassigned task', got:\n%s", listOutput)
 	}
 
-	// List with --assignee=me should resolve to current user
-	cmd = exec.Command(bin, "list", "--assignee=me")
+	// List with --assignee=human should resolve to current user
+	cmd = exec.Command(bin, "list", "--assignee=human")
 	cmd.Env = env
 	out, err = cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("mg list --assignee=me failed: %v\n%s", err, out)
+		t.Fatalf("mg list --assignee=human failed: %v\n%s", err, out)
 	}
-	// "me" resolves to the current OS user, not "alice", so should not show the item
+	// "human" resolves to the current OS user, not "alice", so should not show the item
 	listOutput = string(out)
 	if strings.Contains(listOutput, "Assigned bug") {
 		// Unless current user happens to be "alice", this should not appear
 		u, _ := user.Current()
 		if u == nil || u.Username != "alice" {
-			t.Errorf("list --assignee=me should NOT show 'Assigned bug' (assigned to alice), got:\n%s", listOutput)
+			t.Errorf("list --assignee=human should NOT show 'Assigned bug' (assigned to alice), got:\n%s", listOutput)
 		}
 	}
 }
