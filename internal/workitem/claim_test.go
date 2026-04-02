@@ -19,7 +19,7 @@ func TestClaim(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	claimed, err := Claim(root, item.ID)
+	claimed, err := Claim(root, item.ID, 0)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -54,11 +54,45 @@ func TestClaim(t *testing.T) {
 	}
 }
 
+func TestClaimExplicitPID(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "mg-", "bug", "Explicit PID claim", nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	explicitPID := 99999
+	claimed, err := Claim(root, item.ID, explicitPID)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	if claimed.ID != item.ID {
+		t.Errorf("ID = %q, want %q", claimed.ID, item.ID)
+	}
+
+	// File should be in claimed/ with the explicit PID suffix
+	claimedDir := filepath.Join(root, "work", "claimed")
+	entries, _ := os.ReadDir(claimedDir)
+	expected := fmt.Sprintf("%s.md.%d", item.ID, explicitPID)
+	found := false
+	for _, e := range entries {
+		if e.Name() == expected {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected file %q in claimed/, got entries: %v", expected, entries)
+	}
+}
+
 func TestClaimNotFound(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	_, err := Claim(root, "gt-000")
+	_, err := Claim(root, "gt-000", 0)
 	if err == nil {
 		t.Error("expected error for nonexistent ID")
 	}
@@ -74,13 +108,13 @@ func TestClaimAlreadyClaimed(t *testing.T) {
 	}
 
 	// First claim succeeds
-	_, err = Claim(root, item.ID)
+	_, err = Claim(root, item.ID, 0)
 	if err != nil {
 		t.Fatalf("first Claim: %v", err)
 	}
 
 	// Second claim fails (file already moved)
-	_, err = Claim(root, item.ID)
+	_, err = Claim(root, item.ID, 0)
 	if err == nil {
 		t.Error("expected error for already-claimed item")
 	}
@@ -95,7 +129,7 @@ func TestClaimReadable(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, err = Claim(root, item.ID)
+	_, err = Claim(root, item.ID, 0)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}

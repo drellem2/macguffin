@@ -17,7 +17,7 @@ func TestDone(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, err = Claim(root, item.ID)
+	_, err = Claim(root, item.ID, 0)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestDoneNoResult(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, err = Claim(root, item.ID)
+	_, err = Claim(root, item.ID, 0)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestDoneReadable(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, err = Claim(root, item.ID)
+	_, err = Claim(root, item.ID, 0)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestStatus(t *testing.T) {
 		t.Errorf("status = %q, want %q", status, "available")
 	}
 
-	_, err = Claim(root, item.ID)
+	_, err = Claim(root, item.ID, 0)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -233,8 +233,8 @@ func TestListByStatus(t *testing.T) {
 	}
 
 	// Claim item1 and item2
-	Claim(root, item1.ID)
-	Claim(root, item2.ID)
+	Claim(root, item1.ID, 0)
+	Claim(root, item2.ID, 0)
 
 	avail, _ = ListByStatus(root, "available")
 	if len(avail) != 1 {
@@ -291,7 +291,7 @@ func TestFullLifecycle(t *testing.T) {
 	}
 
 	// Claim
-	_, err = Claim(root, item.ID)
+	_, err = Claim(root, item.ID, 0)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}

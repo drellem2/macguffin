@@ -16,7 +16,7 @@ func TestReopen(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, err = Claim(root, item.ID)
+	_, err = Claim(root, item.ID, 0)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestReopenFailsIfClaimed(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, err = Claim(root, item.ID)
+	_, err = Claim(root, item.ID, 0)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}

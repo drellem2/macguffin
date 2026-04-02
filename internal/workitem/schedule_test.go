@@ -42,7 +42,7 @@ func TestSchedule_PromotesWhenDepsMet(t *testing.T) {
 	}
 
 	// Complete Phase 1: claim then done — auto-promotes Phase 2
-	_, err = Claim(root, phase1.ID)
+	_, err = Claim(root, phase1.ID, 0)
 	if err != nil {
 		t.Fatalf("Claim phase1: %v", err)
 	}
@@ -96,14 +96,14 @@ func TestSchedule_MultipleDeps(t *testing.T) {
 	}
 
 	// Complete only dep1 — should not promote (partial deps)
-	Claim(root, dep1.ID)
+	Claim(root, dep1.ID, 0)
 	_, autoPromoted, _ := Done(root, dep1.ID, nil)
 	if len(autoPromoted) != 0 {
 		t.Errorf("should not promote with partial deps met, got %d", len(autoPromoted))
 	}
 
 	// Complete dep2 — should auto-promote item
-	Claim(root, dep2.ID)
+	Claim(root, dep2.ID, 0)
 	_, autoPromoted, err = Done(root, dep2.ID, nil)
 	if err != nil {
 		t.Fatalf("Done dep2: %v", err)
@@ -136,7 +136,7 @@ func TestSchedule_Idempotent(t *testing.T) {
 	dep, _ := Create(root, "mg-", "task", "Dep", nil)
 	Create(root, "mg-", "task", "Child", []string{dep.ID})
 
-	Claim(root, dep.ID)
+	Claim(root, dep.ID, 0)
 	_, autoPromoted, _ := Done(root, dep.ID, nil)
 
 	// Done auto-promotes
@@ -294,7 +294,7 @@ func TestSchedule_E2E(t *testing.T) {
 	}
 
 	// Complete Phase 1 — auto-promotes Phase 2
-	_, err = Claim(root, phase1.ID)
+	_, err = Claim(root, phase1.ID, 0)
 	if err != nil {
 		t.Fatalf("Claim phase1: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestSchedule_ArchivedDepSatisfied(t *testing.T) {
 	}
 
 	// Complete the dep — auto-promotes child
-	_, err = Claim(root, dep.ID)
+	_, err = Claim(root, dep.ID, 0)
 	if err != nil {
 		t.Fatalf("Claim dep: %v", err)
 	}
@@ -406,14 +406,14 @@ func TestSchedule_MixedDoneAndArchivedDeps(t *testing.T) {
 	}
 
 	// Complete dep1 — child not yet promoted (still waiting on dep2)
-	Claim(root, dep1.ID)
+	Claim(root, dep1.ID, 0)
 	_, autoPromoted, _ := Done(root, dep1.ID, nil)
 	if len(autoPromoted) != 0 {
 		t.Errorf("should not promote with partial deps, got %d", len(autoPromoted))
 	}
 
 	// Complete dep2 — child auto-promoted
-	Claim(root, dep2.ID)
+	Claim(root, dep2.ID, 0)
 	_, autoPromoted, err = Done(root, dep2.ID, nil)
 	if err != nil {
 		t.Fatalf("Done dep2: %v", err)

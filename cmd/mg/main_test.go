@@ -833,6 +833,135 @@ func TestCLI_UpdateAlias(t *testing.T) {
 	}
 }
 
+func TestCLI_ClaimWithPIDFlag(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	// Init
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create
+	cmd = exec.Command(bin, "new", "--type=bug", "PID flag test")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// Claim with --pid
+	cmd = exec.Command(bin, "claim", "--pid=12345", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg claim --pid failed: %v\n%s", err, out)
+	}
+
+	// Verify file has PID 12345 suffix
+	claimedDir := filepath.Join(tmpHome, ".macguffin", "work", "claimed")
+	entries, _ := os.ReadDir(claimedDir)
+	found := false
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".12345") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected claimed file with .12345 suffix, got %v", entries)
+	}
+}
+
+func TestCLI_ClaimWithPOGOPID(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome, "POGO_PID=67890")
+
+	// Init
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create
+	cmd = exec.Command(bin, "new", "--type=bug", "POGO_PID test")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// Claim (should pick up POGO_PID)
+	cmd = exec.Command(bin, "claim", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg claim with POGO_PID failed: %v\n%s", err, out)
+	}
+
+	// Verify file has PID 67890 suffix
+	claimedDir := filepath.Join(tmpHome, ".macguffin", "work", "claimed")
+	entries, _ := os.ReadDir(claimedDir)
+	found := false
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".67890") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected claimed file with .67890 suffix, got %v", entries)
+	}
+}
+
+func TestCLI_ClaimPIDFlagOverridesEnv(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome, "POGO_PID=67890")
+
+	// Init
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create
+	cmd = exec.Command(bin, "new", "--type=bug", "PID override test")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// Claim with --pid (should override POGO_PID)
+	cmd = exec.Command(bin, "claim", "--pid=11111", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg claim --pid override failed: %v\n%s", err, out)
+	}
+
+	// Verify file has PID 11111 suffix (flag wins over env)
+	claimedDir := filepath.Join(tmpHome, ".macguffin", "work", "claimed")
+	entries, _ := os.ReadDir(claimedDir)
+	found := false
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".11111") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected claimed file with .11111 suffix (flag overrides env), got %v", entries)
+	}
+}
+
 func TestCLI_ClaimNoID(t *testing.T) {
 	bin := buildBinary(t)
 	err := exec.Command(bin, "claim").Run()
