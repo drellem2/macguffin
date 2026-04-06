@@ -19,6 +19,8 @@ func TestInit_CreatesDirectoryTree(t *testing.T) {
 		"work/claimed",
 		"work/done",
 		"work/pending",
+		"work/archive",
+		"work/shelved",
 		"agents",
 		"mail",
 		"log",

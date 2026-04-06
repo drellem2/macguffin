@@ -142,7 +142,7 @@ var listCmd = &cobra.Command{
 }
 
 func init() {
-	listCmd.Flags().StringVar(&listStatus, "status", "", "filter by status (available, claimed, done, archived)")
+	listCmd.Flags().StringVar(&listStatus, "status", "", "filter by status (available, claimed, done, archived, shelved)")
 	listCmd.Flags().BoolVar(&listAll, "all", false, "include archived items")
 	listCmd.Flags().BoolVarP(&listArchived, "archived", "a", false, "include archived items")
 	listCmd.Flags().StringVar(&listRepo, "repo", "", "filter by repository path (substring match)")

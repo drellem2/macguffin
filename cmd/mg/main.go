@@ -48,6 +48,8 @@ func init() {
 	rootCmd.AddCommand(editCmd)
 	rootCmd.AddCommand(assignCmd)
 	rootCmd.AddCommand(reopenCmd)
+	rootCmd.AddCommand(shelveCmd)
+	rootCmd.AddCommand(unshelveCmd)
 }
 
 func main() {

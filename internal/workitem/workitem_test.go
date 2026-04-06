@@ -447,6 +447,7 @@ func setupDirs(t *testing.T, root string) {
 		filepath.Join(root, "work", "claimed"),
 		filepath.Join(root, "work", "done"),
 		filepath.Join(root, "work", "pending"),
+		filepath.Join(root, "work", "shelved"),
 	} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", d, err)

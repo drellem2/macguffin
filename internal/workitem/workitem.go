@@ -166,7 +166,7 @@ func Render(item *Item) string {
 
 // FindPath returns the filesystem path and status directory for a work item by ID.
 func FindPath(root, id string) (path string, status string, err error) {
-	states := []string{"available", "claimed", "done", "pending"}
+	states := []string{"available", "claimed", "done", "pending", "shelved"}
 
 	for _, state := range states {
 		dir := filepath.Join(root, "work", state)
@@ -213,6 +213,7 @@ func Read(root, id string) (*Item, error) {
 		filepath.Join(root, "work", "claimed"),
 		filepath.Join(root, "work", "done"),
 		filepath.Join(root, "work", "pending"),
+		filepath.Join(root, "work", "shelved"),
 	}
 
 	for _, dir := range dirs {

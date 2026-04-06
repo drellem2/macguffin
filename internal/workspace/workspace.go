@@ -35,6 +35,7 @@ func Init(root string) error {
 		filepath.Join(root, "work", "done"),
 		filepath.Join(root, "work", "pending"),
 		filepath.Join(root, "work", "archive"),
+		filepath.Join(root, "work", "shelved"),
 		filepath.Join(root, "agents"),
 		filepath.Join(root, "mail"),
 		filepath.Join(root, "log"),

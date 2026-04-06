@@ -65,7 +65,7 @@ func Done(root, id string, resultJSON json.RawMessage) (*Item, []*Item, error) {
 
 // Status returns the lifecycle state of a work item: "available", "claimed", "done", or "archived".
 func Status(root, id string) (string, error) {
-	states := []string{"available", "claimed", "done", "pending"}
+	states := []string{"available", "claimed", "done", "pending", "shelved"}
 
 	for _, state := range states {
 		dir := filepath.Join(root, "work", state)
@@ -107,10 +107,10 @@ func Status(root, id string) (string, error) {
 // Valid statuses: "available", "claimed", "done".
 func ListByStatus(root, status string) ([]*Item, error) {
 	switch status {
-	case "available", "claimed", "done", "pending":
+	case "available", "claimed", "done", "pending", "shelved":
 		// valid
 	default:
-		return nil, fmt.Errorf("invalid status %q (must be available, claimed, done, or pending)", status)
+		return nil, fmt.Errorf("invalid status %q (must be available, claimed, done, pending, or shelved)", status)
 	}
 
 	dir := filepath.Join(root, "work", status)
@@ -139,7 +139,7 @@ func ListByStatus(root, status string) ([]*Item, error) {
 }
 
 // ListAll returns all work items across active statuses, grouped by status.
-// Archived items are excluded — use ListArchived to retrieve them.
+// Archived and shelved items are excluded — use ListByStatus to retrieve them.
 func ListAll(root string) (map[string][]*Item, error) {
 	result := make(map[string][]*Item)
 	for _, status := range []string{"available", "claimed", "done", "pending"} {
