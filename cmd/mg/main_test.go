@@ -618,6 +618,84 @@ func TestCLI_ListArchived(t *testing.T) {
 	}
 }
 
+func TestCLI_ListShelved(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	// Init
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create an item that we'll shelve
+	cmd = exec.Command(bin, "new", "--type=task", "Shelved item")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// Create a second item that stays available
+	cmd = exec.Command(bin, "new", "--type=bug", "Active item")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+
+	// Shelve the first item
+	cmd = exec.Command(bin, "shelve", id)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg shelve failed: %v\n%s", err, out)
+	}
+
+	// Default list should NOT show shelved items
+	cmd = exec.Command(bin, "list")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list failed: %v\n%s", err, out)
+	}
+	listOutput := string(out)
+	if strings.Contains(listOutput, "Shelved item") {
+		t.Errorf("list should not show shelved items by default, got:\n%s", listOutput)
+	}
+	if !strings.Contains(listOutput, "Active item") {
+		t.Errorf("list should show active items, got:\n%s", listOutput)
+	}
+
+	// With --shelved, shelved item SHOULD appear
+	cmd = exec.Command(bin, "list", "--shelved")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --shelved failed: %v\n%s", err, out)
+	}
+	listOutput = string(out)
+	if !strings.Contains(listOutput, "Shelved item") {
+		t.Errorf("list --shelved should show shelved items, got:\n%s", listOutput)
+	}
+	if !strings.Contains(listOutput, "shelved:") {
+		t.Errorf("list --shelved should contain 'shelved:' group, got:\n%s", listOutput)
+	}
+
+	// With --all, shelved item SHOULD also appear
+	cmd = exec.Command(bin, "list", "--all")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --all failed: %v\n%s", err, out)
+	}
+	listOutput = string(out)
+	if !strings.Contains(listOutput, "Shelved item") {
+		t.Errorf("list --all should show shelved items, got:\n%s", listOutput)
+	}
+}
+
 func TestCLI_ListTag(t *testing.T) {
 	tmpHome := t.TempDir()
 	bin := buildBinary(t)

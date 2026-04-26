@@ -14,6 +14,7 @@ import (
 var listStatus string
 var listAll bool
 var listArchived bool
+var listShelved bool
 var listRepo string
 var listTag string
 var listAssignee string
@@ -45,6 +46,20 @@ func formatAssignee(assignee, currentUser string) string {
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List work items",
+	Long: `List work items grouped by status (available, claimed, pending, done).
+
+By default, archived and shelved items are hidden. Use --archived/-a to include
+archived items, --shelved to include shelved items, or --all to include both.
+
+Examples:
+  mg list                       # active items + done
+  mg list --archived            # also show archived items
+  mg list --shelved             # also show shelved items
+  mg list --all                 # include both archived and shelved
+  mg list --status=shelved      # show only shelved items
+  mg list --status=archived     # show only archived items
+  mg list --tag=urgent          # filter by tag
+  mg list --assignee=human      # only items assigned to current user`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := workspace.DefaultRoot()
 		if err != nil {
@@ -95,6 +110,17 @@ var listCmd = &cobra.Command{
 			}
 		}
 
+		// Include shelved items if --all or --shelved is set
+		if listAll || listShelved {
+			shelved, err := workitem.ListByStatus(root, "shelved")
+			if err != nil {
+				return err
+			}
+			if len(shelved) > 0 {
+				grouped["shelved"] = shelved
+			}
+		}
+
 		// Apply repo filter to each group
 		if listRepo != "" {
 			for s, items := range grouped {
@@ -117,6 +143,9 @@ var listCmd = &cobra.Command{
 		}
 
 		order := []string{"available", "claimed", "pending", "done"}
+		if listAll || listShelved {
+			order = append(order, "shelved")
+		}
 		if listAll || listArchived {
 			order = append(order, "archived")
 		}
@@ -143,8 +172,9 @@ var listCmd = &cobra.Command{
 
 func init() {
 	listCmd.Flags().StringVar(&listStatus, "status", "", "filter by status (available, claimed, done, archived, shelved)")
-	listCmd.Flags().BoolVar(&listAll, "all", false, "include archived items")
+	listCmd.Flags().BoolVar(&listAll, "all", false, "include archived and shelved items")
 	listCmd.Flags().BoolVarP(&listArchived, "archived", "a", false, "include archived items")
+	listCmd.Flags().BoolVar(&listShelved, "shelved", false, "include shelved items")
 	listCmd.Flags().StringVar(&listRepo, "repo", "", "filter by repository path (substring match)")
 	listCmd.Flags().StringVar(&listTag, "tag", "", "filter by tag")
 	listCmd.Flags().StringVar(&listAssignee, "assignee", "", "filter by assignee (use 'human' for current user)")
