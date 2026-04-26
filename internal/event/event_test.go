@@ -124,3 +124,12 @@ func TestAppendCreatesFile(t *testing.T) {
 		t.Fatalf("events file should exist: %v", err)
 	}
 }
+
+func TestLogPath(t *testing.T) {
+	root := t.TempDir()
+	got := LogPath(root)
+	want := filepath.Join(root, eventsFile)
+	if got != want {
+		t.Errorf("LogPath(%q) = %q, want %q", root, got, want)
+	}
+}

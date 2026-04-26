@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/event"
@@ -87,6 +88,12 @@ Examples:
 		})
 		if err != nil {
 			return err
+		}
+
+		path := event.LogPath(root)
+		if info, statErr := os.Stat(path); os.IsNotExist(statErr) || (statErr == nil && info.Size() == 0) {
+			fmt.Fprintf(os.Stderr, "no events found at %s\n", path)
+			return nil
 		}
 
 		for _, e := range entries {

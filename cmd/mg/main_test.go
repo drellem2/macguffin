@@ -1461,6 +1461,87 @@ func TestCLI_ScheduleE2E(t *testing.T) {
 	}
 }
 
+func TestCLI_EventListEmpty(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	initCmd := exec.Command(bin, "init")
+	initCmd.Env = env
+	if out, err := initCmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Missing log file: stdout empty, stderr has hint with the path.
+	cmd := exec.Command(bin, "event", "list")
+	cmd.Env = env
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("mg event list failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if stdout.String() != "" {
+		t.Errorf("expected empty stdout, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "no events found at ") {
+		t.Errorf("expected 'no events found at ...' on stderr, got %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "events.jsonl") {
+		t.Errorf("expected stderr to include the log path, got %q", stderr.String())
+	}
+
+	// Empty log file (touched, zero bytes): same hint.
+	logPath := filepath.Join(tmpHome, ".macguffin", "events.jsonl")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := os.Create(logPath); err != nil {
+		t.Fatal(err)
+	} else {
+		f.Close()
+	}
+
+	cmd = exec.Command(bin, "event", "list")
+	cmd.Env = env
+	stdout.Reset()
+	stderr.Reset()
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("mg event list (empty file) failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if stdout.String() != "" {
+		t.Errorf("expected empty stdout for empty log, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "no events found at ") {
+		t.Errorf("expected stderr hint for empty log, got %q", stderr.String())
+	}
+
+	// After appending, hint should not appear and stdout should have the entry.
+	appendCmd := exec.Command(bin, "event", "append", "test.event", "--key=val")
+	appendCmd.Env = env
+	if out, err := appendCmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg event append failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "event", "list")
+	cmd.Env = env
+	stdout.Reset()
+	stderr.Reset()
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("mg event list after append failed: %v\nstderr: %s", err, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "test.event") {
+		t.Errorf("expected event on stdout, got %q", stdout.String())
+	}
+	if strings.Contains(stderr.String(), "no events found") {
+		t.Errorf("did not expect 'no events found' hint when log has entries, got %q", stderr.String())
+	}
+}
+
 func buildBinary(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "mg")

@@ -11,6 +11,11 @@ import (
 
 const eventsFile = "events.jsonl"
 
+// LogPath returns the path to the events log file under root.
+func LogPath(root string) string {
+	return filepath.Join(root, eventsFile)
+}
+
 // Entry represents a single event log entry.
 type Entry struct {
 	Ts   string `json:"ts"`
