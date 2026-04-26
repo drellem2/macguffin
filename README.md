@@ -93,7 +93,7 @@ mg log                 # view snapshot history
 | `mg init [--git]` | Create the `~/.macguffin` directory tree. `--git` enables snapshot tracking. |
 | `mg new` | Create a new work item (Markdown + YAML frontmatter). |
 | `mg show <id>` | Display a work item by ID. |
-| `mg list` | List work items. |
+| `mg list [--json]` | List work items. `--json` emits NDJSON (one JSON object per line) for scripts and dashboards. |
 | `mg claim ID` | Atomically claim a work item by ID. |
 | `mg done ID` | Mark a claimed work item as done. |
 | `mg edit ID [flags]` | Update fields on an existing work item. |

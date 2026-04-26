@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCLI_Version(t *testing.T) {
@@ -1487,5 +1489,316 @@ func testProjectRoot(t *testing.T) string {
 			t.Fatal("could not find project root (go.mod)")
 		}
 		dir = parent
+	}
+}
+
+// jsonItem mirrors the public NDJSON shape emitted by `mg list --json`.
+// Tests parse stdout into this to assert the contract holds.
+type jsonItem struct {
+	ID       string    `json:"id"`
+	Type     string    `json:"type"`
+	Status   string    `json:"status"`
+	Title    string    `json:"title"`
+	Tags     []string  `json:"tags"`
+	Assignee string    `json:"assignee"`
+	Priority string    `json:"priority"`
+	Repo     string    `json:"repo"`
+	Branch   string    `json:"branch"`
+	Depends  []string  `json:"depends"`
+	Created  time.Time `json:"created"`
+	Mtime    time.Time `json:"mtime"`
+}
+
+func parseNDJSON(t *testing.T, out []byte) []jsonItem {
+	t.Helper()
+	var items []jsonItem
+	for i, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		var it jsonItem
+		if err := json.Unmarshal([]byte(line), &it); err != nil {
+			t.Fatalf("line %d not valid JSON: %v\nline: %s", i+1, err, line)
+		}
+		items = append(items, it)
+	}
+	return items
+}
+
+func TestCLI_ListJSON_Empty(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "list", "--json")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --json failed: %v\n%s", err, out)
+	}
+	if len(strings.TrimSpace(string(out))) != 0 {
+		t.Errorf("expected empty output for no work items, got %q", out)
+	}
+}
+
+func TestCLI_ListJSON_Fields(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create a work item with all the optional fields set
+	cmd = exec.Command(bin, "new", "--type=bug", "--assignee=alice",
+		"--priority=high", "--tag=urgent,backend",
+		"--branch=feature/x", "JSON test item")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// `mg new` doesn't accept --repo (auto-detected from cwd). Set it via edit.
+	cmd = exec.Command(bin, "edit", id, "--repo=/tmp/foo")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg edit failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "list", "--json")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --json failed: %v\n%s", err, out)
+	}
+
+	items := parseNDJSON(t, out)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d: %s", len(items), out)
+	}
+	it := items[0]
+
+	if it.ID != id {
+		t.Errorf("id = %q, want %q", it.ID, id)
+	}
+	if it.Type != "bug" {
+		t.Errorf("type = %q, want %q", it.Type, "bug")
+	}
+	if it.Status != "available" {
+		t.Errorf("status = %q, want %q", it.Status, "available")
+	}
+	if it.Title != "JSON test item" {
+		t.Errorf("title = %q, want %q", it.Title, "JSON test item")
+	}
+	if it.Assignee != "alice" {
+		t.Errorf("assignee = %q, want %q", it.Assignee, "alice")
+	}
+	if it.Priority != "high" {
+		t.Errorf("priority = %q, want %q", it.Priority, "high")
+	}
+	if it.Repo != "/tmp/foo" {
+		t.Errorf("repo = %q, want %q", it.Repo, "/tmp/foo")
+	}
+	if it.Branch != "feature/x" {
+		t.Errorf("branch = %q, want %q", it.Branch, "feature/x")
+	}
+	if len(it.Tags) != 2 || it.Tags[0] != "urgent" || it.Tags[1] != "backend" {
+		t.Errorf("tags = %v, want [urgent backend]", it.Tags)
+	}
+	if it.Depends == nil {
+		t.Errorf("depends should be [] not null")
+	}
+	if it.Created.IsZero() {
+		t.Errorf("created should be set, got zero")
+	}
+	if it.Mtime.IsZero() {
+		t.Errorf("mtime should be set, got zero")
+	}
+}
+
+func TestCLI_ListJSON_NDJSON(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	for _, title := range []string{"Item one", "Item two", "Item three"} {
+		cmd = exec.Command(bin, "new", "--type=bug", title)
+		cmd.Env = env
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("mg new %q failed: %v\n%s", title, err, out)
+		}
+	}
+
+	cmd = exec.Command(bin, "list", "--json")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --json failed: %v\n%s", err, out)
+	}
+
+	// Each line should be a complete, parseable JSON object.
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 NDJSON lines, got %d:\n%s", len(lines), out)
+	}
+	for i, line := range lines {
+		var raw map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			t.Errorf("line %d not parseable as JSON object: %v\n%s", i, err, line)
+		}
+	}
+}
+
+func TestCLI_ListJSON_StatusFilter(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "new", "--type=bug", "Available item")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "new", "--type=task", "Claim me")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id2 := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	cmd = exec.Command(bin, "claim", id2)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg claim failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "list", "--json", "--status=claimed")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --json --status=claimed failed: %v\n%s", err, out)
+	}
+
+	items := parseNDJSON(t, out)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 claimed item, got %d:\n%s", len(items), out)
+	}
+	if items[0].ID != id2 {
+		t.Errorf("expected id=%s, got %s", id2, items[0].ID)
+	}
+	if items[0].Status != "claimed" {
+		t.Errorf("expected status=claimed, got %s", items[0].Status)
+	}
+}
+
+func TestCLI_ListJSON_TagFilter(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "new", "--type=bug", "--tag=urgent", "Tagged item")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	cmd = exec.Command(bin, "new", "--type=bug", "Untagged item")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "list", "--json", "--tag=urgent")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --json --tag=urgent failed: %v\n%s", err, out)
+	}
+
+	items := parseNDJSON(t, out)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 tagged item, got %d:\n%s", len(items), out)
+	}
+	if items[0].Title != "Tagged item" {
+		t.Errorf("expected title=Tagged item, got %s", items[0].Title)
+	}
+}
+
+func TestCLI_ListJSON_GroupedStatuses(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "new", "--type=bug", "Stays available")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	cmd = exec.Command(bin, "new", "--type=task", "Becomes claimed")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id2 := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+	cmd = exec.Command(bin, "claim", id2)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg claim failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "list", "--json")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --json failed: %v\n%s", err, out)
+	}
+
+	items := parseNDJSON(t, out)
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d:\n%s", len(items), out)
+	}
+	statuses := map[string]bool{}
+	for _, it := range items {
+		statuses[it.Status] = true
+	}
+	if !statuses["available"] || !statuses["claimed"] {
+		t.Errorf("expected items in both available and claimed, got statuses %v", statuses)
 	}
 }

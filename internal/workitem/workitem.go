@@ -24,7 +24,8 @@ type Item struct {
 	Priority string   // priority level: low, medium, high (optional, default: medium)
 	Branch   string   // branch name associated with this item (optional)
 	Title    string
-	Body     string // everything after frontmatter (raw markdown)
+	Body     string    // everything after frontmatter (raw markdown)
+	Mtime    time.Time // file modification time; zero when parsed from a string
 }
 
 // CreateOption configures optional fields on a new work item.
@@ -286,7 +287,14 @@ func readFile(path string) (*Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Parse(string(data))
+	item, err := Parse(string(data))
+	if err != nil {
+		return nil, err
+	}
+	if info, err := os.Stat(path); err == nil {
+		item.Mtime = info.ModTime()
+	}
+	return item, nil
 }
 
 // Parse extracts an Item from markdown content with YAML frontmatter.
