@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/drellem2/macguffin/internal/event"
 )
 
 // Shelve atomically moves a work item to shelved/. The item can be in any
@@ -34,6 +36,13 @@ func Shelve(root, id string) ([]*Item, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	event.Emit(root, "work.shelve", map[string]string{
+		"item_id":     id,
+		"from_status": status,
+		"to_status":   "shelved",
+		"actor":       actorFor(item),
+	})
 
 	shelved := []*Item{item}
 
@@ -127,6 +136,13 @@ func Unshelve(root, id string) ([]*Item, error) {
 	if err := os.Rename(src, dst); err != nil {
 		return nil, fmt.Errorf("unshelving %s: %w", id, err)
 	}
+
+	event.Emit(root, "work.unshelve", map[string]string{
+		"item_id":     id,
+		"from_status": "shelved",
+		"to_status":   subdir,
+		"actor":       actorFor(item),
+	})
 
 	unshelved := []*Item{item}
 

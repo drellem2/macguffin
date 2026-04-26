@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/drellem2/macguffin/internal/event"
 )
 
 // Item represents a work item with YAML frontmatter fields.
@@ -116,6 +118,12 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return nil, fmt.Errorf("writing work item: %w", err)
 	}
+
+	event.Emit(root, "work.created", map[string]string{
+		"item_id":   id,
+		"to_status": subdir,
+		"actor":     actorFor(item),
+	})
 
 	return item, nil
 }

@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/drellem2/macguffin/internal/event"
 )
 
 // UnclaimResult describes a released claim.
@@ -48,6 +51,16 @@ func Unclaim(root, id string) (*UnclaimResult, error) {
 	if err := os.Rename(src, dst); err != nil {
 		return nil, fmt.Errorf("releasing claim on %s: %w", id, err)
 	}
+
+	kvs := map[string]string{
+		"item_id":     id,
+		"from_status": "claimed",
+		"to_status":   "available",
+	}
+	if pid > 0 {
+		kvs["pid"] = strconv.Itoa(pid)
+	}
+	event.Emit(root, "work.unclaim", kvs)
 
 	return &UnclaimResult{ID: id, PID: pid}, nil
 }

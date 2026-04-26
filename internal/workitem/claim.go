@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+
+	"github.com/drellem2/macguffin/internal/event"
 )
 
 // Claim atomically moves a work item from available/ to claimed/ using rename(2).
@@ -23,5 +26,18 @@ func Claim(root, id string, pid int) (*Item, error) {
 		return nil, fmt.Errorf("claiming %s: %w", id, err)
 	}
 
-	return readFile(dst)
+	item, err := readFile(dst)
+	if err != nil {
+		return nil, err
+	}
+
+	event.Emit(root, "work.claim", map[string]string{
+		"item_id":     id,
+		"from_status": "available",
+		"to_status":   "claimed",
+		"actor":       actorFor(item),
+		"pid":         strconv.Itoa(pid),
+	})
+
+	return item, nil
 }

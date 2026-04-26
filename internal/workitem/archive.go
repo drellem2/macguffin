@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/drellem2/macguffin/internal/event"
 )
 
 // Archive moves done items older than maxAge to the archive directory,
@@ -66,6 +68,13 @@ func Archive(root string, maxAge time.Duration) ([]*Item, error) {
 				return nil, fmt.Errorf("archiving sidecar for %s: %w", id, err)
 			}
 		}
+
+		event.Emit(root, "work.archive", map[string]string{
+			"item_id":     item.ID,
+			"from_status": "done",
+			"to_status":   "archived",
+			"actor":       actorFor(item),
+		})
 
 		archived = append(archived, item)
 	}

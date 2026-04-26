@@ -52,6 +52,15 @@ func (e *Entry) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Emit is a best-effort wrapper around Append. If the write fails, the error
+// is logged to stderr but not returned to the caller. State transitions must
+// never fail because the event log is unavailable.
+func Emit(root string, eventType string, kvs map[string]string) {
+	if _, err := Append(root, eventType, kvs); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: emit %s event: %v\n", eventType, err)
+	}
+}
+
 // Append writes a new event entry to <root>/events.jsonl.
 func Append(root string, eventType string, kvs map[string]string) (Entry, error) {
 	entry := Entry{

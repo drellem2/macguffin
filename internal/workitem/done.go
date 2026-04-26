@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/drellem2/macguffin/internal/event"
 )
 
 // Done atomically moves a claimed work item to done/ and writes an optional
@@ -22,16 +25,25 @@ func Done(root, id string, resultJSON json.RawMessage) (*Item, []*Item, error) {
 		return nil, nil, fmt.Errorf("reading claimed/: %w", err)
 	}
 
-	var srcPath string
+	var srcPath, srcName string
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), id+".md") {
-			srcPath = filepath.Join(claimedDir, e.Name())
+			srcName = e.Name()
+			srcPath = filepath.Join(claimedDir, srcName)
 			break
 		}
 	}
 
 	if srcPath == "" {
 		return nil, nil, fmt.Errorf("work item %s not found in claimed/", id)
+	}
+
+	// Extract the claim-holder PID from the filename (<id>.md.<pid>) for the event.
+	claimPID := ""
+	if dot := strings.LastIndex(srcName, "."); dot > 0 {
+		if _, err := strconv.Atoi(srcName[dot+1:]); err == nil {
+			claimPID = srcName[dot+1:]
+		}
 	}
 
 	dstPath := filepath.Join(root, "work", "done", id+".md")
@@ -53,6 +65,14 @@ func Done(root, id string, resultJSON json.RawMessage) (*Item, []*Item, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+
+	event.Emit(root, "work.done", map[string]string{
+		"item_id":     id,
+		"from_status": "claimed",
+		"to_status":   "done",
+		"actor":       actorFor(item),
+		"pid":         claimPID,
+	})
 
 	// Auto-promote pending items whose dependencies are now satisfied.
 	promoted, err := Schedule(root)
