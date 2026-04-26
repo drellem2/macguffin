@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/user"
 	"strings"
+	"time"
 
 	"github.com/drellem2/macguffin/internal/workitem"
 	"github.com/drellem2/macguffin/internal/workspace"
@@ -17,6 +19,60 @@ var listArchived bool
 var listRepo string
 var listTag string
 var listAssignee string
+var listJSON bool
+
+// listJSONItem is the stable on-the-wire shape for `mg list --json` output.
+// Field names and order are part of the public CLI contract — callers
+// (kanban viewer, scripts, dashboards) parse this with `json.Unmarshal`.
+type listJSONItem struct {
+	ID       string    `json:"id"`
+	Type     string    `json:"type"`
+	Status   string    `json:"status"`
+	Title    string    `json:"title"`
+	Tags     []string  `json:"tags"`
+	Assignee string    `json:"assignee"`
+	Priority string    `json:"priority"`
+	Repo     string    `json:"repo"`
+	Branch   string    `json:"branch"`
+	Depends  []string  `json:"depends"`
+	Created  time.Time `json:"created"`
+	Mtime    time.Time `json:"mtime"`
+}
+
+func toJSONItem(item *workitem.Item, status string) listJSONItem {
+	tags := item.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	depends := item.Depends
+	if depends == nil {
+		depends = []string{}
+	}
+	return listJSONItem{
+		ID:       item.ID,
+		Type:     item.Type,
+		Status:   status,
+		Title:    item.Title,
+		Tags:     tags,
+		Assignee: item.Assignee,
+		Priority: item.Priority,
+		Repo:     item.Repo,
+		Branch:   item.Branch,
+		Depends:  depends,
+		Created:  item.Created,
+		Mtime:    item.Mtime,
+	}
+}
+
+func writeJSONItems(out *os.File, items []*workitem.Item, status string) error {
+	enc := json.NewEncoder(out)
+	for _, item := range items {
+		if err := enc.Encode(toJSONItem(item, status)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // resolveCurrentUser returns the current OS username.
 func resolveCurrentUser() string {
@@ -67,6 +123,10 @@ var listCmd = &cobra.Command{
 			items = filterByRepo(items, listRepo)
 			items = filterByTag(items, listTag)
 			items = filterByAssignee(items, listAssignee)
+
+			if listJSON {
+				return writeJSONItems(os.Stdout, items, listStatus)
+			}
 
 			if len(items) == 0 {
 				fmt.Printf("No %s work items.\n", listStatus)
@@ -121,6 +181,15 @@ var listCmd = &cobra.Command{
 			order = append(order, "archived")
 		}
 
+		if listJSON {
+			for _, s := range order {
+				if err := writeJSONItems(os.Stdout, grouped[s], s); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
 		printed := false
 		for _, s := range order {
 			items := grouped[s]
@@ -148,6 +217,7 @@ func init() {
 	listCmd.Flags().StringVar(&listRepo, "repo", "", "filter by repository path (substring match)")
 	listCmd.Flags().StringVar(&listTag, "tag", "", "filter by tag")
 	listCmd.Flags().StringVar(&listAssignee, "assignee", "", "filter by assignee (use 'human' for current user)")
+	listCmd.Flags().BoolVar(&listJSON, "json", false, "emit one JSON object per item (NDJSON), instead of human-formatted output")
 }
 
 // formatTags returns a dim-styled tag string like " [tag1, tag2]" for display,
