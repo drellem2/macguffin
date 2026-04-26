@@ -833,6 +833,96 @@ func TestCLI_UpdateAlias(t *testing.T) {
 	}
 }
 
+func TestCLI_TagDependsFlagAliases(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// mg new --tags (alias for --tag)
+	cmd = exec.Command(bin, "new", "--tags=alpha,beta", "Tagged via --tags")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new --tags failed: %v\n%s", err, out)
+	}
+	id1 := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	cmd = exec.Command(bin, "show", id1)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "alpha") || !strings.Contains(string(out), "beta") {
+		t.Errorf("expected tags alpha,beta in show output, got:\n%s", out)
+	}
+
+	// mg new --tag (canonical) still works
+	cmd = exec.Command(bin, "new", "--tag=gamma", "Tagged via --tag")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new --tag failed: %v\n%s", err, out)
+	}
+	id2 := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// mg new --depend (alias for --depends)
+	cmd = exec.Command(bin, "new", "--depend="+id1, "Depends via --depend")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new --depend failed: %v\n%s", err, out)
+	}
+	id3 := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+	// Should be in pending/ since dep is unmet
+	pendPath := filepath.Join(tmpHome, ".macguffin", "work", "pending", id3+".md")
+	if _, err := os.Stat(pendPath); err != nil {
+		t.Errorf("expected %s in pending/ via --depend alias: %v", id3, err)
+	}
+
+	// mg edit --tag (alias for --tags)
+	cmd = exec.Command(bin, "edit", id2, "--tag=delta")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg edit --tag failed: %v\n%s", err, out)
+	}
+	cmd = exec.Command(bin, "show", id2)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "delta") {
+		t.Errorf("expected 'delta' tag after edit --tag, got:\n%s", out)
+	}
+	// --tag should have replaced gamma (acts identically to --tags)
+	if strings.Contains(string(out), "gamma") {
+		t.Errorf("expected --tag to replace tags (gamma should be gone), got:\n%s", out)
+	}
+
+	// mg edit --depend (alias for --depends)
+	cmd = exec.Command(bin, "edit", id2, "--depend="+id1)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg edit --depend failed: %v\n%s", err, out)
+	}
+	cmd = exec.Command(bin, "show", id2)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), id1) {
+		t.Errorf("expected dep %s after edit --depend, got:\n%s", id1, out)
+	}
+}
+
 func TestCLI_ClaimWithPIDFlag(t *testing.T) {
 	tmpHome := t.TempDir()
 	bin := buildBinary(t)

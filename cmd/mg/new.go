@@ -106,10 +106,12 @@ var newCmd = &cobra.Command{
 func init() {
 	newCmd.Flags().StringVar(&newType, "type", "task", "work item type")
 	newCmd.Flags().StringVar(&newDepends, "depends", "", "comma-separated list of dependency IDs")
+	newCmd.Flags().StringVar(&newDepends, "depend", "", "alias for --depends")
 	newCmd.Flags().StringVar(&newAssignee, "assignee", "", "person to assign this item to")
 	newCmd.Flags().StringVar(&newBranch, "branch", "", "branch name for this work item")
 	newCmd.Flags().StringVar(&newPriority, "priority", "", "priority level: low, medium, high (default: medium)")
 	newCmd.Flags().StringVar(&newTags, "tag", "", "comma-separated list of tags")
+	newCmd.Flags().StringVar(&newTags, "tags", "", "alias for --tag")
 	newCmd.Flags().StringVar(&newTitle, "title", "", "work item title (alternative to positional args)")
 	newCmd.Flags().StringVar(&newBody, "body", "", "work item body (markdown)")
 }
