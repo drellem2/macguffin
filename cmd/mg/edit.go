@@ -59,7 +59,7 @@ Use --tags to replace all tags, or --add-tags / --rm-tags for incremental change
 			fields.Repo = &editRepo
 			changed = true
 		}
-		if cmd.Flags().Changed("depends") {
+		if cmd.Flags().Changed("depends") || cmd.Flags().Changed("depend") {
 			fields.Depends = splitCSV(editDepends)
 			changed = true
 		}
@@ -71,7 +71,7 @@ Use --tags to replace all tags, or --add-tags / --rm-tags for incremental change
 			fields.RmDepends = splitCSV(editRmDepends)
 			changed = true
 		}
-		if cmd.Flags().Changed("tags") {
+		if cmd.Flags().Changed("tags") || cmd.Flags().Changed("tag") {
 			fields.Tags = splitCSV(editTags)
 			changed = true
 		}
@@ -117,9 +117,11 @@ func init() {
 	editCmd.Flags().StringVar(&editType, "type", "", "new type")
 	editCmd.Flags().StringVar(&editRepo, "repo", "", "new repo path")
 	editCmd.Flags().StringVar(&editDepends, "depends", "", "replace all dependencies (comma-separated)")
+	editCmd.Flags().StringVar(&editDepends, "depend", "", "alias for --depends")
 	editCmd.Flags().StringVar(&editAddDepends, "add-depends", "", "add dependencies (comma-separated)")
 	editCmd.Flags().StringVar(&editRmDepends, "rm-depends", "", "remove dependencies (comma-separated)")
 	editCmd.Flags().StringVar(&editTags, "tags", "", "replace all tags (comma-separated)")
+	editCmd.Flags().StringVar(&editTags, "tag", "", "alias for --tags")
 	editCmd.Flags().StringVar(&editAddTags, "add-tags", "", "add tags (comma-separated)")
 	editCmd.Flags().StringVar(&editRmTags, "rm-tags", "", "remove tags (comma-separated)")
 	editCmd.Flags().StringVar(&editAssignee, "assignee", "", "person to assign this item to")
