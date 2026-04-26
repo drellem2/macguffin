@@ -103,6 +103,7 @@ mg log                 # view snapshot history
 | `mg mail send\|list\|read` | Maildir-style messaging between agents. |
 | `mg event append <type> [--key=value ...]` | Append a structured event to `events.jsonl`. |
 | `mg event list [--type=T] [--since=TS] [--tail=N]` | List events with optional filtering. |
+| `mg flow [--live] [--repo=P] [--blocked-after=D]` | Per-status flow view: throughput, median age, bottleneck, blocked chains. |
 | `mg snapshot` | Commit a git snapshot of current state. |
 | `mg log [args]` | Show snapshot history (passes args to `git log`). |
 | `mg version` | Print version. |
