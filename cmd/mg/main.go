@@ -50,6 +50,7 @@ func init() {
 	rootCmd.AddCommand(reopenCmd)
 	rootCmd.AddCommand(shelveCmd)
 	rootCmd.AddCommand(unshelveCmd)
+	rootCmd.AddCommand(flowCmd)
 }
 
 func main() {
