@@ -440,6 +440,132 @@ func TestCreateWithoutBranch(t *testing.T) {
 	}
 }
 
+func TestCreateWithBudget(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "mg-", "task", "Budget item", nil, WithBudget(200000))
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if item.Budget == nil || *item.Budget != 200000 {
+		t.Errorf("Budget = %v, want 200000", item.Budget)
+	}
+
+	// Read back and verify persistence
+	read, err := Read(root, item.ID)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if read.Budget == nil || *read.Budget != 200000 {
+		t.Errorf("Read Budget = %v, want 200000", read.Budget)
+	}
+
+	// Verify frontmatter contains budget
+	path := filepath.Join(root, "work", "available", item.ID+".md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading file: %v", err)
+	}
+	if !strings.Contains(string(data), "budget: 200000") {
+		t.Errorf("frontmatter should contain 'budget: 200000', got:\n%s", string(data))
+	}
+}
+
+func TestCreateWithoutBudget(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "mg-", "task", "No budget item", nil)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	if item.Budget != nil {
+		t.Errorf("Budget should be nil, got %v", *item.Budget)
+	}
+
+	// Verify frontmatter does not contain budget line
+	path := filepath.Join(root, "work", "available", item.ID+".md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading file: %v", err)
+	}
+	if strings.Contains(string(data), "budget:") {
+		t.Error("frontmatter should not contain budget: when budget is unset")
+	}
+}
+
+func TestParseWithBudget(t *testing.T) {
+	content := `---
+id: gt-abc
+type: task
+created: 2026-03-20T16:00:00Z
+creator: bob
+depends: []
+budget: 150000
+---
+
+# Budgeted task
+`
+
+	item, err := Parse(content)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if item.Budget == nil || *item.Budget != 150000 {
+		t.Errorf("Budget = %v, want 150000", item.Budget)
+	}
+}
+
+func TestRenderParseBudgetRoundTrip(t *testing.T) {
+	budget := 300000
+	item := &Item{
+		ID:      "mg-abcd",
+		Type:    "task",
+		Creator: "alice",
+		Budget:  &budget,
+		Title:   "Budget round-trip",
+		Body:    "\n# Budget round-trip\n",
+	}
+	item.Created, _ = time.Parse(time.RFC3339, "2026-03-20T16:00:00Z")
+
+	rendered := Render(item)
+	if !strings.Contains(rendered, "budget: 300000") {
+		t.Errorf("rendered output should contain 'budget: 300000', got:\n%s", rendered)
+	}
+
+	parsed, err := Parse(rendered)
+	if err != nil {
+		t.Fatalf("Parse(Render()): %v", err)
+	}
+	if parsed.Budget == nil || *parsed.Budget != 300000 {
+		t.Errorf("Budget = %v, want 300000", parsed.Budget)
+	}
+}
+
+func TestParseBackwardCompatibleWithoutBudget(t *testing.T) {
+	// Existing items without a budget field must still parse cleanly.
+	content := `---
+id: gt-abc
+type: task
+created: 2026-03-20T16:00:00Z
+creator: bob
+depends: []
+---
+
+# Existing item
+`
+	item, err := Parse(content)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if item.Budget != nil {
+		t.Errorf("Budget should be nil for items without budget, got %v", *item.Budget)
+	}
+}
+
 func setupDirs(t *testing.T, root string) {
 	t.Helper()
 	for _, d := range []string{

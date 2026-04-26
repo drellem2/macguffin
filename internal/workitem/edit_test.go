@@ -380,6 +380,108 @@ func TestUpdateAssignee(t *testing.T) {
 	}
 }
 
+func TestUpdateBudgetSet(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "mg-", "task", "Budget set", nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	budget := 200000
+	updated, err := Update(root, item.ID, UpdateField{Budget: &budget})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	if updated.Budget == nil || *updated.Budget != 200000 {
+		t.Errorf("Budget = %v, want 200000", updated.Budget)
+	}
+
+	read, err := Read(root, item.ID)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if read.Budget == nil || *read.Budget != 200000 {
+		t.Errorf("persisted Budget = %v, want 200000", read.Budget)
+	}
+}
+
+func TestUpdateBudgetReplace(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "mg-", "task", "Budget replace", nil, WithBudget(100000))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	newBudget := 500000
+	updated, err := Update(root, item.ID, UpdateField{Budget: &newBudget})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	if updated.Budget == nil || *updated.Budget != 500000 {
+		t.Errorf("Budget = %v, want 500000", updated.Budget)
+	}
+}
+
+func TestUpdateBudgetUnsetWithZero(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "mg-", "task", "Budget unset", nil, WithBudget(100000))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	zero := 0
+	updated, err := Update(root, item.ID, UpdateField{Budget: &zero})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	if updated.Budget != nil {
+		t.Errorf("Budget should be nil after --budget=0, got %v", *updated.Budget)
+	}
+
+	// Verify frontmatter no longer contains budget
+	path, _, err := FindPath(root, item.ID)
+	if err != nil {
+		t.Fatalf("FindPath: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading file: %v", err)
+	}
+	if strings.Contains(string(data), "budget:") {
+		t.Errorf("frontmatter should not contain budget: after unset, got:\n%s", string(data))
+	}
+}
+
+func TestUpdateBudgetLeaveAloneWhenNotProvided(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "mg-", "task", "Budget keep", nil, WithBudget(250000))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Update something else; budget should remain unchanged.
+	newTitle := "Updated"
+	updated, err := Update(root, item.ID, UpdateField{Title: &newTitle})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	if updated.Budget == nil || *updated.Budget != 250000 {
+		t.Errorf("Budget should remain 250000 when not provided, got %v", updated.Budget)
+	}
+}
+
 func TestUpdateAssigneeClear(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)

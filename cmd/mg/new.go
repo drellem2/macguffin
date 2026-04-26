@@ -20,6 +20,7 @@ var (
 	newTitle    string
 	newBody     string
 	newRepo     string
+	newBudget   int
 )
 
 var newCmd = &cobra.Command{
@@ -94,6 +95,14 @@ var newCmd = &cobra.Command{
 		if newBody != "" {
 			opts = append(opts, workitem.WithBody(newBody))
 		}
+		if cmd.Flags().Changed("budget") {
+			if newBudget < 0 {
+				return fmt.Errorf("invalid budget %d: must be non-negative", newBudget)
+			}
+			if newBudget > 0 {
+				opts = append(opts, workitem.WithBudget(newBudget))
+			}
+		}
 
 		item, err := workitem.Create(root, prefix, newType, title, deps, opts...)
 		if err != nil {
@@ -120,6 +129,7 @@ func init() {
 	newCmd.Flags().StringVar(&newTitle, "title", "", "work item title (alternative to positional args)")
 	newCmd.Flags().StringVar(&newBody, "body", "", "work item body (markdown)")
 	newCmd.Flags().StringVar(&newRepo, "repo", "", "repo path (defaults to current git toplevel)")
+	newCmd.Flags().IntVar(&newBudget, "budget", 0, "estimated token budget (integer; omit or 0 to leave unset)")
 }
 
 // detectRepo returns the git toplevel of the current working directory, or ""

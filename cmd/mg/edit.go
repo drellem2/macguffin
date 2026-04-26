@@ -22,6 +22,7 @@ var (
 	editRmTags     string
 	editAssignee   string
 	editPriority   string
+	editBudget     int
 )
 
 var editCmd = &cobra.Command{
@@ -96,6 +97,13 @@ Use --tags to replace all tags, or --add-tags / --rm-tags for incremental change
 			}
 			changed = true
 		}
+		if cmd.Flags().Changed("budget") {
+			if editBudget < 0 {
+				return fmt.Errorf("invalid budget %d: must be non-negative (use 0 to unset)", editBudget)
+			}
+			fields.Budget = &editBudget
+			changed = true
+		}
 
 		if !changed {
 			return fmt.Errorf("no fields specified; use --title, --body, --type, --assignee, --depends, --tags, etc.")
@@ -126,6 +134,7 @@ func init() {
 	editCmd.Flags().StringVar(&editRmTags, "rm-tags", "", "remove tags (comma-separated)")
 	editCmd.Flags().StringVar(&editAssignee, "assignee", "", "person to assign this item to")
 	editCmd.Flags().StringVar(&editPriority, "priority", "", "priority level: low, medium, high")
+	editCmd.Flags().IntVar(&editBudget, "budget", 0, "estimated token budget (integer; --budget=0 unsets)")
 }
 
 // splitCSV splits a comma-separated string into trimmed non-empty parts.

@@ -43,6 +43,9 @@ var showCmd = &cobra.Command{
 		if item.Branch != "" {
 			fmt.Printf("%-10s %s\n", "Branch:", item.Branch)
 		}
+		if item.Budget != nil {
+			fmt.Printf("%-10s %s tokens\n", "Budget:", formatThousands(*item.Budget))
+		}
 		if len(item.Tags) > 0 {
 			fmt.Printf("%-10s %s\n", "Tags:", strings.Join(item.Tags, ", "))
 		}
@@ -60,4 +63,25 @@ var showCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+// formatThousands renders an integer with comma separators (e.g. 200000 → "200,000").
+func formatThousands(n int) string {
+	s := fmt.Sprintf("%d", n)
+	negative := false
+	if strings.HasPrefix(s, "-") {
+		negative = true
+		s = s[1:]
+	}
+	var b strings.Builder
+	for i, r := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(r)
+	}
+	if negative {
+		return "-" + b.String()
+	}
+	return b.String()
 }

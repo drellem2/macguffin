@@ -7,6 +7,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ type Item struct {
 	Assignee string   // person assigned to this item (optional)
 	Priority string   // priority level: low, medium, high (optional, default: medium)
 	Branch   string   // branch name associated with this item (optional)
+	Budget   *int     // estimated token budget for this item (optional, nil = unset)
 	Title    string
 	Body     string    // everything after frontmatter (raw markdown)
 	Mtime    time.Time // file modification time; zero when parsed from a string
@@ -58,6 +60,13 @@ func WithPriority(priority string) CreateOption {
 func WithBranch(branch string) CreateOption {
 	return func(item *Item) {
 		item.Branch = branch
+	}
+}
+
+// WithBudget sets the token budget on a work item.
+func WithBudget(budget int) CreateOption {
+	return func(item *Item) {
+		item.Budget = &budget
 	}
 }
 
@@ -155,6 +164,11 @@ func Render(item *Item) string {
 		branchLine = fmt.Sprintf("branch: %s\n", item.Branch)
 	}
 
+	budgetLine := ""
+	if item.Budget != nil {
+		budgetLine = fmt.Sprintf("budget: %d\n", *item.Budget)
+	}
+
 	tagsLine := ""
 	if len(item.Tags) > 0 {
 		tagsLine = fmt.Sprintf("tags: [%s]\n", strings.Join(item.Tags, ", "))
@@ -169,8 +183,8 @@ func Render(item *Item) string {
 		}
 	}
 
-	return fmt.Sprintf("---\nid: %s\ntype: %s\ncreated: %s\ncreator: %s\ndepends: %s\n%s%s%s%s%s---\n%s",
-		item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, depsLine, tagsLine, repoLine, assigneeLine, priorityLine, branchLine, body)
+	return fmt.Sprintf("---\nid: %s\ntype: %s\ncreated: %s\ncreator: %s\ndepends: %s\n%s%s%s%s%s%s---\n%s",
+		item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, depsLine, tagsLine, repoLine, assigneeLine, priorityLine, branchLine, budgetLine, body)
 }
 
 // FindPath returns the filesystem path and status directory for a work item by ID.
@@ -351,6 +365,10 @@ func Parse(content string) (*Item, error) {
 			item.Priority = val
 		case "branch":
 			item.Branch = val
+		case "budget":
+			if n, err := strconv.Atoi(val); err == nil {
+				item.Budget = &n
+			}
 		}
 	}
 

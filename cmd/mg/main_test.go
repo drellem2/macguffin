@@ -1542,6 +1542,145 @@ func TestCLI_EventListEmpty(t *testing.T) {
 	}
 }
 
+func TestCLI_NewWithBudget(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "new", "--budget=200000", "--title=budgeted task")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new --budget failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// Frontmatter should contain "budget: 200000".
+	avail := filepath.Join(tmpHome, ".macguffin", "work", "available")
+	data, err := os.ReadFile(filepath.Join(avail, id+".md"))
+	if err != nil {
+		t.Fatalf("read item: %v", err)
+	}
+	if !strings.Contains(string(data), "budget: 200000") {
+		t.Errorf("frontmatter should contain 'budget: 200000', got:\n%s", string(data))
+	}
+
+	// mg show should display the budget with comma formatting.
+	cmd = exec.Command(bin, "show", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "Budget:") {
+		t.Errorf("show output should contain 'Budget:', got:\n%s", out)
+	}
+	if !strings.Contains(string(out), "200,000 tokens") {
+		t.Errorf("show output should contain '200,000 tokens', got:\n%s", out)
+	}
+}
+
+func TestCLI_EditBudgetSetAndUnset(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "new", "--title=edit budget")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// Initially: no budget shown.
+	cmd = exec.Command(bin, "show", id)
+	cmd.Env = env
+	out, _ = cmd.CombinedOutput()
+	if strings.Contains(string(out), "Budget:") {
+		t.Errorf("show output should not contain 'Budget:' before set, got:\n%s", out)
+	}
+
+	// Set budget via edit.
+	cmd = exec.Command(bin, "edit", id, "--budget=300000")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg edit --budget failed: %v\n%s", err, out)
+	}
+
+	avail := filepath.Join(tmpHome, ".macguffin", "work", "available")
+	data, err := os.ReadFile(filepath.Join(avail, id+".md"))
+	if err != nil {
+		t.Fatalf("read item: %v", err)
+	}
+	if !strings.Contains(string(data), "budget: 300000") {
+		t.Errorf("frontmatter should contain 'budget: 300000', got:\n%s", string(data))
+	}
+
+	// Unset via --budget=0.
+	cmd = exec.Command(bin, "edit", id, "--budget=0")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg edit --budget=0 failed: %v\n%s", err, out)
+	}
+
+	data, err = os.ReadFile(filepath.Join(avail, id+".md"))
+	if err != nil {
+		t.Fatalf("read item: %v", err)
+	}
+	if strings.Contains(string(data), "budget:") {
+		t.Errorf("frontmatter should not contain budget: after --budget=0, got:\n%s", string(data))
+	}
+}
+
+func TestCLI_UpdateAliasBudget(t *testing.T) {
+	// `update` is an alias for `edit`; --budget should work either way.
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "new", "--title=update alias")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	cmd = exec.Command(bin, "update", id, "--budget=400000")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg update --budget failed: %v\n%s", err, out)
+	}
+
+	avail := filepath.Join(tmpHome, ".macguffin", "work", "available")
+	data, err := os.ReadFile(filepath.Join(avail, id+".md"))
+	if err != nil {
+		t.Fatalf("read item: %v", err)
+	}
+	if !strings.Contains(string(data), "budget: 400000") {
+		t.Errorf("frontmatter should contain 'budget: 400000', got:\n%s", string(data))
+	}
+}
+
 func buildBinary(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "mg")
