@@ -19,6 +19,7 @@ var (
 	newTags     string
 	newTitle    string
 	newBody     string
+	newRepo     string
 )
 
 var newCmd = &cobra.Command{
@@ -55,7 +56,11 @@ var newCmd = &cobra.Command{
 		prefix := workspace.Prefix(root)
 
 		var opts []workitem.CreateOption
-		if repo := detectRepo(); repo != "" {
+		repo := newRepo
+		if repo == "" {
+			repo = detectRepo()
+		}
+		if repo != "" {
 			opts = append(opts, workitem.WithRepo(repo))
 		}
 		if newAssignee != "" {
@@ -112,6 +117,7 @@ func init() {
 	newCmd.Flags().StringVar(&newTags, "tag", "", "comma-separated list of tags")
 	newCmd.Flags().StringVar(&newTitle, "title", "", "work item title (alternative to positional args)")
 	newCmd.Flags().StringVar(&newBody, "body", "", "work item body (markdown)")
+	newCmd.Flags().StringVar(&newRepo, "repo", "", "repo path (defaults to current git toplevel)")
 }
 
 // detectRepo returns the git toplevel of the current working directory, or ""

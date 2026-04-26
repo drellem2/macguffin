@@ -970,6 +970,40 @@ func TestCLI_ClaimNoID(t *testing.T) {
 	}
 }
 
+func TestCLI_NewWithRepo(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	// Init
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create with explicit --repo flag
+	customRepo := "/custom/repo/path"
+	cmd = exec.Command(bin, "new", "--type=task", "--repo="+customRepo, "Repo flag test")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new --repo failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// Verify the repo field is set in the work item
+	cmd = exec.Command(bin, "show", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), customRepo) {
+		t.Errorf("show output should contain repo %q, got:\n%s", customRepo, out)
+	}
+}
+
 func TestCLI_NewNoTitle(t *testing.T) {
 	bin := buildBinary(t)
 	err := exec.Command(bin, "new").Run()
