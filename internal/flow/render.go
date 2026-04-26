@@ -38,9 +38,9 @@ func Render(w io.Writer, snap Snapshot, bottleneckHighlight bool) {
 	}
 
 	if snap.Bottleneck != "" {
-		fmt.Fprintf(w, "\nbottleneck: %s (worst median-age vs throughput)\n", snap.Bottleneck)
+		fmt.Fprintf(w, "\nhighest median-age-to-throughput ratio: %s\n", snap.Bottleneck)
 	} else {
-		fmt.Fprintln(w, "\nbottleneck: none — flow is healthy")
+		fmt.Fprintln(w, "\nhighest median-age-to-throughput ratio: none — flow is healthy")
 	}
 
 	fmt.Fprintln(w)
@@ -71,6 +71,90 @@ func Render(w io.Writer, snap Snapshot, bottleneckHighlight bool) {
 	} else {
 		fmt.Fprintf(w, "spawn pressure: available:%d polecats:? (pogo agent list unavailable)\n", snap.Spawn.Available)
 	}
+}
+
+// RenderGrouped writes a compact view of a non-status grouped snapshot. The
+// columns are simpler than Render's because non-status groupings have no
+// notion of in/out events: items don't transition between repos or tags.
+func RenderGrouped(w io.Writer, snap *GroupedSnapshot, bottleneckHighlight bool) {
+	fmt.Fprintf(w, "mg flow @ %s — group-by %s\n",
+		snap.GeneratedAt.Format("2006-01-02 15:04:05 MST"), snap.GroupBy)
+	fmt.Fprintln(w, strings.Repeat("─", 72))
+
+	header := fmt.Sprintf("%-26s %7s %7s %10s  %s", "group", "active", "done7d", "med-age", "oldest")
+	fmt.Fprintln(w, header)
+
+	for _, m := range snap.Groups {
+		marker := "  "
+		if bottleneckHighlight && m.Key == snap.Bottleneck {
+			marker = "▶ "
+		}
+		oldest := "—"
+		if m.OldestID != "" {
+			oldest = fmt.Sprintf("%s (%s)", m.OldestID, shortHours(m.OldestAgeHours))
+		}
+		fmt.Fprintf(w, "%s%-24s %7d %7d %10s  %s\n",
+			marker,
+			truncate(m.Label, 24),
+			m.Active,
+			m.Done7d,
+			shortHours(m.MedianAgeHours),
+			oldest,
+		)
+	}
+
+	if snap.Bottleneck != "" {
+		fmt.Fprintf(w, "\nhighest median-age-to-throughput ratio: %s\n", snap.Bottleneck)
+	} else {
+		fmt.Fprintln(w, "\nhighest median-age-to-throughput ratio: none — flow is healthy")
+	}
+}
+
+// RenderAgeDistribution prints the four-bucket histogram below the main
+// table. The bar widths scale to the largest bucket so even tiny workspaces
+// produce a readable shape.
+func RenderAgeDistribution(w io.Writer, dist AgeDistribution) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "age distribution:")
+	if dist.Total == 0 {
+		fmt.Fprintln(w, "  (no items)")
+		return
+	}
+	maxCount := 0
+	for _, b := range AgeBuckets {
+		if c := dist.Count(b); c > maxCount {
+			maxCount = c
+		}
+	}
+	const barWidth = 32
+	for _, b := range AgeBuckets {
+		c := dist.Count(b)
+		bar := ""
+		if maxCount > 0 {
+			n := (c * barWidth) / maxCount
+			bar = strings.Repeat("█", n)
+		}
+		fmt.Fprintf(w, "  %-8s %4d  %s\n", b, c, bar)
+	}
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	if max <= 1 {
+		return s[:max]
+	}
+	return s[:max-1] + "…"
+}
+
+// shortHours formats a duration-in-hours like shortDuration but for the
+// float64 hours used by GroupedMetrics.
+func shortHours(h float64) string {
+	if h <= 0 {
+		return "—"
+	}
+	return shortDuration(time.Duration(h * float64(time.Hour)))
 }
 
 // shortDuration prints durations in a compact form: 12s, 4m, 3h, 2d.

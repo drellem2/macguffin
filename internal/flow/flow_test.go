@@ -289,7 +289,7 @@ func TestRender_IncludesAllSections(t *testing.T) {
 		"claimed",
 		"pending",
 		"done",
-		"bottleneck:",
+		"highest median-age-to-throughput ratio:",
 		"blocked chains:",
 		"mg-x",
 		"spawn pressure:",

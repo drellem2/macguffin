@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,10 +15,12 @@ import (
 )
 
 var (
-	flowLive         bool
-	flowRepo         string
-	flowBlockedAfter time.Duration
-	flowInterval     time.Duration
+	flowLive            bool
+	flowRepo            string
+	flowBlockedAfter    time.Duration
+	flowInterval        time.Duration
+	flowGroupBy         string
+	flowAgeDistribution bool
 )
 
 var flowCmd = &cobra.Command{
@@ -25,21 +28,53 @@ var flowCmd = &cobra.Command{
 	Short: "Surface bottlenecks in work-item throughput",
 	Long: `Read-only viewer over mg state, oriented around flow rather than columns.
 
-For each status, prints in/out/net per 24h and 7d, median age, and the
-oldest in-flight item. The status with the worst median-age-vs-throughput
-ratio is flagged. Items stuck in claimed beyond --blocked-after (default
-24h) are listed with the items waiting on them.
+By default, partitions items by lifecycle status and prints in/out/net per
+24h and 7d, median age, and the oldest in-flight item. The status with the
+highest median-age-to-throughput ratio is flagged. Items stuck in claimed
+beyond --blocked-after (default 24h) are listed with the items waiting on
+them.
+
+--group-by swaps the partitioning axis. Accepted values:
+  status (default), repo, tag, tag:<value>, assignee, priority, age
+
+--age-distribution appends a four-bucket histogram (<24h, 24h–7d, 7d–30d,
+>30d) computed under the active --repo / --group-by filter.
 
 Examples:
   mg flow
   mg flow --live
   mg flow --repo=/path/to/repo
-  mg flow --blocked-after=12h`,
+  mg flow --blocked-after=12h
+  mg flow --group-by repo
+  mg flow --group-by tag
+  mg flow --group-by tag:ux
+  mg flow --group-by age
+  mg flow --age-distribution
+  mg flow --repo=/path/to/repo --group-by tag:ux --age-distribution`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := workspace.DefaultRoot()
 		if err != nil {
 			return err
 		}
+		// Non-default --group-by takes the grouped path (no event-derived
+		// in/out/net, no blocked-chains, no spawn-pressure — those are
+		// status-grouping concepts).
+		gb := normalizeGroupBy(flowGroupBy)
+		if gb != "status" {
+			gsnap, err := flow.ComputeGrouped(root, flow.GroupedOptions{
+				GroupBy:    gb,
+				RepoFilter: flowRepo,
+			})
+			if err != nil {
+				return err
+			}
+			flow.RenderGrouped(cmd.OutOrStdout(), gsnap, true)
+			if flowAgeDistribution {
+				flow.RenderAgeDistribution(cmd.OutOrStdout(), flow.ComputeAgeDistribution(gsnap.Records))
+			}
+			return nil
+		}
+
 		opts := flow.Options{
 			BlockedAfter: flowBlockedAfter,
 			RepoFilter:   flowRepo,
@@ -52,8 +87,39 @@ Examples:
 			return err
 		}
 		flow.Render(cmd.OutOrStdout(), snap, true)
+		if flowAgeDistribution {
+			recs, err := flow.LoadGroupRecs(root, snap.GeneratedAt)
+			if err == nil {
+				if flowRepo != "" {
+					recs = filterRecsByRepoCmd(recs, flowRepo)
+				}
+				flow.RenderAgeDistribution(cmd.OutOrStdout(), flow.ComputeAgeDistribution(recs))
+			}
+		}
 		return nil
 	},
+}
+
+// normalizeGroupBy treats empty/whitespace as the default "status".
+func normalizeGroupBy(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "status"
+	}
+	return s
+}
+
+// filterRecsByRepoCmd is a thin wrapper so the cmd layer can apply the same
+// repo substring filter the grouped path does, when computing
+// --age-distribution alongside the default status snapshot.
+func filterRecsByRepoCmd(recs []flow.GroupRec, repo string) []flow.GroupRec {
+	out := make([]flow.GroupRec, 0, len(recs))
+	for _, r := range recs {
+		if strings.Contains(r.Item.Repo, repo) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // runLive re-renders the flow view whenever events.jsonl changes (mtime
@@ -123,4 +189,6 @@ func init() {
 	flowCmd.Flags().StringVar(&flowRepo, "repo", "", "filter by repository path (substring match)")
 	flowCmd.Flags().DurationVar(&flowBlockedAfter, "blocked-after", 24*time.Hour, "flag claimed items older than this (e.g. 12h, 2d)")
 	flowCmd.Flags().DurationVar(&flowInterval, "interval", time.Second, "polling interval for --live mode")
+	flowCmd.Flags().StringVar(&flowGroupBy, "group-by", "status", "partition axis: status, repo, tag, tag:<value>, assignee, priority, age")
+	flowCmd.Flags().BoolVar(&flowAgeDistribution, "age-distribution", false, "append a four-bucket age histogram below the main table")
 }
