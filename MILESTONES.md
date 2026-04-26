@@ -81,8 +81,9 @@ test "$(ls ~/.macguffin/work/available/ | wc -l)" -eq 0
 ```
 
 **Why this is a milestone:** This is the proof that the foundation works.
-Every other coordination primitive (reaping, scheduling, agent loops) depends
-on atomic claim being correct. It must be tested in isolation under contention.
+Every other coordination primitive (claim release, scheduling, agent loops)
+depends on atomic claim being correct. It must be tested in isolation under
+contention.
 
 **Delivers:** `mg claim <id>`. Returns success/failure. Appends PID suffix.
 
@@ -117,10 +118,10 @@ result sidecar write.
 
 ---
 
-## M4 — Stale Claim Reaper
+## M4 — Targeted Claim Release
 
-**Ship:** A reaper that detects claimed items whose claimant PID is dead
-and moves them back to `available/`.
+**Ship:** A targeted release command that returns a specific claimed item
+to `available/`.
 
 **End-to-end test:**
 ```bash
@@ -131,18 +132,21 @@ id=<created-id>
 claimer=$!
 sleep 0.5
 kill $claimer
-# Item is now in claimed/ with a dead PID suffix
-# Reap
-mg reap
+# Item is now in claimed/ — release it explicitly
+mg unclaim "$id"
 # Verify: item is back in available/
 ls ~/.macguffin/work/available/ | grep "$id"
 ```
 
-**Why this is a milestone:** Crash safety is proven. Without this, any
-claimant crash permanently loses a work item. With this, the system
-self-heals.
+**Why this is a milestone:** Crash recovery is operator-driven. An earlier
+implementation (`mg reap`) tried to detect dead claimants automatically by
+checking `kill(pid, 0)`, but the recorded PID is unreliable — it's often the
+short-lived `mg claim` subprocess rather than the long-lived agent. Sweeping
+by PID liveness ended up releasing claims held by healthy workers. Targeted
+unclaim sidesteps the problem: the operator names the item, and the system
+moves it.
 
-**Delivers:** `mg reap` (one-shot), testable in isolation.
+**Delivers:** `mg unclaim <id>` (one-shot), testable in isolation.
 
 ---
 
@@ -247,6 +251,6 @@ M7 (independent after M0)
 ```
 
 M0–M3 are strictly sequential (each builds on the last).
-M4 follows M3 (reaper needs the claim lifecycle).
+M4 follows M3 (unclaim needs the claim lifecycle).
 M5 and M7 only need M0 and can be built anytime.
 M6 needs M3 (complete lifecycle must exist to schedule against).

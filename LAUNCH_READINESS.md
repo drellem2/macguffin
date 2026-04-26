@@ -44,9 +44,11 @@
 - `mg mail list` shows messages with subject and sender.
 - `mg mail read` moves messages from `new/` to `cur/`.
 
-### `mg reap` — PASS
-- Detects stale claims from dead PIDs.
-- Returns reaped items to `work/available/`.
+### `mg unclaim` — PASS
+- Releases a claim by ID, returning the item to `work/available/`.
+- Replaces the earlier `mg reap` command, which swept `claimed/` by PID
+  liveness — that heuristic was unsafe because the recorded PID was often
+  the short-lived `mg claim` subprocess rather than the owning agent.
 
 ### `mg edit` — PASS (not tested end-to-end, but command is registered and has tests)
 
@@ -84,7 +86,7 @@
 - All example commands work as documented.
 
 ### Commands table — NEEDS_REVIEW
-- **Missing from table:** `claim`, `done`, `archive`, `reap`, `schedule`, `edit`. These are all registered commands but not listed in the README command table.
+- **Missing from table:** `claim`, `done`, `archive`, `unclaim`, `schedule`, `edit`. These are all registered commands but not listed in the README command table.
 - The table lists 10 commands; the CLI actually has 16 (including `help` and `completion` from cobra).
 - The `mg event` description in the table is accurate.
 
@@ -135,7 +137,7 @@
 
 ### Nice-to-haves (non-blocking)
 
-1. **README command table incomplete.** Missing `claim`, `done`, `archive`, `reap`, `schedule`, `edit` from the commands table.
+1. **README command table incomplete.** Missing `claim`, `done`, `archive`, `unclaim`, `schedule`, `edit` from the commands table.
 2. **README directory layout incomplete.** Missing `work/pending/` and `work/archived/` directories.
 3. **README project structure incomplete.** Missing `internal/event/` from the tree.
 4. **E2E test for events.** `scripts/event_test.sh` likely has the same `gt-` prefix issue (not verified due to e2e test failure).

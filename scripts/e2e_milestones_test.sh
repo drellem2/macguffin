@@ -66,19 +66,16 @@ AVAIL=$($MG list --status=available 2>&1 | grep -c "mg-" || true)
 test "$AVAIL" -eq 0 && pass "nothing available after done" || fail "still items available"
 
 # ---------------------------------------------------------------------------
-echo "--- M4: Stale Claim Reaper ---"
+echo "--- M4: Targeted Claim Release ---"
 clean
 $MG init >/dev/null 2>&1
 OUT=$($MG new "Will be abandoned" 2>&1)
 id=$(echo "$OUT" | extract_id)
 $MG claim "$id" >/dev/null 2>&1
-# Simulate dead PID by renaming to a nonexistent PID
-CLAIMED_FILE=$(ls ~/.macguffin/work/claimed/)
-mv ~/.macguffin/work/claimed/$CLAIMED_FILE ~/.macguffin/work/claimed/${id}.md.99999
-$MG reap >/dev/null 2>&1
-test -f ~/.macguffin/work/available/${id}.md && pass "reaped item back in available/" || fail "reap failed"
+$MG unclaim "$id" >/dev/null 2>&1
+test -f ~/.macguffin/work/available/${id}.md && pass "unclaimed item back in available/" || fail "unclaim failed"
 CLAIMED_AFTER=$(ls ~/.macguffin/work/claimed/ 2>/dev/null | wc -l | tr -d ' ')
-test "$CLAIMED_AFTER" -eq 0 && pass "claimed/ empty after reap" || fail "claimed/ not empty after reap"
+test "$CLAIMED_AFTER" -eq 0 && pass "claimed/ empty after unclaim" || fail "claimed/ not empty after unclaim"
 
 # ---------------------------------------------------------------------------
 echo "--- M5: Mail ---"

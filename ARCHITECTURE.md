@@ -88,7 +88,7 @@ mv available/gt-a3f.md claimed/gt-a3f.md.$$
 ### Properties
 
 - **Exactly-once delivery.** The file is in one directory at a time. No double-claim.
-- **Crash-safe.** If the claimant dies, `claimed/gt-a3f.md.82407` remains. A reaper can detect stale claims by checking whether PID 82407 is alive.
+- **Crash-safe.** If the claimant dies, `claimed/gt-a3f.md.82407` remains in `claimed/` for an operator to release explicitly with `mg unclaim`.
 - **Observable.** `ls claimed/` tells you what's in progress and who has it. No query tool needed.
 - **Fast.** Single syscall. No network round-trip, no commit, no push.
 
@@ -102,22 +102,22 @@ echo '{"status": "fixed", "commit": "abc123"}' > done/gt-a3f.result.json
 mv claimed/gt-a3f.md.$$ done/gt-a3f.md
 ```
 
-### Reaping stale claims
+### Releasing stale claims
 
-A background reaper (or any agent, or a cron job) can detect abandoned work:
+When an agent dies mid-work, its claim file lingers in `claimed/`. Releasing
+that claim is an explicit, targeted operation:
 
 ```bash
-for f in claimed/*.md.*; do
-    pid="${f##*.}"
-    if ! kill -0 "$pid" 2>/dev/null; then
-        # Process is dead. Move back to available.
-        base="${f%.*}"
-        mv "$f" "available/$(basename "$base")"
-    fi
-done
+mg unclaim gt-a3f
 ```
 
-This is the UNIX equivalent of a database's deadlock detector — but it uses `kill -0`, not connection timeouts.
+Earlier versions of macguffin shipped a `mg reap` command that swept
+`claimed/` and released any claim whose recorded PID was no longer alive.
+That heuristic was unsafe in practice: the recorded PID was often the
+short-lived `mg claim` subprocess rather than the long-lived agent that
+spawned it, so a single `mg reap` could release the claims of healthy,
+actively-working agents. PID liveness is no longer consulted — to release a
+claim, the operator must name the work item.
 
 ## Notification: How Agents React
 
@@ -361,10 +361,10 @@ The design above is single-machine. Cross-machine coordination is harder because
 ## Milestones
 
 ### M0: The claim primitive
-Build and test the atomic claim loop. Five concurrent processes racing to claim items. Exactly one wins each time. Stale claims are reaped. This is the proof that the foundation works.
+Build and test the atomic claim loop. Five concurrent processes racing to claim items. Exactly one wins each time. Stale claims can be released explicitly with `mg unclaim`. This is the proof that the foundation works.
 
 ### M1: Agent lifecycle
-PID files, startup/shutdown, liveness detection. `mg ps` shows running agents. `mg spawn` starts one. An agent that dies has its claims reaped.
+PID files, startup/shutdown, liveness detection. `mg ps` shows running agents. `mg spawn` starts one. An agent that dies leaves a claim file in `claimed/` until an operator releases it.
 
 ### M2: Work item format + CLI
 The Markdown+frontmatter format. `mg new "title"` creates a work item. `mg list` shows available work. `mg show <id>` reads one. All backed by files — the CLI is convenience, not gatekeeper.

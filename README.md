@@ -98,7 +98,7 @@ mg log                 # view snapshot history
 | `mg done ID` | Mark a claimed work item as done. |
 | `mg edit ID [flags]` | Update fields on an existing work item. |
 | `mg archive` | Archive done items older than N days. |
-| `mg reap` | Reclaim work items from dead claimant processes. |
+| `mg unclaim ID` | Release a claim, returning the work item to `available/`. |
 | `mg schedule` | Promote pending items whose dependencies are met. |
 | `mg mail send\|list\|read` | Maildir-style messaging between agents. |
 | `mg event append <type> [--key=value ...]` | Append a structured event to `events.jsonl`. |
