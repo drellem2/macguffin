@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/drellem2/macguffin/internal/spend"
 	"github.com/drellem2/macguffin/internal/workitem"
 	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
@@ -45,6 +46,17 @@ var showCmd = &cobra.Command{
 		}
 		if item.Budget != nil {
 			fmt.Printf("%-10s %s tokens\n", "Budget:", formatThousands(*item.Budget))
+			if recs, err := spend.ReadItem(root, item.ID); err == nil && len(recs) > 0 {
+				spent := 0
+				for _, r := range recs {
+					spent += r.Input + r.CacheRead + r.CacheCreate + r.Output
+				}
+				line := fmt.Sprintf("%s tokens (%d%% of budget)", formatThousands(spent), pctOfBudget(spent, *item.Budget))
+				if *item.Budget > 0 && spent > *item.Budget {
+					line += " ⚠"
+				}
+				fmt.Printf("%-10s %s\n", "Spent:", line)
+			}
 		}
 		if len(item.Tags) > 0 {
 			fmt.Printf("%-10s %s\n", "Tags:", strings.Join(item.Tags, ", "))
@@ -63,6 +75,15 @@ var showCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+// pctOfBudget rounds spent/budget to a whole percentage. A zero budget is
+// reported as 0% to avoid divide-by-zero — the ⚠ marker still fires when spent>0.
+func pctOfBudget(spent, budget int) int {
+	if budget <= 0 {
+		return 0
+	}
+	return (spent * 100) / budget
 }
 
 // formatThousands renders an integer with comma separators (e.g. 200000 → "200,000").

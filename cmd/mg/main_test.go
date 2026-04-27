@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
@@ -1583,6 +1584,162 @@ func TestCLI_NewWithBudget(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "200,000 tokens") {
 		t.Errorf("show output should contain '200,000 tokens', got:\n%s", out)
+	}
+}
+
+// writeSpendRecord appends a single spend NDJSON entry under
+// $HOME/.macguffin/spend/by-item/<id>.jsonl. Used by TestCLI_ShowSpentLine_*
+// to exercise mg show's Spent/budget rendering without depending on the
+// transcript aggregator.
+func writeSpendRecord(t *testing.T, home, itemID string, input, cacheRead, cacheCreate, output int) {
+	t.Helper()
+	dir := filepath.Join(home, ".macguffin", "spend", "by-item")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir spend dir: %v", err)
+	}
+	rec := map[string]any{
+		"ts":           time.Now().UTC().Format(time.RFC3339),
+		"agent":        "test",
+		"model":        "test-model",
+		"input":        input,
+		"cache_read":   cacheRead,
+		"cache_create": cacheCreate,
+		"output":       output,
+		"session":      "s-test",
+		"message_uuid": fmt.Sprintf("u-%d-%d-%d-%d", input, cacheRead, cacheCreate, output),
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatalf("marshal record: %v", err)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, itemID+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open spend file: %v", err)
+	}
+	defer f.Close()
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		t.Fatalf("write record: %v", err)
+	}
+}
+
+func TestCLI_ShowSpentLine_UnderBudget(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "new", "--budget=200000", "--title=under budget")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new --budget failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// 142,308 tokens total = 71% of 200,000 — matches design §3 example.
+	writeSpendRecord(t, tmpHome, id, 100000, 20000, 12308, 10000)
+
+	cmd = exec.Command(bin, "show", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show failed: %v\n%s", err, out)
+	}
+	got := string(out)
+	if !strings.Contains(got, "Spent:") {
+		t.Errorf("show output should contain 'Spent:', got:\n%s", got)
+	}
+	if !strings.Contains(got, "142,308 tokens") {
+		t.Errorf("show output should contain '142,308 tokens', got:\n%s", got)
+	}
+	if !strings.Contains(got, "(71% of budget)") {
+		t.Errorf("show output should contain '(71%% of budget)', got:\n%s", got)
+	}
+	if strings.Contains(got, "⚠") {
+		t.Errorf("under-budget show output should NOT contain warning, got:\n%s", got)
+	}
+}
+
+func TestCLI_ShowSpentLine_OverBudget(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "new", "--budget=100000", "--title=over budget")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new --budget failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// 150,000 tokens total = 150% of 100,000 — should append ⚠.
+	writeSpendRecord(t, tmpHome, id, 100000, 0, 0, 50000)
+
+	cmd = exec.Command(bin, "show", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show failed: %v\n%s", err, out)
+	}
+	got := string(out)
+	if !strings.Contains(got, "Spent:") {
+		t.Errorf("show output should contain 'Spent:', got:\n%s", got)
+	}
+	if !strings.Contains(got, "150,000 tokens") {
+		t.Errorf("show output should contain '150,000 tokens', got:\n%s", got)
+	}
+	if !strings.Contains(got, "(150% of budget)") {
+		t.Errorf("show output should contain '(150%% of budget)', got:\n%s", got)
+	}
+	if !strings.Contains(got, "⚠") {
+		t.Errorf("over-budget show output should contain warning ⚠, got:\n%s", got)
+	}
+}
+
+func TestCLI_ShowSpentLine_NoSpendRecords(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "new", "--budget=200000", "--title=no spend yet")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new --budget failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	// No spend records written — Spent line must be omitted.
+	cmd = exec.Command(bin, "show", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show failed: %v\n%s", err, out)
+	}
+	got := string(out)
+	if !strings.Contains(got, "Budget:") {
+		t.Errorf("show output should still contain 'Budget:', got:\n%s", got)
+	}
+	if strings.Contains(got, "Spent:") {
+		t.Errorf("show output should NOT contain 'Spent:' when no records exist, got:\n%s", got)
 	}
 }
 
