@@ -249,6 +249,106 @@ func TestQuery_ByAgentIncludesOverhead(t *testing.T) {
 	}
 }
 
+// TestAggregate_RegistryFallback_AttributesPolecatWithoutClaimEvent covers
+// the bug fixed by mg-e4e7: a polecat with WorkItemID set in pogod's runtime
+// registry but no work.claim event recorded under its own actor (because
+// `mg claim` writes the item assignee/creator as actor, not the polecat
+// name) must still attribute to the assigned mg item.
+func TestAggregate_RegistryFallback_AttributesPolecatWithoutClaimEvent(t *testing.T) {
+	mgRoot := t.TempDir()
+	projects := t.TempDir()
+
+	// No work.claim event — interval-join will return "".
+	makeTranscript(t, projects, "-Users-daniel--pogo-polecats-pc-e4e7", "sess-1", "2026-04-26T12:00:01Z")
+
+	run := &Run{
+		Root:        mgRoot,
+		ProjectsDir: projects,
+		Warn:        func(string) {},
+		AgentRegistry: func() map[string]string {
+			return map[string]string{"pc-e4e7": "mg-e4e7"}
+		},
+	}
+	res, err := run.Aggregate()
+	if err != nil {
+		t.Fatalf("aggregate: %v", err)
+	}
+	if res.NewItemRecords != 2 {
+		t.Errorf("NewItemRecords = %d, want 2", res.NewItemRecords)
+	}
+	if res.NewAgentRecords != 0 {
+		t.Errorf("NewAgentRecords = %d, want 0 (registry fallback should attribute)", res.NewAgentRecords)
+	}
+
+	got, err := ReadItem(mgRoot, "mg-e4e7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Errorf("by-item/mg-e4e7.jsonl: got %d records, want 2", len(got))
+	}
+
+	overhead, _ := ReadAgent(mgRoot, "pc-e4e7")
+	if len(overhead) != 0 {
+		t.Errorf("by-agent/pc-e4e7.jsonl: got %d records, want 0", len(overhead))
+	}
+}
+
+// TestAggregate_IntervalJoinWinsOverRegistry guards against the registry
+// clobbering a fine-grained interval-join. Crew agents that switch between
+// tasks within one transcript must keep accurate per-task attribution.
+func TestAggregate_IntervalJoinWinsOverRegistry(t *testing.T) {
+	mgRoot := t.TempDir()
+	projects := t.TempDir()
+
+	writeEvent(t, mgRoot, "work.claim", "architect", "mg-from-events", "2026-04-26T12:00:00Z")
+	makeTranscript(t, projects, "-Users-daniel--pogo-agents-architect", "sess-1", "2026-04-26T12:00:01Z")
+
+	run := &Run{
+		Root:        mgRoot,
+		ProjectsDir: projects,
+		Warn:        func(string) {},
+		AgentRegistry: func() map[string]string {
+			return map[string]string{"architect": "mg-from-registry"}
+		},
+	}
+	if _, err := run.Aggregate(); err != nil {
+		t.Fatal(err)
+	}
+
+	fromEvents, _ := ReadItem(mgRoot, "mg-from-events")
+	if len(fromEvents) != 2 {
+		t.Errorf("mg-from-events: got %d records, want 2 (interval-join must win)", len(fromEvents))
+	}
+	fromReg, _ := ReadItem(mgRoot, "mg-from-registry")
+	if len(fromReg) != 0 {
+		t.Errorf("mg-from-registry: got %d records, want 0 (interval-join present, registry must not override)", len(fromReg))
+	}
+}
+
+// TestAggregate_RegistryUnreachableFallsBackToOverhead verifies a nil
+// registry reader is treated like an empty map, so messages with no claim
+// interval still land in the overhead bucket rather than crashing.
+func TestAggregate_RegistryUnreachableFallsBackToOverhead(t *testing.T) {
+	mgRoot := t.TempDir()
+	projects := t.TempDir()
+	makeTranscript(t, projects, "-Users-daniel--pogo-polecats-pc-zzzz", "sess-1", "2026-04-26T12:00:01Z")
+
+	run := &Run{
+		Root:          mgRoot,
+		ProjectsDir:   projects,
+		Warn:          func(string) {},
+		AgentRegistry: func() map[string]string { return nil },
+	}
+	res, err := run.Aggregate()
+	if err != nil {
+		t.Fatalf("aggregate: %v", err)
+	}
+	if res.NewAgentRecords != 2 {
+		t.Errorf("NewAgentRecords = %d, want 2 (no claim, no registry → overhead)", res.NewAgentRecords)
+	}
+}
+
 func TestBuildClaimIntervals_UnclosedClaimExtendsToFarFuture(t *testing.T) {
 	mgRoot := t.TempDir()
 	writeEvent(t, mgRoot, "work.claim", "pc-x", "mg-x", "2026-04-26T12:00:00Z")

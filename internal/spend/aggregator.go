@@ -24,6 +24,15 @@ type Run struct {
 	// Warn receives messages about unknown transcript shapes (per design
 	// §8 — "skip-and-log unknown shapes"). Defaults to writing to stderr.
 	Warn func(string)
+
+	// AgentRegistry returns a map of agent name → WorkItemID from pogod's
+	// runtime registry. Used as a fallback when events.jsonl interval-join
+	// misses — polecats self-claim through `mg claim`, but the actor
+	// recorded on the work.claim event is the item's assignee/creator
+	// (mayor or daniel), not the polecat name, so the interval-join always
+	// misses. The registry path closes that gap. When nil, defaults to
+	// readAgentRegistry (which shells out to `pogo agent list --json`).
+	AgentRegistry AgentRegistryReader
 }
 
 // Result reports what an aggregator pass did.
@@ -159,6 +168,15 @@ func (r *Run) Aggregate() (Result, error) {
 		return res, err
 	}
 
+	// Snapshot pogod's agent registry once per pass so live polecats with
+	// WorkItemID set still attribute even though their work.claim event was
+	// emitted under a different actor (the item's assignee/creator).
+	registryReader := r.AgentRegistry
+	if registryReader == nil {
+		registryReader = readAgentRegistry
+	}
+	registry := registryReader()
+
 	dirs, err := os.ReadDir(projects)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -218,7 +236,15 @@ func (r *Run) Aggregate() (Result, error) {
 					Session:     m.Session,
 					MessageUUID: m.MessageUUID,
 				}
-				if itemID := attribute(intervals, agent, m.Ts); itemID != "" {
+				itemID := attribute(intervals, agent, m.Ts)
+				if itemID == "" {
+					// Events.jsonl interval-join wins when present; only
+					// fall back to the registry on a miss so crew agents
+					// that switch tasks across a session keep correct
+					// fine-grained attribution.
+					itemID = registry[agent]
+				}
+				if itemID != "" {
 					rec.ItemID = itemID
 					itemBatch[itemID] = append(itemBatch[itemID], rec)
 					res.NewItemRecords++
