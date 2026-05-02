@@ -40,21 +40,23 @@ Or manually:
 ```bash
 sh install.sh                          # installs to ~/.local/bin
 INSTALL_DIR=/usr/local/bin sh install.sh  # custom location
+SHADOW_MG=0 sh install.sh              # skip the /usr/local/bin/mg symlink
 ```
 
 Supports Linux (amd64, arm64), macOS (amd64, arm64), and FreeBSD (amd64).
 
-> **macOS note:** macOS ships `/usr/bin/mg` (MicroGnuEmacs, a tiny Emacs clone). If you see `standard input and output must be a terminal` when running `mg`, you're hitting the system binary instead of MacGuffin. Run `which mg` to check — it should **not** print `/usr/bin/mg`.
->
-> Fix: ensure your install location comes before `/usr/bin` in your `PATH`:
-> ```bash
-> # Homebrew / shell installer (typically /usr/local/bin or ~/.local/bin)
-> export PATH="/usr/local/bin:$PATH"
->
-> # Go install (typically ~/go/bin)
-> export PATH="$HOME/go/bin:$PATH"
-> ```
-> Add the appropriate line to your `~/.zshrc` or `~/.bashrc` to make it permanent.
+On macOS and Linux, the installer also drops a symlink at `/usr/local/bin/mg`
+pointing to the installed binary. `/usr/local/bin` precedes `/usr/bin` in the
+default PATH on both systems, so this shadows `/usr/bin/mg` (the microemacs
+editor on macOS) and lets `mg` resolve to MacGuffin from any shell or
+subprocess. Writing to `/usr/local/bin` may require `sudo`. Set `SHADOW_MG=0`
+to skip, or `SHADOW_DIR=...` to point the symlink elsewhere.
+
+To remove:
+
+```bash
+sh uninstall.sh                        # removes binary + shadow symlink
+```
 
 Requires Go 1.24+ to build from source:
 
