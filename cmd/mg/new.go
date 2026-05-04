@@ -27,7 +27,15 @@ var newCmd = &cobra.Command{
 	Use:     "new [--title=TITLE] [--body=BODY] [flags] [TITLE...]",
 	Aliases: []string{"create"},
 	Short:   "Create a new work item",
-	Args:    cobra.ArbitraryArgs,
+	Long: `Create a new work item.
+
+The --assignee flag names the agent that owns triage and routing for the
+item, not the agent that runs the work. Substantive work is performed by
+an ephemeral polecat (named after the work-item ID at spawn time)
+regardless of the assignee. Polecats are never named in advance, so they
+cannot be assigned ahead of time; the assignee is the durable owner who
+decides whether to dispatch the work, hold it, or close it.`,
+	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		title := newTitle
 		if title == "" {

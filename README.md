@@ -133,6 +133,22 @@ machine-parseable, and diffable. Claiming is a single `rename(2)` syscall:
 if two processes race, exactly one wins. The loser gets `ENOENT`. No locks,
 no retries, no database.
 
+## Concepts
+
+### Assignee
+
+A work item's `assignee` names the agent that **owns triage and routing**
+for the item — not the agent that runs the work. Substantive work is
+performed by an ephemeral polecat (a one-shot agent named after the
+work-item ID at spawn time) regardless of who the assignee is. Polecats
+are never named in advance, so they cannot be assigned ahead of time.
+The assignee is the durable owner who decides whether to dispatch the
+work to a polecat, hold it, or close it without execution.
+
+In practice this means a ticket assigned to `mayor`, a PM agent, or
+`human` will still typically be executed by a polecat once the assignee
+decides to dispatch it.
+
 ## Project Structure
 
 ```

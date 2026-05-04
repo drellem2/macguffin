@@ -33,7 +33,14 @@ var editCmd = &cobra.Command{
 
 Use --title, --body, --type, --repo, --assignee, --priority to replace fields directly.
 Use --depends to replace all dependencies, or --add-depends / --rm-depends for incremental changes.
-Use --tags to replace all tags, or --add-tags / --rm-tags for incremental changes.`,
+Use --tags to replace all tags, or --add-tags / --rm-tags for incremental changes.
+
+The --assignee flag names the agent that owns triage and routing for the
+item, not the agent that runs the work. Substantive work is performed by
+an ephemeral polecat (named after the work-item ID at spawn time)
+regardless of the assignee. Polecats are never named in advance, so they
+cannot be assigned ahead of time; the assignee is the durable owner who
+decides whether to dispatch the work, hold it, or close it.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := workspace.DefaultRoot()
