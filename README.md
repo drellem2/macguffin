@@ -70,8 +70,12 @@ go install ./cmd/mg
 # Initialize the workspace
 mg init
 
-# Create a work item
+# Create a work item — coding example
 mg new --type=bug "Auth tokens not refreshing"
+
+# Or a non-coding work item — the type field is free-form
+mg new --type=research "Audit Q3 incidents for recurring root causes"
+mg new --type=draft "Outline weekly digest for stakeholders"
 
 # List available work
 mg list
