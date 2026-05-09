@@ -1175,6 +1175,77 @@ func TestCLI_NewWithRepo(t *testing.T) {
 	}
 }
 
+func TestCLI_NewNoRepo(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	// Init a git repo as the run-from directory so auto-detection would
+	// otherwise pick up a non-empty toplevel.
+	repoDir := t.TempDir()
+	if out, err := exec.Command("git", "-C", repoDir, "init").CombinedOutput(); err != nil {
+		t.Fatalf("git init failed: %v\n%s", err, out)
+	}
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// 1. --no-repo opts out of auto-detection.
+	cmd = exec.Command(bin, "new", "--type=task", "--no-repo", "no repo flag test")
+	cmd.Env = env
+	cmd.Dir = repoDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new --no-repo failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	cmd = exec.Command(bin, "show", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show failed: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "Repo:") {
+		t.Errorf("show output should not contain Repo: line for --no-repo item, got:\n%s", out)
+	}
+	if strings.Contains(string(out), repoDir) {
+		t.Errorf("show output should not contain auto-detected repo %q, got:\n%s", repoDir, out)
+	}
+
+	// 2. --repo="" also opts out (explicit empty string).
+	cmd = exec.Command(bin, "new", "--type=task", "--repo=", "empty repo flag test")
+	cmd.Env = env
+	cmd.Dir = repoDir
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new --repo='' failed: %v\n%s", err, out)
+	}
+	id = strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	cmd = exec.Command(bin, "show", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show failed: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "Repo:") {
+		t.Errorf("show output should not contain Repo: line for --repo='' item, got:\n%s", out)
+	}
+
+	// 3. --no-repo combined with a non-empty --repo is an error.
+	cmd = exec.Command(bin, "new", "--type=task", "--no-repo", "--repo=/some/path", "conflict test")
+	cmd.Env = env
+	cmd.Dir = repoDir
+	out, err = cmd.CombinedOutput()
+	if err == nil {
+		t.Errorf("expected error for --no-repo combined with --repo, got success:\n%s", out)
+	}
+}
+
 func TestCLI_NewNoTitle(t *testing.T) {
 	bin := buildBinary(t)
 	err := exec.Command(bin, "new").Run()
