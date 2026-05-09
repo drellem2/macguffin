@@ -20,6 +20,7 @@ var (
 	newTitle    string
 	newBody     string
 	newRepo     string
+	newNoRepo   bool
 	newBudget   int
 )
 
@@ -65,8 +66,16 @@ decides whether to dispatch the work, hold it, or close it.`,
 		prefix := workspace.Prefix(root)
 
 		var opts []workitem.CreateOption
-		repo := newRepo
-		if repo == "" {
+		if newNoRepo && cmd.Flags().Changed("repo") && newRepo != "" {
+			return fmt.Errorf("cannot use --no-repo with a non-empty --repo")
+		}
+		var repo string
+		switch {
+		case newNoRepo:
+			repo = ""
+		case cmd.Flags().Changed("repo"):
+			repo = newRepo
+		default:
 			repo = detectRepo()
 		}
 		if repo != "" {
@@ -136,7 +145,8 @@ func init() {
 	newCmd.Flags().StringVar(&newTags, "tags", "", "alias for --tag")
 	newCmd.Flags().StringVar(&newTitle, "title", "", "work item title (alternative to positional args)")
 	newCmd.Flags().StringVar(&newBody, "body", "", "work item body (markdown)")
-	newCmd.Flags().StringVar(&newRepo, "repo", "", "repo path (defaults to current git toplevel)")
+	newCmd.Flags().StringVar(&newRepo, "repo", "", "repo path (defaults to current git toplevel; pass --repo=\"\" or --no-repo to leave empty)")
+	newCmd.Flags().BoolVar(&newNoRepo, "no-repo", false, "do not auto-detect or set a repo (use for non-coding work items)")
 	newCmd.Flags().IntVar(&newBudget, "budget", 0, "estimated token budget (integer; omit or 0 to leave unset)")
 }
 
