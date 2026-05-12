@@ -1297,14 +1297,14 @@ func TestCLI_NewPrefix(t *testing.T) {
 
 	// 3. Invalid prefix shapes are rejected.
 	invalid := []string{
-		"dr",     // no trailing hyphen
-		"",       // empty
-		"dr/",    // slash
-		"dr ",    // space
-		"DR-",    // uppercase
-		"-dr-",   // leading hyphen
-		"dr--",   // double hyphen
-		"dr-x",   // doesn't end in hyphen
+		"dr",   // no trailing hyphen
+		"",     // empty
+		"dr/",  // slash
+		"dr ",  // space
+		"DR-",  // uppercase
+		"-dr-", // leading hyphen
+		"dr--", // double hyphen
+		"dr-x", // doesn't end in hyphen
 	}
 	for _, p := range invalid {
 		cmd = exec.Command(bin, "new", "--type=task", "--no-repo", "--prefix="+p, "invalid prefix test")
