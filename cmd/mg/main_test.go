@@ -1246,6 +1246,76 @@ func TestCLI_NewNoRepo(t *testing.T) {
 	}
 }
 
+func TestCLI_NewPrefix(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// 1. --prefix=dr- yields a dr-XXXX ID.
+	cmd = exec.Command(bin, "new", "--type=task", "--no-repo", "--prefix=dr-", "prefix flag test")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new --prefix=dr- failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+	if !strings.HasPrefix(id, "dr-") {
+		t.Fatalf("expected ID with dr- prefix, got %q (full output: %s)", id, out)
+	}
+
+	// mg show should round-trip the dr- item.
+	cmd = exec.Command(bin, "show", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show %s failed: %v\n%s", id, err, out)
+	}
+	if !strings.Contains(string(out), id) {
+		t.Errorf("show output should contain ID %q, got:\n%s", id, out)
+	}
+	if !strings.Contains(string(out), "prefix flag test") {
+		t.Errorf("show output should contain the title, got:\n%s", out)
+	}
+
+	// 2. Without --prefix, default mg- prefix is unchanged.
+	cmd = exec.Command(bin, "new", "--type=task", "--no-repo", "default prefix test")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new (default prefix) failed: %v\n%s", err, out)
+	}
+	defaultID := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+	if !strings.HasPrefix(defaultID, "mg-") {
+		t.Errorf("expected default mg- prefix, got %q", defaultID)
+	}
+
+	// 3. Invalid prefix shapes are rejected.
+	invalid := []string{
+		"dr",     // no trailing hyphen
+		"",       // empty
+		"dr/",    // slash
+		"dr ",    // space
+		"DR-",    // uppercase
+		"-dr-",   // leading hyphen
+		"dr--",   // double hyphen
+		"dr-x",   // doesn't end in hyphen
+	}
+	for _, p := range invalid {
+		cmd = exec.Command(bin, "new", "--type=task", "--no-repo", "--prefix="+p, "invalid prefix test")
+		cmd.Env = env
+		out, err = cmd.CombinedOutput()
+		if err == nil {
+			t.Errorf("expected error for invalid --prefix=%q, got success:\n%s", p, out)
+		}
+	}
+}
+
 func TestCLI_NewNoTitle(t *testing.T) {
 	bin := buildBinary(t)
 	err := exec.Command(bin, "new").Run()

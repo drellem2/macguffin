@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/workitem"
@@ -22,7 +23,13 @@ var (
 	newRepo     string
 	newNoRepo   bool
 	newBudget   int
+	newPrefix   string
 )
+
+// validPrefixRe matches lowercase alphanumeric + hyphens, ending with a single
+// hyphen (e.g. "dr-", "po-", "team1-"). The trailing hyphen separates the
+// prefix from the generated hex suffix in the final ID.
+var validPrefixRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*-$`)
 
 var newCmd = &cobra.Command{
 	Use:     "new [--title=TITLE] [--body=BODY] [flags] [TITLE...]",
@@ -35,7 +42,14 @@ item, not the agent that runs the work. Substantive work is performed by
 an ephemeral polecat (named after the work-item ID at spawn time)
 regardless of the assignee. Polecats are never named in advance, so they
 cannot be assigned ahead of time; the assignee is the durable owner who
-decides whether to dispatch the work, hold it, or close it.`,
+decides whether to dispatch the work, hold it, or close it.
+
+The --prefix flag overrides the work item ID prefix for this call only.
+It is not persisted to workspace config (see 'mg init --prefix=...' for
+the workspace-wide default). Useful for filing items under a different
+namespace (e.g. 'dr-' for director-issued items) without changing the
+workspace default. The prefix must be lowercase alphanumeric with
+optional internal hyphens, and must end in a hyphen.`,
 	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		title := newTitle
@@ -64,6 +78,12 @@ decides whether to dispatch the work, hold it, or close it.`,
 		}
 
 		prefix := workspace.Prefix(root)
+		if cmd.Flags().Changed("prefix") {
+			if !validPrefixRe.MatchString(newPrefix) {
+				return fmt.Errorf("invalid prefix %q: must be lowercase alphanumeric (with internal hyphens) ending in a hyphen, e.g. 'dr-'", newPrefix)
+			}
+			prefix = newPrefix
+		}
 
 		var opts []workitem.CreateOption
 		if newNoRepo && cmd.Flags().Changed("repo") && newRepo != "" {
@@ -148,6 +168,7 @@ func init() {
 	newCmd.Flags().StringVar(&newRepo, "repo", "", "repo path (defaults to current git toplevel; pass --repo=\"\" or --no-repo to leave empty)")
 	newCmd.Flags().BoolVar(&newNoRepo, "no-repo", false, "do not auto-detect or set a repo (use for non-coding work items)")
 	newCmd.Flags().IntVar(&newBudget, "budget", 0, "estimated token budget (integer; omit or 0 to leave unset)")
+	newCmd.Flags().StringVar(&newPrefix, "prefix", "", "override work item ID prefix for this call only (e.g. 'dr-'); not persisted")
 }
 
 // detectRepo returns the git toplevel of the current working directory, or ""
