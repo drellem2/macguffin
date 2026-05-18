@@ -2320,3 +2320,109 @@ func TestCLI_ListJSON_GroupedStatuses(t *testing.T) {
 		t.Errorf("expected items in both available and claimed, got statuses %v", statuses)
 	}
 }
+
+func TestCLI_Unarchive(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Create an item, claim it, mark done
+	cmd = exec.Command(bin, "new", "--type=task", "Revive me")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	cmd = exec.Command(bin, "claim", id)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg claim failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "done", id)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg done failed: %v\n%s", err, out)
+	}
+
+	// Archive (--days=0 archives even freshly done items)
+	cmd = exec.Command(bin, "archive", "--days=0")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg archive failed: %v\n%s", err, out)
+	}
+
+	// Verify the item is archived (not in default list)
+	cmd = exec.Command(bin, "list", "--status=available")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --status=available failed: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), id) {
+		t.Fatalf("item %s should not be in available before unarchive, got:\n%s", id, out)
+	}
+
+	// Unarchive
+	cmd = exec.Command(bin, "unarchive", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg unarchive failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "Unarchived "+id) {
+		t.Errorf("unarchive output should mention 'Unarchived %s', got %q", id, out)
+	}
+
+	// Verify the item is now available
+	cmd = exec.Command(bin, "list", "--status=available")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --status=available failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), id) {
+		t.Errorf("item %s should be in available after unarchive, got:\n%s", id, out)
+	}
+
+	// Unarchiving again should fail (no longer archived)
+	cmd = exec.Command(bin, "unarchive", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected mg unarchive to fail for non-archived item, got:\n%s", out)
+	}
+	if !strings.Contains(string(out), "not archived") {
+		t.Errorf("error should mention 'not archived', got %q", out)
+	}
+}
+
+func TestCLI_UnarchiveUnknownID(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	cmd = exec.Command(bin, "unarchive", "mg-nonexistent")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected mg unarchive to fail for unknown id, got:\n%s", out)
+	}
+	if !strings.Contains(string(out), "not found") {
+		t.Errorf("error should mention 'not found', got %q", out)
+	}
+}
