@@ -19,7 +19,7 @@ builds:
         goarch: arm64
 
 archives:
-  - format: binary
+  - formats: [binary]
     name_template: "mg_{{ .Os }}_{{ .Arch }}"
 
 checksum:
@@ -30,20 +30,25 @@ release:
     owner: drellem2
     name: macguffin
 
-brews:
-  - repository:
+homebrew_casks:
+  - name: mg
+    binaries:
+      - mg
+    repository:
       owner: drellem2
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    folder: Formula
-    name: mg
     commit_author:
       name: goreleaser
       email: goreleaser@users.noreply.github.com
     homepage: "https://github.com/drellem2/macguffin"
     description: "macguffin work-item tracker"
-    license: "MIT"
-    install: |
-      bin.install "mg"
-    test: |
-      assert_match version.to_s, shell_output("#{bin}/mg version 2>&1", 0)
+    # mg ships as an unsigned binary; strip the macOS quarantine bit on install
+    # so Gatekeeper doesn't block it. (Casks are normally signed; this is the
+    # documented goreleaser alternative for unsigned CLIs.)
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/mg"]
+          end

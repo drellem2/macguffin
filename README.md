@@ -25,9 +25,12 @@ query language. Just files, directories, and `rename(2)`.
 ### Homebrew (macOS and Linux)
 
 ```bash
-brew tap drellem2/macguffin
-brew install mg
+brew install --cask drellem2/tap/mg
 ```
+
+mg is distributed as a Homebrew **cask** (a pre-compiled binary). On macOS the
+cask install strips the Gatekeeper quarantine bit so the unsigned binary runs
+without a security prompt.
 
 ### Shell installer
 

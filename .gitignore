@@ -2,6 +2,9 @@
 /mg
 *.exe
 
+# GoReleaser build output
+/dist/
+
 # Runtime state (local only)
 .runtime/
 .beads/
