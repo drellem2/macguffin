@@ -232,6 +232,96 @@ func TestListAll_IncludesReadAndUnread(t *testing.T) {
 	}
 }
 
+func TestArchive_FromCur(t *testing.T) {
+	root := t.TempDir()
+
+	msgID, err := Send(root, "arch", "mayor", "Done", "body")
+	if err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+
+	// Read moves it to cur/ (read mail), the common archive case.
+	if _, err := Read(root, "arch", msgID); err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	msg, err := Archive(root, "arch", msgID)
+	if err != nil {
+		t.Fatalf("Archive failed: %v", err)
+	}
+	if msg.Subject != "Done" {
+		t.Errorf("Subject = %q, want %q", msg.Subject, "Done")
+	}
+
+	// Gone from new/ and cur/, present in archive/.
+	if entries, _ := os.ReadDir(filepath.Join(root, "arch", "cur")); len(entries) != 0 {
+		t.Errorf("expected 0 messages in cur/ after archive, got %d", len(entries))
+	}
+	if entries, _ := os.ReadDir(filepath.Join(root, "arch", "archive")); len(entries) != 1 {
+		t.Errorf("expected 1 message in archive/, got %d", len(entries))
+	}
+
+	// No longer surfaced by List or ListAll.
+	if msgs, _ := List(root, "arch"); len(msgs) != 0 {
+		t.Errorf("expected 0 unread after archive, got %d", len(msgs))
+	}
+	if msgs, _ := ListAll(root, "arch"); len(msgs) != 0 {
+		t.Errorf("expected 0 in ListAll after archive, got %d", len(msgs))
+	}
+}
+
+func TestArchive_FromNew(t *testing.T) {
+	root := t.TempDir()
+
+	msgID, err := Send(root, "arch", "mayor", "Unread", "body")
+	if err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+
+	// Archive an unread message directly from new/.
+	if _, err := Archive(root, "arch", msgID); err != nil {
+		t.Fatalf("Archive failed: %v", err)
+	}
+
+	if entries, _ := os.ReadDir(filepath.Join(root, "arch", "new")); len(entries) != 0 {
+		t.Errorf("expected 0 messages in new/ after archive, got %d", len(entries))
+	}
+	if entries, _ := os.ReadDir(filepath.Join(root, "arch", "archive")); len(entries) != 1 {
+		t.Errorf("expected 1 message in archive/, got %d", len(entries))
+	}
+}
+
+func TestArchive_Idempotent(t *testing.T) {
+	root := t.TempDir()
+
+	msgID, err := Send(root, "arch", "mayor", "Twice", "body")
+	if err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+
+	if _, err := Archive(root, "arch", msgID); err != nil {
+		t.Fatalf("first Archive failed: %v", err)
+	}
+	// Archiving again should succeed and return the already-archived message.
+	msg, err := Archive(root, "arch", msgID)
+	if err != nil {
+		t.Fatalf("second Archive failed: %v", err)
+	}
+	if msg.Subject != "Twice" {
+		t.Errorf("Subject = %q, want %q", msg.Subject, "Twice")
+	}
+}
+
+func TestArchive_NotFound(t *testing.T) {
+	root := t.TempDir()
+	if err := EnsureMaildir(root, "arch"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Archive(root, "arch", "nonexistent"); err == nil {
+		t.Error("expected error archiving nonexistent message")
+	}
+}
+
 func TestE2E_SendListReadLifecycle(t *testing.T) {
 	root := t.TempDir()
 

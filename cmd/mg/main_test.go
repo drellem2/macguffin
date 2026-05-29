@@ -1422,6 +1422,28 @@ func TestCLI_MailE2E(t *testing.T) {
 	if len(entries) != 1 {
 		t.Errorf("expected 1 file in cur/ after read, got %d", len(entries))
 	}
+
+	// Archive the (read) message
+	cmd = exec.Command(bin, "mail", "archive", "arch", msgID)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg mail archive failed: %v\n%s", err, out)
+	}
+	if got := string(out); !contains(got, "Archived") {
+		t.Errorf("archive output should confirm archival, got: %s", got)
+	}
+
+	// Verify: gone from cur/, present in archive/
+	entries, _ = os.ReadDir(curDir)
+	if len(entries) != 0 {
+		t.Errorf("expected 0 files in cur/ after archive, got %d", len(entries))
+	}
+	archiveDir := filepath.Join(tmpHome, ".macguffin", "mail", "arch", "archive")
+	entries, _ = os.ReadDir(archiveDir)
+	if len(entries) != 1 {
+		t.Errorf("expected 1 file in archive/ after archive, got %d", len(entries))
+	}
 }
 
 func contains(s, substr string) bool {

@@ -131,6 +131,39 @@ var mailReadCmd = &cobra.Command{
 	},
 }
 
+var mailArchiveCmd = &cobra.Command{
+	Use:   "archive AGENT/MSG-ID",
+	Short: "Archive a message (move it out of the active mailbox)",
+	Args:  cobra.RangeArgs(1, 2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		var agent, msgID string
+		if len(args) == 1 {
+			// agent/msgID format
+			parts := strings.SplitN(args[0], "/", 2)
+			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+				return fmt.Errorf("expected AGENT/MSG-ID format, got %q", args[0])
+			}
+			agent, msgID = parts[0], parts[1]
+		} else {
+			agent = args[0]
+			msgID = args[1]
+		}
+
+		mr, err := mailRoot()
+		if err != nil {
+			return err
+		}
+
+		msg, err := mail.Archive(mr, agent, msgID)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("Archived: %s/%s  (%s: %s)\n", agent, msg.ID, msg.From, msg.Subject)
+		return nil
+	},
+}
+
 func init() {
 	mailSendCmd.Flags().StringVar(&mailSendFrom, "from", "", "sender name (required)")
 	mailSendCmd.Flags().StringVar(&mailSendSubject, "subject", "", "message subject (required)")
@@ -141,4 +174,5 @@ func init() {
 	mailCmd.AddCommand(mailSendCmd)
 	mailCmd.AddCommand(mailListCmd)
 	mailCmd.AddCommand(mailReadCmd)
+	mailCmd.AddCommand(mailArchiveCmd)
 }

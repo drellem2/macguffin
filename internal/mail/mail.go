@@ -139,6 +139,50 @@ func Read(mailRoot, agent, msgID string) (*Message, error) {
 	return &msg, nil
 }
 
+// Archive moves a message by ID into archive/, removing it from the agent's
+// active mailbox (new/ and cur/). The message may be unread (in new/) or read
+// (in cur/); both are handled. If the message is already in archive/ it is
+// returned without error (idempotent). Mirrors the new/→cur/ Read pattern.
+func Archive(mailRoot, agent, msgID string) (*Message, error) {
+	newPath := filepath.Join(mailRoot, agent, "new", msgID)
+	curPath := filepath.Join(mailRoot, agent, "cur", msgID)
+	archiveDir := filepath.Join(mailRoot, agent, "archive")
+	archivePath := filepath.Join(archiveDir, msgID)
+
+	// Locate the message: prefer cur/ (read mail), then new/ (unread).
+	srcPath := ""
+	if _, err := os.Stat(curPath); err == nil {
+		srcPath = curPath
+	} else if _, err := os.Stat(newPath); err == nil {
+		srcPath = newPath
+	}
+
+	if srcPath == "" {
+		// Maybe it's already archived?
+		if msg, err := parseMessageFile(archivePath, msgID); err == nil {
+			msg.Read = true
+			return &msg, nil
+		}
+		return nil, fmt.Errorf("message %q not found for %s", msgID, agent)
+	}
+
+	msg, err := parseMessageFile(srcPath, msgID)
+	if err != nil {
+		return nil, fmt.Errorf("reading message %q: %w", msgID, err)
+	}
+	msg.Read = true
+
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		return nil, fmt.Errorf("creating archive/: %w", err)
+	}
+
+	if err := os.Rename(srcPath, archivePath); err != nil {
+		return nil, fmt.Errorf("moving to archive/: %w", err)
+	}
+
+	return &msg, nil
+}
+
 // parseMessageFile reads and parses a Maildir message file.
 func parseMessageFile(path, id string) (Message, error) {
 	data, err := os.ReadFile(path)
