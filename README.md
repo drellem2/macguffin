@@ -154,6 +154,23 @@ In practice this means a ticket assigned to `mayor`, a PM agent, or
 `human` will still typically be executed by a polecat once the assignee
 decides to dispatch it.
 
+### Repo metadata
+
+`mg new` records a `repo` breadcrumb on the work item — the code repository
+the item is about. By default it auto-detects this from the current git
+toplevel (`git rev-parse --show-toplevel`), so a developer filing from inside
+a project repo gets it filled in automatically.
+
+Auto-detection is **skipped under pogo automation** (when `POGO_PID` is set in
+the environment). A crew agent or polecat files from its own prompt/work
+directory, whose git toplevel is the agent's scratch dir — not the code repo
+the item concerns — so auto-detecting there would record a misleading path.
+Automated filers should pass `--repo=PATH` explicitly when the item targets a
+specific code repo.
+
+Override the default with `--repo=PATH`, or opt out entirely with `--no-repo`
+(or `--repo=""`).
+
 ## Project Structure
 
 ```

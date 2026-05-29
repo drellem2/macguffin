@@ -1246,6 +1246,78 @@ func TestCLI_NewNoRepo(t *testing.T) {
 	}
 }
 
+func TestCLI_NewRepoAutoDetectSkippedUnderAutomation(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+
+	// A git repo to run mg from, so auto-detection would otherwise pick up a
+	// non-empty toplevel. Under pogo automation this stands in for the agent's
+	// own prompt/scratch dir — not the code repo the item is about.
+	repoDir := t.TempDir()
+	if out, err := exec.Command("git", "-C", repoDir, "init").CombinedOutput(); err != nil {
+		t.Fatalf("git init failed: %v\n%s", err, out)
+	}
+
+	baseEnv := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = baseEnv
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	showRepo := func(t *testing.T, env []string, id string) string {
+		t.Helper()
+		cmd := exec.Command(bin, "show", id)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("mg show %s failed: %v\n%s", id, err, out)
+		}
+		return string(out)
+	}
+
+	// 1. Under automation (POGO_PID set), auto-detection is skipped: no repo.
+	cmd = exec.Command(bin, "new", "--type=task", "automation auto-detect")
+	cmd.Env = append(baseEnv, "POGO_PID=12345")
+	cmd.Dir = repoDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new under automation failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+	if got := showRepo(t, append(baseEnv, "POGO_PID=12345"), id); strings.Contains(got, repoDir) || strings.Contains(got, "Repo:") {
+		t.Errorf("auto-detection should be skipped under POGO_PID, but show output recorded a repo:\n%s", got)
+	}
+
+	// 2. Under automation, an explicit --repo is still honored.
+	cmd = exec.Command(bin, "new", "--type=task", "--repo=/explicit/code/repo", "automation explicit repo")
+	cmd.Env = append(baseEnv, "POGO_PID=12345")
+	cmd.Dir = repoDir
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new --repo under automation failed: %v\n%s", err, out)
+	}
+	id = strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+	if got := showRepo(t, append(baseEnv, "POGO_PID=12345"), id); !strings.Contains(got, "/explicit/code/repo") {
+		t.Errorf("explicit --repo should be honored under automation, got:\n%s", got)
+	}
+
+	// 3. Interactive use (no POGO_PID) still auto-detects the git toplevel.
+	cmd = exec.Command(bin, "new", "--type=task", "interactive auto-detect")
+	cmd.Env = baseEnv
+	cmd.Dir = repoDir
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new interactive failed: %v\n%s", err, out)
+	}
+	id = strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+	// macOS may resolve t.TempDir() via /private symlink; match on the basename.
+	if got := showRepo(t, baseEnv, id); !strings.Contains(got, filepath.Base(repoDir)) {
+		t.Errorf("interactive use should auto-detect repo %q, got:\n%s", repoDir, got)
+	}
+}
+
 func TestCLI_NewPrefix(t *testing.T) {
 	tmpHome := t.TempDir()
 	bin := buildBinary(t)

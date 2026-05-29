@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -96,7 +97,7 @@ optional internal hyphens, and must end in a hyphen.`,
 		case cmd.Flags().Changed("repo"):
 			repo = newRepo
 		default:
-			repo = detectRepo()
+			repo = autoDetectRepo()
 		}
 		if repo != "" {
 			opts = append(opts, workitem.WithRepo(repo))
@@ -165,10 +166,25 @@ func init() {
 	newCmd.Flags().StringVar(&newTags, "tags", "", "alias for --tag")
 	newCmd.Flags().StringVar(&newTitle, "title", "", "work item title (alternative to positional args)")
 	newCmd.Flags().StringVar(&newBody, "body", "", "work item body (markdown)")
-	newCmd.Flags().StringVar(&newRepo, "repo", "", "repo path (defaults to current git toplevel; pass --repo=\"\" or --no-repo to leave empty)")
+	newCmd.Flags().StringVar(&newRepo, "repo", "", "repo path (defaults to current git toplevel for interactive use; auto-detection is skipped under pogo automation, where POGO_PID is set — pass --repo=PATH explicitly there; --repo=\"\" or --no-repo leaves it empty)")
 	newCmd.Flags().BoolVar(&newNoRepo, "no-repo", false, "do not auto-detect or set a repo (use for non-coding work items)")
 	newCmd.Flags().IntVar(&newBudget, "budget", 0, "estimated token budget (integer; omit or 0 to leave unset)")
 	newCmd.Flags().StringVar(&newPrefix, "prefix", "", "override work item ID prefix for this call only (e.g. 'dr-'); not persisted")
+}
+
+// autoDetectRepo returns the repo path to auto-fill when neither --repo nor
+// --no-repo was given. For interactive (human) use it is the git toplevel of
+// the current working directory. Under pogo automation (POGO_PID set) it
+// returns "" instead: a crew agent or polecat files from its own prompt/work
+// directory, whose git toplevel is the agent's scratch dir — not the code repo
+// the item is actually about — so auto-detection there records a misleading
+// path (e.g. the mayor's prompt dir instead of the target repo). Automation
+// should pass --repo=PATH explicitly. See gh drellem2/macguffin#5 (ia-51a5).
+func autoDetectRepo() string {
+	if os.Getenv("POGO_PID") != "" {
+		return ""
+	}
+	return detectRepo()
 }
 
 // detectRepo returns the git toplevel of the current working directory, or ""
