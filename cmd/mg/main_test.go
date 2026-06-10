@@ -1004,6 +1004,97 @@ func TestCLI_TagDependsFlagAliases(t *testing.T) {
 	}
 }
 
+// TestCLI_RepeatedTagFlag covers gh drellem2/macguffin#10: passing --tag
+// multiple times must accumulate all values instead of silently keeping only
+// the last one. The comma-separated single-flag form must keep working too.
+func TestCLI_RepeatedTagFlag(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Repeated --tag should accumulate both values (the bug: only "bar" survived).
+	cmd = exec.Command(bin, "new", "--type=task", "--title=repeated", "--tag=foo", "--tag=bar")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new --tag --tag failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+
+	cmd = exec.Command(bin, "show", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "foo") {
+		t.Errorf("repeated --tag dropped 'foo' (gh#10 regression), got:\n%s", out)
+	}
+	if !strings.Contains(string(out), "bar") {
+		t.Errorf("repeated --tag dropped 'bar', got:\n%s", out)
+	}
+
+	// Mixing canonical --tag and its alias --tags should also accumulate.
+	cmd = exec.Command(bin, "new", "--type=task", "--title=mixed", "--tag=alpha", "--tags=beta")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new --tag --tags failed: %v\n%s", err, out)
+	}
+	id2 := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+	cmd = exec.Command(bin, "show", id2)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "alpha") || !strings.Contains(string(out), "beta") {
+		t.Errorf("mixed --tag/--tags should accumulate alpha+beta, got:\n%s", out)
+	}
+
+	// Backwards-compat: comma-separated single --tag still splits into two tags.
+	cmd = exec.Command(bin, "new", "--type=task", "--title=csv", "--tag=one,two")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new --tag=one,two failed: %v\n%s", err, out)
+	}
+	id3 := strings.TrimPrefix(strings.Split(string(out), ":")[0], "Created ")
+	cmd = exec.Command(bin, "show", id3)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "one") || !strings.Contains(string(out), "two") {
+		t.Errorf("comma-separated --tag should yield one+two, got:\n%s", out)
+	}
+
+	// mg edit --add-tags repeated should accumulate onto existing tags.
+	cmd = exec.Command(bin, "edit", id, "--add-tags=baz", "--add-tags=qux")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg edit --add-tags repeated failed: %v\n%s", err, out)
+	}
+	cmd = exec.Command(bin, "show", id)
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg show failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{"foo", "bar", "baz", "qux"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("expected tag %q after repeated --add-tags, got:\n%s", want, out)
+		}
+	}
+}
+
 func TestCLI_ClaimWithPIDFlag(t *testing.T) {
 	tmpHome := t.TempDir()
 	bin := buildBinary(t)

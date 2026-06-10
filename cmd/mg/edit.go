@@ -7,6 +7,7 @@ import (
 	"github.com/drellem2/macguffin/internal/workitem"
 	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var (
@@ -14,12 +15,12 @@ var (
 	editBody       string
 	editType       string
 	editRepo       string
-	editDepends    string
-	editAddDepends string
-	editRmDepends  string
-	editTags       string
-	editAddTags    string
-	editRmTags     string
+	editDepends    []string
+	editAddDepends []string
+	editRmDepends  []string
+	editTags       []string
+	editAddTags    []string
+	editRmTags     []string
 	editAssignee   string
 	editPriority   string
 	editBudget     int
@@ -68,27 +69,27 @@ decides whether to dispatch the work, hold it, or close it.`,
 			changed = true
 		}
 		if cmd.Flags().Changed("depends") || cmd.Flags().Changed("depend") {
-			fields.Depends = splitCSV(editDepends)
+			fields.Depends = normSlice(editDepends)
 			changed = true
 		}
 		if cmd.Flags().Changed("add-depends") {
-			fields.AddDepends = splitCSV(editAddDepends)
+			fields.AddDepends = normSlice(editAddDepends)
 			changed = true
 		}
 		if cmd.Flags().Changed("rm-depends") {
-			fields.RmDepends = splitCSV(editRmDepends)
+			fields.RmDepends = normSlice(editRmDepends)
 			changed = true
 		}
 		if cmd.Flags().Changed("tags") || cmd.Flags().Changed("tag") {
-			fields.Tags = splitCSV(editTags)
+			fields.Tags = normSlice(editTags)
 			changed = true
 		}
 		if cmd.Flags().Changed("add-tags") {
-			fields.AddTags = splitCSV(editAddTags)
+			fields.AddTags = normSlice(editAddTags)
 			changed = true
 		}
 		if cmd.Flags().Changed("rm-tags") {
-			fields.RmTags = splitCSV(editRmTags)
+			fields.RmTags = normSlice(editRmTags)
 			changed = true
 		}
 		if cmd.Flags().Changed("assignee") {
@@ -131,33 +132,38 @@ func init() {
 	editCmd.Flags().StringVar(&editBody, "body", "", "new body (markdown)")
 	editCmd.Flags().StringVar(&editType, "type", "", "new type")
 	editCmd.Flags().StringVar(&editRepo, "repo", "", "new repo path")
-	editCmd.Flags().StringVar(&editDepends, "depends", "", "replace all dependencies (comma-separated)")
-	editCmd.Flags().StringVar(&editDepends, "depend", "", "alias for --depends")
-	editCmd.Flags().StringVar(&editAddDepends, "add-depends", "", "add dependencies (comma-separated)")
-	editCmd.Flags().StringVar(&editRmDepends, "rm-depends", "", "remove dependencies (comma-separated)")
-	editCmd.Flags().StringVar(&editTags, "tags", "", "replace all tags (comma-separated)")
-	editCmd.Flags().StringVar(&editTags, "tag", "", "alias for --tags")
-	editCmd.Flags().StringVar(&editAddTags, "add-tags", "", "add tags (comma-separated)")
-	editCmd.Flags().StringVar(&editRmTags, "rm-tags", "", "remove tags (comma-separated)")
+	stringSliceVarWithAlias(editCmd.Flags(), &editDepends, "depends", "depend", "replace all dependencies (comma-separated or repeated)")
+	editCmd.Flags().StringSliceVar(&editAddDepends, "add-depends", nil, "add dependencies (comma-separated or repeated)")
+	editCmd.Flags().StringSliceVar(&editRmDepends, "rm-depends", nil, "remove dependencies (comma-separated or repeated)")
+	stringSliceVarWithAlias(editCmd.Flags(), &editTags, "tags", "tag", "replace all tags (comma-separated or repeated)")
+	editCmd.Flags().StringSliceVar(&editAddTags, "add-tags", nil, "add tags (comma-separated or repeated)")
+	editCmd.Flags().StringSliceVar(&editRmTags, "rm-tags", nil, "remove tags (comma-separated or repeated)")
 	editCmd.Flags().StringVar(&editAssignee, "assignee", "", "person to assign this item to")
 	editCmd.Flags().StringVar(&editPriority, "priority", "", "priority level: low, medium, high")
 	editCmd.Flags().IntVar(&editBudget, "budget", 0, "estimated token budget (integer; --budget=0 unsets)")
 }
 
-// splitCSV splits a comma-separated string into trimmed non-empty parts.
-func splitCSV(s string) []string {
-	if s == "" {
-		return []string{}
-	}
-	var result []string
-	for _, part := range strings.Split(s, ",") {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			result = append(result, part)
+// normSlice trims whitespace and drops empty entries from a parsed string-slice
+// flag value, returning a non-nil slice. pflag's StringSlice already splits on
+// commas and accumulates across repeated flag uses; this just normalizes the
+// resulting elements (e.g. "foo, bar" -> ["foo","bar"]).
+func normSlice(items []string) []string {
+	result := []string{}
+	for _, it := range items {
+		it = strings.TrimSpace(it)
+		if it != "" {
+			result = append(result, it)
 		}
 	}
-	if result == nil {
-		return []string{}
-	}
 	return result
+}
+
+// stringSliceVarWithAlias registers a repeatable, comma-splitting string-slice
+// flag under name, plus alias pointing at the SAME underlying value. Sharing the
+// value (rather than a second StringSliceVar binding) means repeated and mixed
+// uses accumulate correctly — e.g. "--tag=foo --tags=bar" yields ["foo","bar"]
+// instead of silently keeping only the last one.
+func stringSliceVarWithAlias(fs *pflag.FlagSet, p *[]string, name, alias, usage string) {
+	fs.StringSliceVar(p, name, nil, usage)
+	fs.Var(fs.Lookup(name).Value, alias, "alias for --"+name)
 }

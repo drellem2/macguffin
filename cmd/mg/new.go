@@ -14,11 +14,11 @@ import (
 
 var (
 	newType     string
-	newDepends  string
+	newDepends  []string
 	newAssignee string
 	newBranch   string
 	newPriority string
-	newTags     string
+	newTags     []string
 	newTitle    string
 	newBody     string
 	newRepo     string
@@ -63,15 +63,7 @@ optional internal hyphens, and must end in a hyphen.`,
 			return fmt.Errorf("title is required (use --title flag or positional arguments)")
 		}
 
-		var deps []string
-		if newDepends != "" {
-			for _, d := range strings.Split(newDepends, ",") {
-				d = strings.TrimSpace(d)
-				if d != "" {
-					deps = append(deps, d)
-				}
-			}
-		}
+		deps := normSlice(newDepends)
 
 		root, err := workspace.DefaultRoot()
 		if err != nil {
@@ -120,14 +112,7 @@ optional internal hyphens, and must end in a hyphen.`,
 				return fmt.Errorf("invalid priority %q: must be low, medium, or high", priority)
 			}
 		}
-		if newTags != "" {
-			var tags []string
-			for _, t := range strings.Split(newTags, ",") {
-				t = strings.TrimSpace(t)
-				if t != "" {
-					tags = append(tags, t)
-				}
-			}
+		if tags := normSlice(newTags); len(tags) > 0 {
 			opts = append(opts, workitem.WithTags(tags))
 		}
 		if newBody != "" {
@@ -157,13 +142,11 @@ optional internal hyphens, and must end in a hyphen.`,
 
 func init() {
 	newCmd.Flags().StringVar(&newType, "type", "task", "work item type")
-	newCmd.Flags().StringVar(&newDepends, "depends", "", "comma-separated list of dependency IDs")
-	newCmd.Flags().StringVar(&newDepends, "depend", "", "alias for --depends")
+	stringSliceVarWithAlias(newCmd.Flags(), &newDepends, "depends", "depend", "dependency IDs (comma-separated or repeated)")
 	newCmd.Flags().StringVar(&newAssignee, "assignee", "", "person to assign this item to")
 	newCmd.Flags().StringVar(&newBranch, "branch", "", "branch name for this work item")
 	newCmd.Flags().StringVar(&newPriority, "priority", "", "priority level: low, medium, high (default: medium)")
-	newCmd.Flags().StringVar(&newTags, "tag", "", "comma-separated list of tags")
-	newCmd.Flags().StringVar(&newTags, "tags", "", "alias for --tag")
+	stringSliceVarWithAlias(newCmd.Flags(), &newTags, "tag", "tags", "tags (comma-separated or repeated)")
 	newCmd.Flags().StringVar(&newTitle, "title", "", "work item title (alternative to positional args)")
 	newCmd.Flags().StringVar(&newBody, "body", "", "work item body (markdown)")
 	newCmd.Flags().StringVar(&newRepo, "repo", "", "repo path (defaults to current git toplevel for interactive use; auto-detection is skipped under pogo automation, where POGO_PID is set — pass --repo=PATH explicitly there; --repo=\"\" or --no-repo leaves it empty)")
