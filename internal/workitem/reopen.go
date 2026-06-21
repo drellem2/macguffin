@@ -17,9 +17,9 @@ func Reopen(root, id string) (*Item, error) {
 	// rename(2) is atomic on local filesystems.
 	if err := os.Rename(src, dst); err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("work item %s not found in done/", id)
+			return nil, explainReopenFailure(root, id)
 		}
-		return nil, fmt.Errorf("reopening %s: %w", id, err)
+		return nil, fmt.Errorf("%s: could not be reopened: %s", id, fsErrText(err))
 	}
 
 	item, err := readFile(dst)

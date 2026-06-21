@@ -19,11 +19,10 @@ import (
 func Done(root, id string, resultJSON json.RawMessage) (*Item, []*Item, error) {
 	claimedDir := filepath.Join(root, "work", "claimed")
 
-	// Find the claimed file (has PID suffix: <id>.md.<pid>)
-	entries, err := os.ReadDir(claimedDir)
-	if err != nil {
-		return nil, nil, fmt.Errorf("reading claimed/: %w", err)
-	}
+	// Find the claimed file (has PID suffix: <id>.md.<pid>). A read failure
+	// (e.g. claimed/ missing) is treated the same as "not present" — the
+	// diagnosis below reports where the item actually is.
+	entries, _ := os.ReadDir(claimedDir)
 
 	var srcPath, srcName string
 	for _, e := range entries {
@@ -35,7 +34,7 @@ func Done(root, id string, resultJSON json.RawMessage) (*Item, []*Item, error) {
 	}
 
 	if srcPath == "" {
-		return nil, nil, fmt.Errorf("work item %s not found in claimed/", id)
+		return nil, nil, explainDoneFailure(root, id)
 	}
 
 	// Extract the claim-holder PID from the filename (<id>.md.<pid>) for the event.
@@ -50,7 +49,7 @@ func Done(root, id string, resultJSON json.RawMessage) (*Item, []*Item, error) {
 
 	// rename(2) is atomic on local filesystems.
 	if err := os.Rename(srcPath, dstPath); err != nil {
-		return nil, nil, fmt.Errorf("completing %s: %w", id, err)
+		return nil, nil, fmt.Errorf("%s: could not be completed: %s", id, fsErrText(err))
 	}
 
 	// Write result sidecar if provided
@@ -120,7 +119,7 @@ func Status(root, id string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("work item %s not found", id)
+	return "", errNoSuchItem(id)
 }
 
 // ListByStatus returns all work items in the given status directory.

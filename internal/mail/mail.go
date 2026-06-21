@@ -1,13 +1,31 @@
 package mail
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 )
+
+// fsErrText extracts the underlying cause from an os.Rename/os.WriteFile style
+// error (an *os.LinkError or *fs.PathError) WITHOUT the operation name or the
+// file paths it embeds — those leak the maildir layout. For other errors it
+// returns the error's own text.
+func fsErrText(err error) string {
+	var le *os.LinkError
+	if errors.As(err, &le) {
+		return le.Err.Error()
+	}
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err.Error()
+	}
+	return err.Error()
+}
 
 // Message represents a mail message in Maildir format.
 type Message struct {
@@ -34,7 +52,7 @@ func EnsureMaildir(mailRoot, agent string) error {
 // atomic delivery: write to tmp/, then rename to new/.
 func Send(mailRoot, recipient, from, subject, body string) (string, error) {
 	if err := EnsureMaildir(mailRoot, recipient); err != nil {
-		return "", err
+		return "", fmt.Errorf("could not deliver message to %s: %s", recipient, fsErrText(err))
 	}
 
 	msgID := fmt.Sprintf("%d.%d.%d", time.Now().UnixNano(), os.Getpid(), time.Now().UnixNano()%10000)
@@ -46,12 +64,12 @@ func Send(mailRoot, recipient, from, subject, body string) (string, error) {
 	newPath := filepath.Join(mailRoot, recipient, "new", msgID)
 
 	if err := os.WriteFile(tmpPath, []byte(content), 0o644); err != nil {
-		return "", fmt.Errorf("writing to tmp: %w", err)
+		return "", fmt.Errorf("could not deliver message to %s: %s", recipient, fsErrText(err))
 	}
 
 	if err := os.Rename(tmpPath, newPath); err != nil {
 		os.Remove(tmpPath) // best-effort cleanup
-		return "", fmt.Errorf("atomic move tmp→new: %w", err)
+		return "", fmt.Errorf("could not deliver message to %s: %s", recipient, fsErrText(err))
 	}
 
 	return msgID, nil

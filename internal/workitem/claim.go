@@ -23,7 +23,11 @@ func Claim(root, id string, pid int) (*Item, error) {
 	// rename(2) is atomic on local filesystems.
 	// If two processes race, exactly one succeeds; the other gets ENOENT.
 	if err := os.Rename(src, dst); err != nil {
-		return nil, fmt.Errorf("claiming %s: %w", id, err)
+		if os.IsNotExist(err) {
+			// The source wasn't in available/ — diagnose where it really is.
+			return nil, explainClaimFailure(root, id)
+		}
+		return nil, fmt.Errorf("%s: could not be claimed: %s", id, fsErrText(err))
 	}
 
 	item, err := readFile(dst)

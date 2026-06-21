@@ -25,10 +25,9 @@ func Unclaim(root, id string) (*UnclaimResult, error) {
 	claimedDir := filepath.Join(root, "work", "claimed")
 	availableDir := filepath.Join(root, "work", "available")
 
-	entries, err := os.ReadDir(claimedDir)
-	if err != nil {
-		return nil, fmt.Errorf("reading claimed/: %w", err)
-	}
+	// A read failure (e.g. claimed/ missing) is treated the same as "not
+	// present" — the diagnosis below reports where the item actually is.
+	entries, _ := os.ReadDir(claimedDir)
 
 	var srcName string
 	for _, e := range entries {
@@ -40,7 +39,7 @@ func Unclaim(root, id string) (*UnclaimResult, error) {
 	}
 
 	if srcName == "" {
-		return nil, fmt.Errorf("work item %s not found in claimed/", id)
+		return nil, explainUnclaimFailure(root, id)
 	}
 
 	pid := parseClaimPID(srcName)
@@ -49,7 +48,7 @@ func Unclaim(root, id string) (*UnclaimResult, error) {
 	dst := filepath.Join(availableDir, id+".md")
 
 	if err := os.Rename(src, dst); err != nil {
-		return nil, fmt.Errorf("releasing claim on %s: %w", id, err)
+		return nil, fmt.Errorf("%s: could not release claim: %s", id, fsErrText(err))
 	}
 
 	kvs := map[string]string{

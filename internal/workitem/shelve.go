@@ -29,7 +29,7 @@ func Shelve(root, id string) ([]*Item, error) {
 
 	dst := filepath.Join(root, "work", "shelved", id+".md")
 	if err := os.Rename(path, dst); err != nil {
-		return nil, fmt.Errorf("shelving %s: %w", id, err)
+		return nil, fmt.Errorf("%s: could not be shelved: %s", id, fsErrText(err))
 	}
 
 	item, err := readFile(dst)
@@ -116,7 +116,7 @@ func Unshelve(root, id string) ([]*Item, error) {
 	item, err := readFile(src)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("work item %s not found in shelved/", id)
+			return nil, explainUnshelveFailure(root, id)
 		}
 		return nil, err
 	}
@@ -134,7 +134,7 @@ func Unshelve(root, id string) ([]*Item, error) {
 
 	dst := filepath.Join(root, "work", subdir, id+".md")
 	if err := os.Rename(src, dst); err != nil {
-		return nil, fmt.Errorf("unshelving %s: %w", id, err)
+		return nil, fmt.Errorf("%s: could not be unshelved: %s", id, fsErrText(err))
 	}
 
 	event.Emit(root, "work.unshelve", map[string]string{

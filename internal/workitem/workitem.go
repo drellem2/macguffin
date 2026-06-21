@@ -125,7 +125,7 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 	content := Render(item)
 
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return nil, fmt.Errorf("writing work item: %w", err)
+		return nil, fmt.Errorf("could not create work item: %s", fsErrText(err))
 	}
 
 	event.Emit(root, "work.created", map[string]string{
@@ -226,7 +226,7 @@ func FindPath(root, id string) (path string, status string, err error) {
 		}
 	}
 
-	return "", "", fmt.Errorf("work item %s not found", id)
+	return "", "", errNoSuchItem(id)
 }
 
 // Read loads a work item by ID, searching across available/, claimed/, done/, pending/, and archive/.
@@ -274,7 +274,7 @@ func Read(root, id string) (*Item, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("work item %s not found", id)
+	return nil, errNoSuchItem(id)
 }
 
 // List returns all work items in available/.

@@ -109,7 +109,7 @@ func Update(root, id string, fields UpdateField) (*Item, error) {
 
 	content := Render(item)
 	if err := os.WriteFile(itemPath, []byte(content), 0o644); err != nil {
-		return nil, fmt.Errorf("writing work item: %w", err)
+		return nil, fmt.Errorf("%s: could not be saved: %s", id, fsErrText(err))
 	}
 
 	// After dependency changes, move items between available/ and pending/
@@ -125,7 +125,7 @@ func Update(root, id string, fields UpdateField) (*Item, error) {
 			if !allDepsMet(item.Depends, doneIDs) {
 				dst := filepath.Join(root, "work", "pending", filepath.Base(itemPath))
 				if err := os.Rename(itemPath, dst); err != nil {
-					return nil, fmt.Errorf("moving %s to pending: %w", id, err)
+					return nil, fmt.Errorf("%s: saved, but could not be moved to pending: %s", id, fsErrText(err))
 				}
 			}
 		} else if status == "pending" {
@@ -137,7 +137,7 @@ func Update(root, id string, fields UpdateField) (*Item, error) {
 			if len(item.Depends) == 0 || allDepsMet(item.Depends, doneIDs) {
 				dst := filepath.Join(root, "work", "available", filepath.Base(itemPath))
 				if err := os.Rename(itemPath, dst); err != nil {
-					return nil, fmt.Errorf("promoting %s to available: %w", id, err)
+					return nil, fmt.Errorf("%s: saved, but could not be promoted to available: %s", id, fsErrText(err))
 				}
 			}
 		}

@@ -113,8 +113,8 @@ func TestUnarchiveNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nonexistent item")
 	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("error = %q, want mention of not found", err)
+	if !strings.Contains(err.Error(), "no such work item") {
+		t.Errorf("error = %q, want mention of no such work item", err)
 	}
 }
 

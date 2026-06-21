@@ -2607,7 +2607,7 @@ func TestCLI_UnarchiveUnknownID(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected mg unarchive to fail for unknown id, got:\n%s", out)
 	}
-	if !strings.Contains(string(out), "not found") {
-		t.Errorf("error should mention 'not found', got %q", out)
+	if !strings.Contains(string(out), "no such work item") {
+		t.Errorf("error should mention 'no such work item', got %q", out)
 	}
 }

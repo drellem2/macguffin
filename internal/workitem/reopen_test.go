@@ -65,8 +65,8 @@ func TestReopenNotInDone(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for item not in done/")
 	}
-	if !strings.Contains(err.Error(), "not found in done/") {
-		t.Errorf("error = %q, want mention of done/", err)
+	if !strings.Contains(err.Error(), "not done") {
+		t.Errorf("error = %q, want mention of not done", err)
 	}
 }
 
