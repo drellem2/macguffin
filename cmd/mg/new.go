@@ -162,7 +162,8 @@ func init() {
 // directory, whose git toplevel is the agent's scratch dir — not the code repo
 // the item is actually about — so auto-detection there records a misleading
 // path (e.g. the mayor's prompt dir instead of the target repo). Automation
-// should pass --repo=PATH explicitly. See gh drellem2/macguffin#5 (ia-51a5).
+// should pass --repo=PATH explicitly. See gh drellem2/macguffin#5 (ia-51a5),
+// superseded by #9 (mg-1866) which re-confirmed this end to end.
 func autoDetectRepo() string {
 	if os.Getenv("POGO_PID") != "" {
 		return ""

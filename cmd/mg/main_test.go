@@ -1381,6 +1381,10 @@ func TestCLI_NewRepoAutoDetectSkippedUnderAutomation(t *testing.T) {
 	tmpHome := t.TempDir()
 	bin := buildBinary(t)
 
+	// Regression guard for gh drellem2/macguffin#9 (mg-1866), which superseded
+	// #5: under pogo automation, mg new must not auto-fill --repo from the
+	// filer's PWD (the agent's prompt/scratch dir), but leave it empty.
+	//
 	// A git repo to run mg from, so auto-detection would otherwise pick up a
 	// non-empty toplevel. Under pogo automation this stands in for the agent's
 	// own prompt/scratch dir — not the code repo the item is about.
