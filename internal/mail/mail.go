@@ -97,6 +97,11 @@ func ListAll(mailRoot, agent string) ([]Message, error) {
 	return msgs, nil
 }
 
+// ListArchived returns all archived messages (in archive/) for the given agent.
+func ListArchived(mailRoot, agent string) ([]Message, error) {
+	return listDir(mailRoot, agent, "archive", true)
+}
+
 func listDir(mailRoot, agent, subdir string, read bool) ([]Message, error) {
 	dir := filepath.Join(mailRoot, agent, subdir)
 	entries, err := os.ReadDir(dir)

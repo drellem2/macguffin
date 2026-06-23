@@ -24,10 +24,11 @@ var mailCmd = &cobra.Command{
 }
 
 var (
-	mailSendFrom    string
-	mailSendSubject string
-	mailSendBody    string
-	mailListAll     bool
+	mailSendFrom     string
+	mailSendSubject  string
+	mailSendBody     string
+	mailListAll      bool
+	mailListArchived bool
 )
 
 var mailSendCmd = &cobra.Command{
@@ -68,10 +69,17 @@ var mailListCmd = &cobra.Command{
 			return err
 		}
 
+		if mailListArchived && mailListAll {
+			return fmt.Errorf("--archived and --all are mutually exclusive")
+		}
+
 		var msgs []mail.Message
-		if mailListAll {
+		switch {
+		case mailListArchived:
+			msgs, err = mail.ListArchived(mr, agent)
+		case mailListAll:
 			msgs, err = mail.ListAll(mr, agent)
-		} else {
+		default:
 			msgs, err = mail.List(mr, agent)
 		}
 		if err != nil {
@@ -79,9 +87,12 @@ var mailListCmd = &cobra.Command{
 		}
 
 		if len(msgs) == 0 {
-			if mailListAll {
+			switch {
+			case mailListArchived:
+				fmt.Printf("No archived messages for %s\n", agent)
+			case mailListAll:
 				fmt.Printf("No messages for %s\n", agent)
-			} else {
+			default:
 				fmt.Printf("No unread messages for %s\n", agent)
 			}
 			return nil
@@ -170,6 +181,7 @@ func init() {
 	mailSendCmd.Flags().StringVar(&mailSendBody, "body", "", "message body (required)")
 
 	mailListCmd.Flags().BoolVarP(&mailListAll, "all", "a", false, "include read messages from cur/")
+	mailListCmd.Flags().BoolVar(&mailListArchived, "archived", false, "list archived messages instead of the active mailbox")
 
 	mailCmd.AddCommand(mailSendCmd)
 	mailCmd.AddCommand(mailListCmd)

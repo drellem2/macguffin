@@ -1647,6 +1647,28 @@ func TestCLI_MailE2E(t *testing.T) {
 	if len(entries) != 1 {
 		t.Errorf("expected 1 file in archive/ after archive, got %d", len(entries))
 	}
+
+	// Default list (and --all) should NOT show the archived message.
+	cmd = exec.Command(bin, "mail", "list", "arch", "--all")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg mail list --all failed: %v\n%s", err, out)
+	}
+	if got := string(out); contains(got, "Review needed") {
+		t.Errorf("list --all should not show archived message, got: %s", got)
+	}
+
+	// --archived SHOULD show it.
+	cmd = exec.Command(bin, "mail", "list", "arch", "--archived")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg mail list --archived failed: %v\n%s", err, out)
+	}
+	if got := string(out); !contains(got, "Review needed") {
+		t.Errorf("list --archived should show archived message, got: %s", got)
+	}
 }
 
 func contains(s, substr string) bool {

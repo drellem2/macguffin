@@ -110,7 +110,7 @@ mg log                 # view snapshot history
 | `mg unarchive ID` | Restore an archived work item back to `available/`. |
 | `mg unclaim ID` | Release a claim, returning the work item to `available/`. |
 | `mg schedule` | Promote pending items whose dependencies are met. |
-| `mg mail send\|list\|read\|archive` | Maildir-style messaging between agents. `archive AGENT/MSG-ID` moves a message out of the active mailbox. |
+| `mg mail send\|list\|read\|archive` | Maildir-style messaging between agents. `archive AGENT/MSG-ID` moves a message out of the active mailbox; `list AGENT --archived` inspects archived messages. |
 | `mg event append <type> [--key=value ...]` | Append a structured event to `events.jsonl`. |
 | `mg event list [--type=T] [--since=TS] [--tail=N]` | List events with optional filtering. |
 | `mg flow [--live] [--repo=P] [--blocked-after=D]` | Per-status flow view: throughput, median age, bottleneck, blocked chains. |

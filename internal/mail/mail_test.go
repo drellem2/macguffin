@@ -322,6 +322,44 @@ func TestArchive_NotFound(t *testing.T) {
 	}
 }
 
+func TestListArchived(t *testing.T) {
+	root := t.TempDir()
+
+	// No archive/ dir yet → empty, no error.
+	if msgs, err := ListArchived(root, "arch"); err != nil {
+		t.Fatalf("ListArchived on empty mailbox failed: %v", err)
+	} else if len(msgs) != 0 {
+		t.Errorf("expected 0 archived messages, got %d", len(msgs))
+	}
+
+	msgID, err := Send(root, "arch", "mayor", "Stale", "body")
+	if err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	if _, err := Archive(root, "arch", msgID); err != nil {
+		t.Fatalf("Archive failed: %v", err)
+	}
+
+	msgs, err := ListArchived(root, "arch")
+	if err != nil {
+		t.Fatalf("ListArchived failed: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 archived message, got %d", len(msgs))
+	}
+	if msgs[0].Subject != "Stale" {
+		t.Errorf("Subject = %q, want %q", msgs[0].Subject, "Stale")
+	}
+	if !msgs[0].Read {
+		t.Errorf("archived message should be marked read")
+	}
+
+	// Archived mail must not leak into the active-mailbox listings.
+	if active, _ := ListAll(root, "arch"); len(active) != 0 {
+		t.Errorf("expected 0 messages in ListAll, got %d", len(active))
+	}
+}
+
 func TestE2E_SendListReadLifecycle(t *testing.T) {
 	root := t.TempDir()
 
