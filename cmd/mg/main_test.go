@@ -1095,6 +1095,46 @@ func TestCLI_RepeatedTagFlag(t *testing.T) {
 	}
 }
 
+// Repeated --depends must accumulate the same way repeated --tag does (gh#10
+// acceptance: "Same for --depends"). The bug dropped all but the last value.
+func TestCLI_RepeatedDependsFlag(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	// Three repeated --depends should all land on the item.
+	cmd = exec.Command(bin, "new", "--type=task", "--title=deps",
+		"--depends=a", "--depends=b", "--depends=c")
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new repeated --depends failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{"a", "b", "c"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("repeated --depends dropped %q (gh#10), got:\n%s", want, out)
+		}
+	}
+
+	// Mixing canonical --depends and its alias --depend should also accumulate.
+	cmd = exec.Command(bin, "new", "--type=task", "--title=mixeddeps",
+		"--depends=x", "--depend=y")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg new --depends --depend failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "x") || !strings.Contains(string(out), "y") {
+		t.Errorf("mixed --depends/--depend should accumulate x+y, got:\n%s", out)
+	}
+}
+
 func TestCLI_ClaimWithPIDFlag(t *testing.T) {
 	tmpHome := t.TempDir()
 	bin := buildBinary(t)
