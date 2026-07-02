@@ -187,4 +187,4 @@ internal/
 
 ## License
 
-See repository for license details.
+Licensed under the GNU General Public License v3.0 — see [LICENSE](LICENSE).
