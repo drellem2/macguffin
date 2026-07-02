@@ -87,6 +87,11 @@ optimization that never consumes.
 
 ## Observability hooks (mg changes, this repo)
 
+> **Status:** the first two hooks shipped as mg-9696 — events are named
+> `mail.sent` / `mail.read` / `mail.archived` / `mail.malformed`
+> (dot-style, matching the existing `work.*` types). The audit verb
+> remains unimplemented.
+
 Independent of the bridge, mg itself should stop being blind:
 
 - `event.Emit` on mail send/read/archive (package exists, unused by

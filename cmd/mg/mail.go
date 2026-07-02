@@ -74,13 +74,14 @@ var mailListCmd = &cobra.Command{
 		}
 
 		var msgs []mail.Message
+		var malformed int
 		switch {
 		case mailListArchived:
-			msgs, err = mail.ListArchived(mr, agent)
+			msgs, malformed, err = mail.ListArchived(mr, agent)
 		case mailListAll:
-			msgs, err = mail.ListAll(mr, agent)
+			msgs, malformed, err = mail.ListAll(mr, agent)
 		default:
-			msgs, err = mail.List(mr, agent)
+			msgs, malformed, err = mail.List(mr, agent)
 		}
 		if err != nil {
 			return err
@@ -95,15 +96,18 @@ var mailListCmd = &cobra.Command{
 			default:
 				fmt.Printf("No unread messages for %s\n", agent)
 			}
-			return nil
+		} else {
+			for _, m := range msgs {
+				status := "●"
+				if m.Read {
+					status = " "
+				}
+				fmt.Printf("  %s %s/%s  %-12s  %s\n", status, agent, m.ID, m.From, m.Subject)
+			}
 		}
 
-		for _, m := range msgs {
-			status := "●"
-			if m.Read {
-				status = " "
-			}
-			fmt.Printf("  %s %s/%s  %-12s  %s\n", status, agent, m.ID, m.From, m.Subject)
+		if malformed > 0 {
+			fmt.Printf("warning: %d malformed message(s) skipped for %s (see stderr for details)\n", malformed, agent)
 		}
 		return nil
 	},

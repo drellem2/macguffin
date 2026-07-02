@@ -1,11 +1,31 @@
 package mail
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/drellem2/macguffin/internal/event"
 )
+
+// eventTestRoots returns a workspace root and its mail root laid out the way
+// mg does it (<workspace>/mail), so mail events land in <workspace>/events.jsonl.
+func eventTestRoots(t *testing.T) (workRoot, mailRoot string) {
+	t.Helper()
+	workRoot = t.TempDir()
+	return workRoot, filepath.Join(workRoot, "mail")
+}
+
+func eventsOfType(t *testing.T, workRoot, eventType string) []event.Entry {
+	t.Helper()
+	entries, err := event.List(workRoot, event.ListOpts{Type: eventType})
+	if err != nil {
+		t.Fatalf("listing %s events: %v", eventType, err)
+	}
+	return entries
+}
 
 func TestEnsureMaildir(t *testing.T) {
 	root := t.TempDir()
@@ -79,7 +99,7 @@ func TestList_ReturnsUnreadMessages(t *testing.T) {
 		t.Fatalf("Send 2 failed: %v", err)
 	}
 
-	msgs, err := List(root, "arch")
+	msgs, _, err := List(root, "arch")
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
 	}
@@ -91,7 +111,7 @@ func TestList_ReturnsUnreadMessages(t *testing.T) {
 
 func TestList_EmptyMailbox(t *testing.T) {
 	root := t.TempDir()
-	msgs, err := List(root, "nobody")
+	msgs, _, err := List(root, "nobody")
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
 	}
@@ -197,7 +217,7 @@ func TestListAll_IncludesReadAndUnread(t *testing.T) {
 	}
 
 	// List (unread only) should return 1
-	unread, err := List(root, "arch")
+	unread, _, err := List(root, "arch")
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
 	}
@@ -206,7 +226,7 @@ func TestListAll_IncludesReadAndUnread(t *testing.T) {
 	}
 
 	// ListAll should return 2
-	all, err := ListAll(root, "arch")
+	all, _, err := ListAll(root, "arch")
 	if err != nil {
 		t.Fatalf("ListAll failed: %v", err)
 	}
@@ -262,10 +282,10 @@ func TestArchive_FromCur(t *testing.T) {
 	}
 
 	// No longer surfaced by List or ListAll.
-	if msgs, _ := List(root, "arch"); len(msgs) != 0 {
+	if msgs, _, _ := List(root, "arch"); len(msgs) != 0 {
 		t.Errorf("expected 0 unread after archive, got %d", len(msgs))
 	}
-	if msgs, _ := ListAll(root, "arch"); len(msgs) != 0 {
+	if msgs, _, _ := ListAll(root, "arch"); len(msgs) != 0 {
 		t.Errorf("expected 0 in ListAll after archive, got %d", len(msgs))
 	}
 }
@@ -326,7 +346,7 @@ func TestListArchived(t *testing.T) {
 	root := t.TempDir()
 
 	// No archive/ dir yet → empty, no error.
-	if msgs, err := ListArchived(root, "arch"); err != nil {
+	if msgs, _, err := ListArchived(root, "arch"); err != nil {
 		t.Fatalf("ListArchived on empty mailbox failed: %v", err)
 	} else if len(msgs) != 0 {
 		t.Errorf("expected 0 archived messages, got %d", len(msgs))
@@ -340,7 +360,7 @@ func TestListArchived(t *testing.T) {
 		t.Fatalf("Archive failed: %v", err)
 	}
 
-	msgs, err := ListArchived(root, "arch")
+	msgs, _, err := ListArchived(root, "arch")
 	if err != nil {
 		t.Fatalf("ListArchived failed: %v", err)
 	}
@@ -355,7 +375,7 @@ func TestListArchived(t *testing.T) {
 	}
 
 	// Archived mail must not leak into the active-mailbox listings.
-	if active, _ := ListAll(root, "arch"); len(active) != 0 {
+	if active, _, _ := ListAll(root, "arch"); len(active) != 0 {
 		t.Errorf("expected 0 messages in ListAll, got %d", len(active))
 	}
 }
@@ -380,7 +400,7 @@ func TestE2E_SendListReadLifecycle(t *testing.T) {
 	}
 
 	// List shows message
-	msgs, err := List(root, "arch")
+	msgs, _, err := List(root, "arch")
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
 	}
@@ -409,5 +429,170 @@ func TestE2E_SendListReadLifecycle(t *testing.T) {
 	entries, _ = os.ReadDir(curDir)
 	if len(entries) != 1 {
 		t.Errorf("expected 1 file in cur/ after read, got %d", len(entries))
+	}
+}
+
+func TestSendReadArchive_EmitEvents(t *testing.T) {
+	workRoot, mailRoot := eventTestRoots(t)
+
+	msgID, err := Send(mailRoot, "arch", "mayor", "Traced", "body")
+	if err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	if _, err := Read(mailRoot, "arch", msgID); err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if _, err := Archive(mailRoot, "arch", msgID); err != nil {
+		t.Fatalf("Archive failed: %v", err)
+	}
+
+	sent := eventsOfType(t, workRoot, "mail.sent")
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 mail.sent event, got %d", len(sent))
+	}
+	if sent[0].Extra["msg_id"] != msgID || sent[0].Extra["from"] != "mayor" || sent[0].Extra["to"] != "arch" {
+		t.Errorf("mail.sent fields = %v, want msg_id=%s from=mayor to=arch", sent[0].Extra, msgID)
+	}
+
+	read := eventsOfType(t, workRoot, "mail.read")
+	if len(read) != 1 {
+		t.Fatalf("expected 1 mail.read event, got %d", len(read))
+	}
+	if read[0].Extra["msg_id"] != msgID || read[0].Extra["mailbox"] != "arch" {
+		t.Errorf("mail.read fields = %v, want msg_id=%s mailbox=arch", read[0].Extra, msgID)
+	}
+
+	archived := eventsOfType(t, workRoot, "mail.archived")
+	if len(archived) != 1 {
+		t.Fatalf("expected 1 mail.archived event, got %d", len(archived))
+	}
+	if archived[0].Extra["msg_id"] != msgID || archived[0].Extra["mailbox"] != "arch" {
+		t.Errorf("mail.archived fields = %v, want msg_id=%s mailbox=arch", archived[0].Extra, msgID)
+	}
+}
+
+func TestArchive_IdempotentRepeatEmitsNoSecondEvent(t *testing.T) {
+	workRoot, mailRoot := eventTestRoots(t)
+
+	msgID, err := Send(mailRoot, "arch", "mayor", "Once", "body")
+	if err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	if _, err := Archive(mailRoot, "arch", msgID); err != nil {
+		t.Fatalf("first Archive failed: %v", err)
+	}
+	if _, err := Archive(mailRoot, "arch", msgID); err != nil {
+		t.Fatalf("second Archive failed: %v", err)
+	}
+
+	archived := eventsOfType(t, workRoot, "mail.archived")
+	if len(archived) != 1 {
+		t.Errorf("expected 1 mail.archived event after idempotent re-archive, got %d", len(archived))
+	}
+}
+
+func TestList_MalformedCountedAndLogged(t *testing.T) {
+	workRoot, mailRoot := eventTestRoots(t)
+
+	if _, err := Send(mailRoot, "arch", "mayor", "Good", "body"); err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	// A truncated transfer: headers cut off, no header/body separator.
+	badPath := filepath.Join(mailRoot, "arch", "new", "9999.1.9999")
+	if err := os.WriteFile(badPath, []byte("From: mayor\nSubj"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	msgs, malformed, err := List(mailRoot, "arch")
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Errorf("expected 1 parseable message, got %d", len(msgs))
+	}
+	if malformed != 1 {
+		t.Errorf("expected malformed count 1, got %d", malformed)
+	}
+
+	events := eventsOfType(t, workRoot, "mail.malformed")
+	if len(events) != 1 {
+		t.Fatalf("expected 1 mail.malformed event, got %d", len(events))
+	}
+	e := events[0].Extra
+	if e["msg_id"] != "9999.1.9999" || e["mailbox"] != "arch" || e["dir"] != "new" {
+		t.Errorf("mail.malformed fields = %v", e)
+	}
+	if !strings.Contains(e["error"], "malformed") {
+		t.Errorf("mail.malformed error = %q, want it to mention malformed", e["error"])
+	}
+}
+
+func TestListAll_CountsMalformedAcrossNewAndCur(t *testing.T) {
+	_, mailRoot := eventTestRoots(t)
+
+	if err := EnsureMaildir(mailRoot, "arch"); err != nil {
+		t.Fatal(err)
+	}
+	for _, sub := range []string{"new", "cur"} {
+		p := filepath.Join(mailRoot, "arch", sub, "bad-"+sub)
+		if err := os.WriteFile(p, []byte("no separator here"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	msgs, malformed, err := ListAll(mailRoot, "arch")
+	if err != nil {
+		t.Fatalf("ListAll failed: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("expected 0 parseable messages, got %d", len(msgs))
+	}
+	if malformed != 2 {
+		t.Errorf("expected malformed count 2, got %d", malformed)
+	}
+}
+
+func TestRead_MalformedFailsLoud(t *testing.T) {
+	_, mailRoot := eventTestRoots(t)
+
+	if err := EnsureMaildir(mailRoot, "arch"); err != nil {
+		t.Fatal(err)
+	}
+	badPath := filepath.Join(mailRoot, "arch", "new", "trunc.1.1")
+	if err := os.WriteFile(badPath, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Read(mailRoot, "arch", "trunc.1.1")
+	if err == nil {
+		t.Fatal("expected error reading malformed message")
+	}
+	if !errors.Is(err, ErrMalformed) {
+		t.Errorf("error = %v, want it to wrap ErrMalformed", err)
+	}
+	if strings.Contains(err.Error(), "not found") {
+		t.Errorf("error = %v; a malformed message must not be reported as not found", err)
+	}
+}
+
+func TestParseMessageFile_Malformed(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{"empty", ""},
+		{"no separator", "From: mayor\nSubject: cut off"},
+		{"no known headers", "garbage line\n\nsome body"},
+	}
+	for _, tc := range cases {
+		p := filepath.Join(dir, tc.name)
+		if err := os.WriteFile(p, []byte(tc.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := parseMessageFile(p, tc.name)
+		if !errors.Is(err, ErrMalformed) {
+			t.Errorf("%s: err = %v, want ErrMalformed", tc.name, err)
+		}
 	}
 }

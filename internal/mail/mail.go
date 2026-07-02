@@ -9,7 +9,21 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/drellem2/macguffin/internal/event"
 )
+
+// ErrMalformed marks a message file that exists but cannot be parsed as a
+// mail message (truncated headers, missing header/body separator, ...).
+// Check with errors.Is.
+var ErrMalformed = errors.New("malformed message")
+
+// eventsRoot returns the workspace root owning the events log for a mail
+// root. By convention the mail root is <workspace>/mail, so mail events land
+// in <workspace>/events.jsonl alongside the work-item events.
+func eventsRoot(mailRoot string) string {
+	return filepath.Dir(mailRoot)
+}
 
 // fsErrText extracts the underlying cause from an os.Rename/os.WriteFile style
 // error (an *os.LinkError or *fs.PathError) WITHOUT the operation name or the
@@ -72,54 +86,78 @@ func Send(mailRoot, recipient, from, subject, body string) (string, error) {
 		return "", fmt.Errorf("could not deliver message to %s: %s", recipient, fsErrText(err))
 	}
 
+	event.Emit(eventsRoot(mailRoot), "mail.sent", map[string]string{
+		"msg_id": msgID,
+		"from":   from,
+		"to":     recipient,
+	})
+
 	return msgID, nil
 }
 
-// List returns all unread messages (in new/) for the given agent.
-func List(mailRoot, agent string) ([]Message, error) {
+// List returns all unread messages (in new/) for the given agent, plus a
+// count of malformed message files that were skipped.
+func List(mailRoot, agent string) ([]Message, int, error) {
 	return listDir(mailRoot, agent, "new", false)
 }
 
-// ListAll returns all messages (both new/ and cur/) for the given agent.
-func ListAll(mailRoot, agent string) ([]Message, error) {
-	unread, err := listDir(mailRoot, agent, "new", false)
+// ListAll returns all messages (both new/ and cur/) for the given agent, plus
+// a count of malformed message files that were skipped.
+func ListAll(mailRoot, agent string) ([]Message, int, error) {
+	unread, badNew, err := listDir(mailRoot, agent, "new", false)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	read, err := listDir(mailRoot, agent, "cur", true)
+	read, badCur, err := listDir(mailRoot, agent, "cur", true)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	msgs := append(unread, read...)
 	sort.Slice(msgs, func(i, j int) bool {
 		return msgs[i].Date < msgs[j].Date
 	})
-	return msgs, nil
+	return msgs, badNew + badCur, nil
 }
 
-// ListArchived returns all archived messages (in archive/) for the given agent.
-func ListArchived(mailRoot, agent string) ([]Message, error) {
+// ListArchived returns all archived messages (in archive/) for the given
+// agent, plus a count of malformed message files that were skipped.
+func ListArchived(mailRoot, agent string) ([]Message, int, error) {
 	return listDir(mailRoot, agent, "archive", true)
 }
 
-func listDir(mailRoot, agent, subdir string, read bool) ([]Message, error) {
+func listDir(mailRoot, agent, subdir string, read bool) ([]Message, int, error) {
 	dir := filepath.Join(mailRoot, agent, subdir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, 0, nil
 		}
-		return nil, fmt.Errorf("reading %s/: %w", subdir, err)
+		return nil, 0, fmt.Errorf("reading %s/: %w", subdir, err)
 	}
 
 	var msgs []Message
+	malformed := 0
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		msg, err := parseMessageFile(filepath.Join(dir, e.Name()), e.Name())
 		if err != nil {
-			continue // skip malformed messages
+			if os.IsNotExist(err) {
+				// Consumed concurrently (e.g. another process moved it
+				// new/ -> cur/ between ReadDir and ReadFile): not corruption.
+				continue
+			}
+			malformed++
+			fmt.Fprintf(os.Stderr, "warning: skipping malformed message %s/%s/%s: %s\n",
+				agent, subdir, e.Name(), fsErrText(err))
+			event.Emit(eventsRoot(mailRoot), "mail.malformed", map[string]string{
+				"msg_id":  e.Name(),
+				"mailbox": agent,
+				"dir":     subdir,
+				"error":   fsErrText(err),
+			})
+			continue
 		}
 		msg.Read = read
 		msgs = append(msgs, msg)
@@ -129,7 +167,7 @@ func listDir(mailRoot, agent, subdir string, read bool) ([]Message, error) {
 		return msgs[i].Date < msgs[j].Date
 	})
 
-	return msgs, nil
+	return msgs, malformed, nil
 }
 
 // Read reads a message by ID from new/ and moves it to cur/ (marks as read).
@@ -141,11 +179,21 @@ func Read(mailRoot, agent, msgID string) (*Message, error) {
 	// Try new/ first
 	msg, err := parseMessageFile(newPath, msgID)
 	if err != nil {
+		if errors.Is(err, ErrMalformed) {
+			return nil, fmt.Errorf("message %q in %s's mailbox: %w", msgID, agent, err)
+		}
 		// Maybe already in cur/?
 		msg, err2 := parseMessageFile(curPath, msgID)
 		if err2 != nil {
+			if errors.Is(err2, ErrMalformed) {
+				return nil, fmt.Errorf("message %q in %s's mailbox: %w", msgID, agent, err2)
+			}
 			return nil, fmt.Errorf("message %q not found: %w", msgID, err)
 		}
+		event.Emit(eventsRoot(mailRoot), "mail.read", map[string]string{
+			"msg_id":  msgID,
+			"mailbox": agent,
+		})
 		return &msg, nil
 	}
 
@@ -158,6 +206,11 @@ func Read(mailRoot, agent, msgID string) (*Message, error) {
 	if err := os.Rename(newPath, curPath); err != nil {
 		return nil, fmt.Errorf("moving to cur/: %w", err)
 	}
+
+	event.Emit(eventsRoot(mailRoot), "mail.read", map[string]string{
+		"msg_id":  msgID,
+		"mailbox": agent,
+	})
 
 	return &msg, nil
 }
@@ -203,10 +256,18 @@ func Archive(mailRoot, agent, msgID string) (*Message, error) {
 		return nil, fmt.Errorf("moving to archive/: %w", err)
 	}
 
+	event.Emit(eventsRoot(mailRoot), "mail.archived", map[string]string{
+		"msg_id":  msgID,
+		"mailbox": agent,
+	})
+
 	return &msg, nil
 }
 
-// parseMessageFile reads and parses a Maildir message file.
+// parseMessageFile reads and parses a Maildir message file. A file that
+// exists but lacks the blank-line header/body separator or carries none of
+// the known headers (truncated or corrupted in transfer) yields an error
+// wrapping ErrMalformed rather than a garbled Message.
 func parseMessageFile(path, id string) (Message, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -218,22 +279,30 @@ func parseMessageFile(path, id string) (Message, error) {
 
 	// Split headers from body at blank line
 	parts := strings.SplitN(content, "\n\n", 2)
-	if len(parts) == 2 {
-		msg.Body = strings.TrimSpace(parts[1])
+	if len(parts) != 2 {
+		return Message{}, fmt.Errorf("%w: missing header/body separator", ErrMalformed)
 	}
+	msg.Body = strings.TrimSpace(parts[1])
 
 	// Parse headers
+	sawHeader := false
 	for _, line := range strings.Split(parts[0], "\n") {
 		if k, v, ok := strings.Cut(line, ": "); ok {
 			switch k {
 			case "From":
 				msg.From = v
+				sawHeader = true
 			case "Subject":
 				msg.Subject = v
+				sawHeader = true
 			case "Date":
 				msg.Date = v
+				sawHeader = true
 			}
 		}
+	}
+	if !sawHeader {
+		return Message{}, fmt.Errorf("%w: no From/Subject/Date headers", ErrMalformed)
 	}
 
 	return msg, nil
