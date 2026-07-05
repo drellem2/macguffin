@@ -1565,10 +1565,25 @@ func TestCLI_Init(t *testing.T) {
 	}
 }
 
+// mailTestEnv builds a subprocess environment with HOME pointed at tmpHome
+// and POGO_AGENT_NAME scrubbed, so the cross-box read guard is exercised
+// only when a test sets the variable explicitly (the test runner itself may
+// be a pogo agent with POGO_AGENT_NAME set).
+func mailTestEnv(tmpHome string) []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "POGO_AGENT_NAME=") || strings.HasPrefix(kv, "HOME=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env, "HOME="+tmpHome)
+}
+
 func TestCLI_MailE2E(t *testing.T) {
 	tmpHome := t.TempDir()
 	bin := buildBinary(t)
-	env := append(os.Environ(), "HOME="+tmpHome)
+	env := mailTestEnv(tmpHome)
 
 	// Init first (creates mail/ dir)
 	cmd := exec.Command(bin, "init")
@@ -1672,6 +1687,91 @@ func TestCLI_MailE2E(t *testing.T) {
 	}
 	if got := string(out); !contains(got, "Review needed") {
 		t.Errorf("list --archived should show archived message, got: %s", got)
+	}
+}
+
+func TestCLI_MailReadCrossBoxGuard(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := mailTestEnv(tmpHome)
+
+	cmd := exec.Command(bin, "init")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+
+	sendTo := func(box string) string {
+		t.Helper()
+		cmd := exec.Command(bin, "mail", "send", box,
+			"--from=pm-pogo", "--subject=Directive", "--body=Important.")
+		cmd.Env = env
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("mg mail send failed: %v\n%s", err, out)
+		}
+		entries, err := os.ReadDir(filepath.Join(tmpHome, ".macguffin", "mail", box, "new"))
+		if err != nil || len(entries) != 1 {
+			t.Fatalf("expected 1 message in %s/new, got %d (err %v)", box, len(entries), err)
+		}
+		return entries[0].Name()
+	}
+
+	msgID := sendTo("mayor")
+
+	// Cross-box read as another agent is refused and leaves the message unread.
+	cmd = exec.Command(bin, "mail", "read", "mayor", msgID)
+	cmd.Env = append(env, "POGO_AGENT_NAME=architect")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected cross-box read to fail, got success:\n%s", out)
+	}
+	if got := string(out); !contains(got, "--force") || !contains(got, "architect") {
+		t.Errorf("refusal should mention --force and the caller, got: %s", got)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(tmpHome, ".macguffin", "mail", "mayor", "new")); len(entries) != 1 {
+		t.Errorf("refused read must leave the message in new/, got %d entries", len(entries))
+	}
+
+	// The refusal is recorded in the audit log with caller attribution.
+	auditPath := filepath.Join(tmpHome, ".macguffin", "log", "mail-audit.log")
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("reading audit log: %v", err)
+	}
+	if got := string(data); !contains(got, "op=read-denied") || !contains(got, "caller=architect") {
+		t.Errorf("audit log missing read-denied entry, got:\n%s", got)
+	}
+
+	// --force allows the cross-box read and audits it as forced.
+	cmd = exec.Command(bin, "mail", "read", "--force", "mayor", msgID)
+	cmd.Env = append(env, "POGO_AGENT_NAME=architect")
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("forced cross-box read failed: %v\n%s", err, out)
+	}
+	data, _ = os.ReadFile(auditPath)
+	if got := string(data); !contains(got, "op=read-forced") {
+		t.Errorf("audit log missing read-forced entry, got:\n%s", got)
+	}
+
+	// Reading your own box is allowed, including the pogo alias forms:
+	// POGO_AGENT_NAME may be the bare id ("6ae0") or process name
+	// ("cat-mg-6ae0") while the mailbox is "mg-6ae0".
+	for _, alias := range []string{"mg-77aa", "77aa", "cat-mg-77aa"} {
+		id := sendTo("mg-77aa")
+		cmd = exec.Command(bin, "mail", "read", "mg-77aa", id)
+		cmd.Env = append(env, "POGO_AGENT_NAME="+alias)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("own-box read as %q should succeed: %v\n%s", alias, err, out)
+		}
+	}
+
+	// No POGO_AGENT_NAME (a human at the terminal): no guard.
+	id := sendTo("pm-pogo")
+	cmd = exec.Command(bin, "mail", "read", "pm-pogo", id)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("read without POGO_AGENT_NAME should succeed: %v\n%s", err, out)
 	}
 }
 

@@ -2,6 +2,7 @@ package mail
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -572,6 +573,101 @@ func TestRead_MalformedFailsLoud(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "not found") {
 		t.Errorf("error = %v; a malformed message must not be reported as not found", err)
+	}
+}
+
+func auditLines(t *testing.T, mailRoot string) []string {
+	t.Helper()
+	data, err := os.ReadFile(AuditLogPath(mailRoot))
+	if err != nil {
+		t.Fatalf("reading audit log: %v", err)
+	}
+	return strings.Split(strings.TrimSpace(string(data)), "\n")
+}
+
+func TestAudit_LifecycleLines(t *testing.T) {
+	t.Setenv("POGO_AGENT_NAME", "auditor")
+	workRoot, mailRoot := eventTestRoots(t)
+
+	msgID, err := Send(mailRoot, "arch", "mayor", "Traced", "body")
+	if err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	if _, err := Read(mailRoot, "arch", msgID); err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	// Re-read from cur/ is audited too, with from_dir=cur.
+	if _, err := Read(mailRoot, "arch", msgID); err != nil {
+		t.Fatalf("second Read failed: %v", err)
+	}
+	if _, err := Archive(mailRoot, "arch", msgID); err != nil {
+		t.Fatalf("Archive failed: %v", err)
+	}
+
+	wantPath := filepath.Join(workRoot, "log", "mail-audit.log")
+	if got := AuditLogPath(mailRoot); got != wantPath {
+		t.Errorf("AuditLogPath = %q, want %q", got, wantPath)
+	}
+
+	lines := auditLines(t, mailRoot)
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 audit lines, got %d:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+
+	wantOps := []struct {
+		op    string
+		extra string
+	}{
+		{"send", "from=mayor"},
+		{"read", "from_dir=new"},
+		{"read", "from_dir=cur"},
+		{"archive", "from_dir=cur"},
+	}
+	pid := fmt.Sprintf("pid=%d", os.Getpid())
+	for i, want := range wantOps {
+		line := lines[i]
+		for _, frag := range []string{"ts=", "op=" + want.op, "box=arch", "msg=" + msgID, pid, "caller=auditor", want.extra} {
+			if !strings.Contains(line, frag) {
+				t.Errorf("audit line %d = %q, missing %q", i, line, frag)
+			}
+		}
+	}
+}
+
+func TestAudit_CallerUnsetLogsDash(t *testing.T) {
+	t.Setenv("POGO_AGENT_NAME", "")
+	_, mailRoot := eventTestRoots(t)
+
+	if _, err := Send(mailRoot, "arch", "mayor", "Anon", "body"); err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+
+	lines := auditLines(t, mailRoot)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 audit line, got %d", len(lines))
+	}
+	if !strings.Contains(lines[0], "caller=-") {
+		t.Errorf("audit line = %q, want caller=- when POGO_AGENT_NAME is unset", lines[0])
+	}
+}
+
+func TestAudit_ArchiveFromNew(t *testing.T) {
+	_, mailRoot := eventTestRoots(t)
+
+	msgID, err := Send(mailRoot, "arch", "mayor", "Unread", "body")
+	if err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	if _, err := Archive(mailRoot, "arch", msgID); err != nil {
+		t.Fatalf("Archive failed: %v", err)
+	}
+
+	lines := auditLines(t, mailRoot)
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 audit lines, got %d", len(lines))
+	}
+	if !strings.Contains(lines[1], "op=archive") || !strings.Contains(lines[1], "from_dir=new") {
+		t.Errorf("archive audit line = %q, want op=archive from_dir=new", lines[1])
 	}
 }
 

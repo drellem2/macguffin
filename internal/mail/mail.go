@@ -41,6 +41,13 @@ func fsErrText(err error) string {
 	return err.Error()
 }
 
+// Maildir layout note: message files in new/, cur/, and archive/ are named
+// by bare msgID only. Standard maildir ":2,S"-style flag suffixes are NOT
+// used — read state is encoded purely by directory (new/ = unread,
+// cur/ = read). A file carrying a foreign ":2,..." suffix is invisible to
+// Read/Archive, which look files up by exact msgID; do not import
+// flag-suffixed files from other maildir tooling.
+
 // Message represents a mail message in Maildir format.
 type Message struct {
 	ID      string
@@ -91,6 +98,7 @@ func Send(mailRoot, recipient, from, subject, body string) (string, error) {
 		"from":   from,
 		"to":     recipient,
 	})
+	Audit(mailRoot, "send", recipient, msgID, map[string]string{"from": from})
 
 	return msgID, nil
 }
@@ -194,6 +202,7 @@ func Read(mailRoot, agent, msgID string) (*Message, error) {
 			"msg_id":  msgID,
 			"mailbox": agent,
 		})
+		Audit(mailRoot, "read", agent, msgID, map[string]string{"from_dir": "cur"})
 		return &msg, nil
 	}
 
@@ -211,6 +220,7 @@ func Read(mailRoot, agent, msgID string) (*Message, error) {
 		"msg_id":  msgID,
 		"mailbox": agent,
 	})
+	Audit(mailRoot, "read", agent, msgID, map[string]string{"from_dir": "new"})
 
 	return &msg, nil
 }
@@ -260,6 +270,11 @@ func Archive(mailRoot, agent, msgID string) (*Message, error) {
 		"msg_id":  msgID,
 		"mailbox": agent,
 	})
+	fromDir := "cur"
+	if srcPath == newPath {
+		fromDir = "new"
+	}
+	Audit(mailRoot, "archive", agent, msgID, map[string]string{"from_dir": fromDir})
 
 	return &msg, nil
 }

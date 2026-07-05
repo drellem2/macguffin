@@ -13,7 +13,7 @@ import (
 func TestCLI_MailListMalformedWarning(t *testing.T) {
 	tmpHome := t.TempDir()
 	bin := buildBinary(t)
-	env := append(os.Environ(), "HOME="+tmpHome)
+	env := mailTestEnv(tmpHome)
 
 	cmd := exec.Command(bin, "init")
 	cmd.Env = env
@@ -69,7 +69,7 @@ func TestCLI_MailListMalformedWarning(t *testing.T) {
 func TestCLI_MailLifecycleEvents(t *testing.T) {
 	tmpHome := t.TempDir()
 	bin := buildBinary(t)
-	env := append(os.Environ(), "HOME="+tmpHome)
+	env := mailTestEnv(tmpHome)
 
 	cmd := exec.Command(bin, "init")
 	cmd.Env = env

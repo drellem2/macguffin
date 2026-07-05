@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -29,7 +30,18 @@ var (
 	mailSendBody     string
 	mailListAll      bool
 	mailListArchived bool
+	mailReadForce    bool
 )
+
+// canonicalAgent strips the harness prefixes pogo puts on agent names so
+// the same polecat is recognized under all its aliases: the mailbox is
+// "mg-6ae0", the process-derived POGO_AGENT_NAME may be "6ae0" or
+// "cat-mg-6ae0". Crew agents (mayor, architect, ...) pass through unchanged.
+func canonicalAgent(name string) string {
+	name = strings.TrimPrefix(name, "cat-")
+	name = strings.TrimPrefix(name, "mg-")
+	return name
+}
 
 var mailSendCmd = &cobra.Command{
 	Use:   "send AGENT",
@@ -136,6 +148,19 @@ var mailReadCmd = &cobra.Command{
 			return err
 		}
 
+		// Reading is destructive to the owner's unread state (new/ -> cur/):
+		// a cross-box read silently drops the message from the owner's
+		// unread list (the mg-6ae0 incident). Refuse unless forced.
+		caller := os.Getenv("POGO_AGENT_NAME")
+		crossBox := caller != "" && canonicalAgent(caller) != canonicalAgent(agent)
+		if crossBox && !mailReadForce {
+			mail.Audit(mr, "read-denied", agent, msgID, map[string]string{"reason": "cross-box"})
+			return fmt.Errorf("refusing to read %s's mail as agent %q: reading marks the message read and hides it from %s's unread list. Re-run with --force if this cross-box read is intentional", agent, caller, agent)
+		}
+		if crossBox {
+			mail.Audit(mr, "read-forced", agent, msgID, nil)
+		}
+
 		msg, err := mail.Read(mr, agent, msgID)
 		if err != nil {
 			return err
@@ -183,6 +208,8 @@ func init() {
 	mailSendCmd.Flags().StringVar(&mailSendFrom, "from", "", "sender name (required)")
 	mailSendCmd.Flags().StringVar(&mailSendSubject, "subject", "", "message subject (required)")
 	mailSendCmd.Flags().StringVar(&mailSendBody, "body", "", "message body (required)")
+
+	mailReadCmd.Flags().BoolVar(&mailReadForce, "force", false, "allow reading another agent's mailbox (marks the message read for its owner)")
 
 	mailListCmd.Flags().BoolVarP(&mailListAll, "all", "a", false, "include read messages from cur/")
 	mailListCmd.Flags().BoolVar(&mailListArchived, "archived", false, "list archived messages instead of the active mailbox")
