@@ -185,7 +185,7 @@ message to the work item that was claimed at the time, and writes per-item
 NDJSON to `~/.macguffin/spend/`.
 
 ```bash
-mg spend                    # per-item totals (default)
+mg spend                    # per-item totals + a grand-TOTAL row (default)
 mg spend --by tag           # roll up by tag
 mg spend --since 7d         # rolling window: the last 7×24 hours
 mg spend --window today     # calendar window: since local midnight
@@ -194,13 +194,26 @@ mg spend --total            # headline: today / this week / all time
 mg spend --json             # machine-readable output for dashboards
 ```
 
+**Total from a single command.** Every grouped view ends with a `TOTAL` row
+that column-sums the rows shown — so bare `mg spend` answers "how many tokens
+in total?" without a flag. For the default per-item (and per-agent) view each
+record is counted once, so the `TOTAL` row is the true grand total. `--json`
+mirrors it as a trailing object with the reserved key `TOTAL`; the payload
+stays a JSON array of the same shape, and the key is uppercase so it never
+collides with a (lowercase) item id, tag, repo, agent, priority, or assignee —
+consumers that select groups by key are unaffected. For a time-bucketed
+headline of today / this week / all time in one shot, use `--total`.
+
 **Windows.** `--since` and `--window` bound the same data two different ways
 and are mutually exclusive. `--since D` is a *rolling* window ending now
 (`--since 24h` = the last 24 hours, moment to moment). `--window` is
 *calendar-anchored* in your machine's local time: `today` starts at local
 midnight, `week` starts at the most recent Monday (ISO-8601 week start). Use
 rolling windows for "recent activity" and calendar windows for "this
-day/week's bill."
+day/week's bill." Note that `--window week`'s Monday anchor is a fixed
+calendar convention — it *approximates* a weekly-usage view but does **not**
+track Anthropic's actual weekly usage-limit reset (which is account-specific
+and not exposed here); see the limit-meter caveat below.
 
 **What "historical" means here.** Spend is tracked **only once harvested**.
 Harvesting runs automatically at the start of every `mg spend` invocation, so
@@ -217,6 +230,16 @@ the store is the source of truth, not the transcripts. The one thing that
 loses data is **deleting a transcript before it has been harvested**: unharvested
 tokens in a deleted transcript are gone, because the store never saw them. If
 you rotate or prune `~/.claude/projects/` aggressively, harvest first.
+
+**Attribution degrades gracefully; tokens are never dropped.** A message is
+attributed to a work item by joining it to the claim interval that was open
+when it was written (with pogod's live agent registry as a fallback). If a
+polecat has already been reaped by harvest time and left no closing claim
+event — so neither the interval join nor the registry can name its item — its
+tokens are **still counted**, they just land in the per-agent overhead bucket
+(`by-agent/<name>.jsonl`, visible under `mg spend --by agent`) instead of
+against the item. Harvesting promptly (or on a schedule) keeps attribution
+fine-grained; the grand total is unaffected either way.
 
 **This is a single-machine tally.** The store lives under `~/.macguffin/` on
 one host and only sees that host's transcripts. There is no cross-machine

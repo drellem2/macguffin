@@ -245,7 +245,7 @@ type jsonGroup struct {
 }
 
 func writeSpendJSON(groups []spend.Group) error {
-	out := make([]jsonGroup, 0, len(groups))
+	out := make([]jsonGroup, 0, len(groups)+1)
 	for _, g := range groups {
 		out = append(out, jsonGroup{
 			Key:         g.Key,
@@ -258,10 +258,31 @@ func writeSpendJSON(groups []spend.Group) error {
 			TotalOut:    g.Totals.TotalOut(),
 		})
 	}
+	// Mirror the table's grand-total row as a trailing, self-identifying
+	// object with the reserved uppercase key "TOTAL". This keeps the wire
+	// shape a []jsonGroup, so consumers that unmarshal the array or select
+	// groups by their (lowercase) item/tag/agent key are unaffected; the
+	// key is uppercase precisely so it cannot collide with a real group key.
+	tot := sumGroups(groups)
+	out = append(out, jsonGroup{
+		Key:         spendTotalKey,
+		Items:       tot.ItemCount,
+		Input:       tot.Input,
+		CacheRead:   tot.CacheRead,
+		CacheCreate: tot.CacheCreate,
+		Output:      tot.Output,
+		TotalIn:     tot.TotalIn(),
+		TotalOut:    tot.TotalOut(),
+	})
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
 }
+
+// spendTotalKey is the reserved group key used for the grand-total row/object
+// in `mg spend` output. Uppercase so it never collides with an mg-id, tag,
+// repo, agent, priority, or assignee (all lowercase).
+const spendTotalKey = "TOTAL"
 
 func writeSpendTable(groups []spend.Group, by string) {
 	header := strings.ToUpper(groupHeaderFor(by))
@@ -279,6 +300,38 @@ func writeSpendTable(groups []spend.Group, by string) {
 			formatThousands(g.Totals.TotalOut()),
 		)
 	}
+	// Grand-total row: the "total token usage from a single command" that
+	// pogo#46 asks for by default. It sums the column across the groups shown
+	// (the same convention as any table TOTAL row), so for the default
+	// per-item view it is the true grand total.
+	tot := sumGroups(groups)
+	fmt.Printf("%-24s %6d %12s %12s %12s %12s %12s %12s\n",
+		spendTotalKey,
+		tot.ItemCount,
+		formatThousands(tot.Input),
+		formatThousands(tot.CacheRead),
+		formatThousands(tot.CacheCreate),
+		formatThousands(tot.Output),
+		formatThousands(tot.TotalIn()),
+		formatThousands(tot.TotalOut()),
+	)
+}
+
+// sumGroups column-sums the token counts across the displayed groups. Callers
+// use it to render the grand-total row/object; because it sums exactly the
+// rows shown, the total is always internally consistent with the visible
+// table (for the default per-item and per-agent axes each record is counted
+// once, so it equals the true grand total).
+func sumGroups(groups []spend.Group) spend.Totals {
+	var t spend.Totals
+	for _, g := range groups {
+		t.ItemCount += g.Totals.ItemCount
+		t.Input += g.Totals.Input
+		t.CacheRead += g.Totals.CacheRead
+		t.CacheCreate += g.Totals.CacheCreate
+		t.Output += g.Totals.Output
+	}
+	return t
 }
 
 func groupHeaderFor(by string) string {
