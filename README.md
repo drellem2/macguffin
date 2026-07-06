@@ -114,6 +114,7 @@ mg log                 # view snapshot history
 | `mg event append <type> [--key=value ...]` | Append a structured event to `events.jsonl`. |
 | `mg event list [--type=T] [--since=TS] [--tail=N]` | List events with optional filtering. |
 | `mg flow [--live] [--repo=P] [--blocked-after=D]` | Per-status flow view: throughput, median age, bottleneck, blocked chains. |
+| `mg spend [--by AXIS] [--since D] [--window W] [--total] [--json]` | Aggregate token consumption per item, tag, repo, agent, etc. `--since` is a rolling duration (`24h`, `7d`); `--window today\|week` is calendar-anchored; `--total` prints the today/this-week/all-time headline. See [Token spend accounting](#token-spend-accounting). |
 | `mg snapshot` | Commit a git snapshot of current state. |
 | `mg log [args]` | Show snapshot history (passes args to `git log`). |
 | `mg version` | Print version. |
@@ -132,6 +133,7 @@ mg log                 # view snapshot history
 │   └── <agent>/
 │       ├── new/          # Unread messages
 │       └── cur/          # Read messages
+├── spend/                # Harvested token-spend store (by-item/, by-agent/)
 ├── log/                  # Append-only event log
 └── .git/                 # Optional: cold-path audit trail
 ```
@@ -174,6 +176,61 @@ specific code repo.
 Override the default with `--repo=PATH`, or opt out entirely with `--no-repo`
 (or `--repo=""`).
 
+### Token spend accounting
+
+`mg spend` aggregates how many tokens agents have consumed, grouped by work
+item, tag, repo, agent, priority, or assignee. It reads Claude Code transcripts
+(`~/.claude/projects/`) plus the macguffin event log, joins each assistant
+message to the work item that was claimed at the time, and writes per-item
+NDJSON to `~/.macguffin/spend/`.
+
+```bash
+mg spend                    # per-item totals (default)
+mg spend --by tag           # roll up by tag
+mg spend --since 7d         # rolling window: the last 7×24 hours
+mg spend --window today     # calendar window: since local midnight
+mg spend --window week      # calendar window: since this week's Monday
+mg spend --total            # headline: today / this week / all time
+mg spend --json             # machine-readable output for dashboards
+```
+
+**Windows.** `--since` and `--window` bound the same data two different ways
+and are mutually exclusive. `--since D` is a *rolling* window ending now
+(`--since 24h` = the last 24 hours, moment to moment). `--window` is
+*calendar-anchored* in your machine's local time: `today` starts at local
+midnight, `week` starts at the most recent Monday (ISO-8601 week start). Use
+rolling windows for "recent activity" and calendar windows for "this
+day/week's bill."
+
+**What "historical" means here.** Spend is tracked **only once harvested**.
+Harvesting runs automatically at the start of every `mg spend` invocation, so
+running the command is what advances the record. The harvest is incremental
+and idempotent — it keys on `(session, message-uuid)`, so re-runs skip
+already-counted messages. For continuous capture without having to run the
+command by hand, schedule it (e.g. a cron entry or `pogo schedule` running
+`mg spend` periodically); otherwise a window is only as complete as the last
+time the command ran.
+
+Once a message has been harvested, its record lives in `~/.macguffin/spend/`
+and **survives Claude Code restarts, `mg` upgrades, and transcript rotation** —
+the store is the source of truth, not the transcripts. The one thing that
+loses data is **deleting a transcript before it has been harvested**: unharvested
+tokens in a deleted transcript are gone, because the store never saw them. If
+you rotate or prune `~/.claude/projects/` aggressively, harvest first.
+
+**This is a single-machine tally.** The store lives under `~/.macguffin/` on
+one host and only sees that host's transcripts. There is no cross-machine
+aggregation.
+
+**What it measures — and does not.** `mg spend` measures **token consumption
+recorded in transcripts** (input, cache-read, cache-create, output). It is
+**not** a read of Anthropic's usage-limit meter — the two can diverge (see
+[pogo #45](https://github.com/drellem2/pogo/issues/45) for the limit-meter
+discussion). Precise cross-project or per-account cost reconciliation is
+explicitly **out of scope**: an API proxy that meters requests at the wire is
+the right tool for that job. Treat `mg spend` as a faithful attribution of
+*where transcript tokens went*, not as a billing ledger.
+
 ## Project Structure
 
 ```
@@ -183,6 +240,7 @@ internal/
   workspace/     # Directory layout, init, git operations
   mail/          # Maildir-style message delivery
   event/         # Structured event logging
+  spend/         # Token-spend harvester, store, and aggregation
 ```
 
 ## License

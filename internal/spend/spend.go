@@ -51,9 +51,13 @@ type QueryOpts struct {
 	// By is one of: "item", "tag", "tag:<value>", "repo", "agent",
 	// "priority", "assignee". Empty defaults to "item".
 	By string
-	// Since filters records to those with Ts >= now-Since. Zero value
-	// disables.
+	// Since filters records to those with Ts >= now-Since (a rolling
+	// window). Zero value disables. Ignored when SinceTime is set.
 	Since time.Duration
+	// SinceTime filters records to those with Ts >= SinceTime — an absolute
+	// cutoff used for calendar-anchored named windows (see WindowStart).
+	// Takes precedence over Since when non-zero.
+	SinceTime time.Time
 	// Now overrides time.Now for testing.
 	Now time.Time
 }
@@ -67,12 +71,7 @@ func Query(root, mgRoot string, opts QueryOpts) ([]Group, error) {
 		return nil, err
 	}
 
-	if opts.Since > 0 {
-		now := opts.Now
-		if now.IsZero() {
-			now = time.Now().UTC()
-		}
-		cutoff := now.Add(-opts.Since)
+	if cutoff := opts.cutoff(); !cutoff.IsZero() {
 		recs = filterSince(recs, cutoff)
 	}
 
@@ -201,6 +200,23 @@ func Query(root, mgRoot string, opts QueryOpts) ([]Group, error) {
 	return out, nil
 }
 
+// cutoff resolves the effective lower time bound for a query. An absolute
+// SinceTime (calendar window) wins over a rolling Since duration. A zero
+// return means "no time filter".
+func (o QueryOpts) cutoff() time.Time {
+	if !o.SinceTime.IsZero() {
+		return o.SinceTime
+	}
+	if o.Since > 0 {
+		now := o.Now
+		if now.IsZero() {
+			now = time.Now().UTC()
+		}
+		return now.Add(-o.Since)
+	}
+	return time.Time{}
+}
+
 func filterSince(recs []Record, cutoff time.Time) []Record {
 	out := recs[:0]
 	for _, r := range recs {
@@ -209,6 +225,51 @@ func filterSince(recs []Record, cutoff time.Time) []Record {
 		}
 	}
 	return out
+}
+
+// WindowStart returns the calendar-anchored start instant for a named window,
+// expressed in now's location. Unlike the rolling --since durations, these
+// anchor to the local calendar:
+//
+//	"today" — local midnight at the start of now's day.
+//	"week"  — local midnight on the most recent Monday (ISO-8601 week start).
+//
+// The caller compares record timestamps (stored in UTC) against the returned
+// instant; comparison is location-independent, so a local-anchored cutoff and
+// a UTC record timestamp compare correctly.
+func WindowStart(name string, now time.Time) (time.Time, error) {
+	y, m, d := now.Date()
+	midnight := time.Date(y, m, d, 0, 0, 0, 0, now.Location())
+	switch name {
+	case "today":
+		return midnight, nil
+	case "week":
+		// time.Weekday: Sunday=0..Saturday=6. Shift so Monday=0 and
+		// subtract that many days to reach the week's Monday.
+		offset := (int(midnight.Weekday()) + 6) % 7
+		return midnight.AddDate(0, 0, -offset), nil
+	default:
+		return time.Time{}, fmt.Errorf("unknown window %q (want: today, week)", name)
+	}
+}
+
+// GrandTotal sums every record in the store into a single Totals, optionally
+// filtered to records with Ts >= since (a zero since sums all time). It spans
+// both attributed (by-item) and overhead (by-agent) records, so the result is
+// a true grand total of measured token consumption.
+func GrandTotal(root string, since time.Time) (Totals, error) {
+	recs, err := ReadAll(root)
+	if err != nil {
+		return Totals{}, err
+	}
+	var t Totals
+	for _, r := range recs {
+		if !since.IsZero() && r.Ts.Before(since) {
+			continue
+		}
+		t.Add(r)
+	}
+	return t, nil
 }
 
 // loadItemMap reads every work item in a macguffin tree (active, shelved, and

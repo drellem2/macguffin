@@ -17,8 +17,10 @@ import (
 var (
 	spendBy      string
 	spendSince   string
+	spendWindow  string
 	spendJSON    bool
 	spendRebuild bool
+	spendTotal   bool
 )
 
 var spendCmd = &cobra.Command{
@@ -30,13 +32,23 @@ The first run (or --rebuild) scans all transcripts and writes a per-item
 NDJSON store under ~/.macguffin/spend/. Subsequent runs are incremental:
 records are keyed on (session, message_uuid) and re-scans skip duplicates.
 
+The rolling --since window and the calendar-anchored --window are two ways
+to bound the same data: --since 24h is "the last 24 hours" (rolling), while
+--window today is "since local midnight" (calendar). They are mutually
+exclusive. --total prints a single headline of grand totals for today, this
+week, and all time — it measures transcript token CONSUMPTION, not Anthropic's
+usage-limit meter.
+
 Examples:
   mg spend --by item                  # per-mg-id totals (default)
   mg spend --by tag                   # all tags, sorted by total
   mg spend --by tag:ux                # one tag, with item breakdown
   mg spend --by repo                  # cross-product overview
   mg spend --by agent                 # who's spending the most
-  mg spend --since 7d                 # last 7 days
+  mg spend --since 7d                 # rolling last 7 days
+  mg spend --window today             # calendar day (since local midnight)
+  mg spend --window week              # calendar week (since Monday)
+  mg spend --total                    # today / this week / all-time headline
   mg spend --json                     # machine-readable output
   mg spend --rebuild                  # rescan all transcripts`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -59,8 +71,32 @@ Examples:
 		}
 		_ = res // counts available for verbose mode later
 
+		sinceSet := cmd.Flags().Changed("since")
+		windowSet := cmd.Flags().Changed("window")
+		if sinceSet && windowSet {
+			return fmt.Errorf("--since and --window are mutually exclusive: --since is a rolling duration, --window is a calendar anchor")
+		}
+
+		now := time.Now()
+
+		// --total is a standalone grand-total headline; it doesn't compose
+		// with the grouping/windowing flags.
+		if spendTotal {
+			if sinceSet || windowSet || cmd.Flags().Changed("by") {
+				return fmt.Errorf("--total is a standalone summary; drop --since/--window/--by")
+			}
+			return runSpendTotal(root, now)
+		}
+
 		var since time.Duration
-		if spendSince != "" {
+		var sinceTime time.Time
+		switch {
+		case windowSet:
+			sinceTime, err = spend.WindowStart(spendWindow, now)
+			if err != nil {
+				return fmt.Errorf("--window: %w", err)
+			}
+		case spendSince != "":
 			since, err = parseDuration(spendSince)
 			if err != nil {
 				return fmt.Errorf("--since: %w", err)
@@ -68,8 +104,9 @@ Examples:
 		}
 
 		groups, err := spend.Query(root, root, spend.QueryOpts{
-			By:    spendBy,
-			Since: since,
+			By:        spendBy,
+			Since:     since,
+			SinceTime: sinceTime,
 		})
 		if err != nil {
 			return err
@@ -94,9 +131,104 @@ Examples:
 
 func init() {
 	spendCmd.Flags().StringVar(&spendBy, "by", "item", "group axis: item, tag, tag:<value>, repo, agent, priority, assignee")
-	spendCmd.Flags().StringVar(&spendSince, "since", "", "filter to records within the last duration (e.g. 24h, 7d)")
+	spendCmd.Flags().StringVar(&spendSince, "since", "", "rolling window: keep records within the last duration (e.g. 24h, 7d)")
+	spendCmd.Flags().StringVar(&spendWindow, "window", "", "calendar window: today (since local midnight) or week (since Monday)")
 	spendCmd.Flags().BoolVar(&spendJSON, "json", false, "emit JSON array (one object per group)")
 	spendCmd.Flags().BoolVar(&spendRebuild, "rebuild", false, "drop the existing store and rescan all transcripts")
+	spendCmd.Flags().BoolVar(&spendTotal, "total", false, "print grand totals for today, this week, and all time")
+}
+
+// runSpendTotal prints the grand-total headline: today, this week, and all
+// time. "today" and "week" are calendar-anchored (see spend.WindowStart), so
+// the headline lines up with the --window views. It reports token consumption
+// measured from transcripts, not Anthropic's usage-limit meter.
+func runSpendTotal(root string, now time.Time) error {
+	todayStart, err := spend.WindowStart("today", now)
+	if err != nil {
+		return err
+	}
+	weekStart, err := spend.WindowStart("week", now)
+	if err != nil {
+		return err
+	}
+
+	today, err := spend.GrandTotal(root, todayStart)
+	if err != nil {
+		return err
+	}
+	week, err := spend.GrandTotal(root, weekStart)
+	if err != nil {
+		return err
+	}
+	all, err := spend.GrandTotal(root, time.Time{})
+	if err != nil {
+		return err
+	}
+
+	if spendJSON {
+		return writeSpendTotalJSON(today, week, all)
+	}
+	writeSpendTotalTable(today, week, all)
+	return nil
+}
+
+// jsonTotal is the stable wire shape for one window of `mg spend --total --json`.
+type jsonTotal struct {
+	Items       int `json:"items"`
+	Input       int `json:"input"`
+	CacheRead   int `json:"cache_read"`
+	CacheCreate int `json:"cache_create"`
+	Output      int `json:"output"`
+	TotalIn     int `json:"total_in"`
+	TotalOut    int `json:"total_out"`
+}
+
+func totalOf(t spend.Totals) jsonTotal {
+	return jsonTotal{
+		Items:       t.ItemCount,
+		Input:       t.Input,
+		CacheRead:   t.CacheRead,
+		CacheCreate: t.CacheCreate,
+		Output:      t.Output,
+		TotalIn:     t.TotalIn(),
+		TotalOut:    t.TotalOut(),
+	}
+}
+
+func writeSpendTotalJSON(today, week, all spend.Totals) error {
+	out := struct {
+		Today    jsonTotal `json:"today"`
+		ThisWeek jsonTotal `json:"this_week"`
+		AllTime  jsonTotal `json:"all_time"`
+	}{
+		Today:    totalOf(today),
+		ThisWeek: totalOf(week),
+		AllTime:  totalOf(all),
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
+}
+
+func writeSpendTotalTable(today, week, all spend.Totals) {
+	fmt.Println("GRAND TOTAL — transcript token consumption (not the Anthropic usage-limit meter)")
+	fmt.Printf("%-12s %6s %12s %12s\n", "WINDOW", "ITEMS", "TOTAL_IN", "TOTAL_OUT")
+	rows := []struct {
+		label string
+		t     spend.Totals
+	}{
+		{"today", today},
+		{"this week", week},
+		{"all time", all},
+	}
+	for _, row := range rows {
+		fmt.Printf("%-12s %6d %12s %12s\n",
+			row.label,
+			row.t.ItemCount,
+			formatThousands(row.t.TotalIn()),
+			formatThousands(row.t.TotalOut()),
+		)
+	}
 }
 
 // jsonGroup is the stable wire shape for `mg spend --json`. PMs and
