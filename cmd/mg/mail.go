@@ -298,7 +298,19 @@ func runMailboxList(mr string) error {
 var mailReadCmd = &cobra.Command{
 	Use:   "read AGENT/MSG-ID",
 	Short: "Read a specific message",
-	Args:  cobra.RangeArgs(1, 2),
+	Long: `Read a specific message and mark it read (moves it new/ -> cur/).
+
+The message may be addressed either way:
+  mg mail read AGENT/MSG-ID     # single slash-joined argument
+  mg mail read AGENT MSG-ID     # two arguments
+
+MSG-ID is exactly the token printed by 'mg mail list AGENT' (the part after
+"AGENT/"). Reading another agent's mailbox is refused unless --force, because
+it marks the message read and hides it from that agent's unread list.
+
+With --json the message is emitted as a single object {id,from,subject,date,
+read,body} instead of the human-formatted headers-and-body.`,
+	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		agent, msgID, err := parseAgentMsgID(args)
 		if err != nil {
@@ -347,7 +359,20 @@ var mailReadCmd = &cobra.Command{
 var mailArchiveCmd = &cobra.Command{
 	Use:   "archive AGENT/MSG-ID",
 	Short: "Archive a message (move it out of the active mailbox)",
-	Args:  cobra.RangeArgs(1, 2),
+	Long: `Archive a message, moving it out of the active mailbox into archive/.
+
+The message may be addressed either way:
+  mg mail archive AGENT/MSG-ID  # single slash-joined argument
+  mg mail archive AGENT MSG-ID  # two arguments
+
+MSG-ID is exactly the token printed by 'mg mail list AGENT' (the part after
+"AGENT/"). An unread (new/) or read (cur/) message is handled; archiving an
+already-archived message is a no-op. Archived mail is inspected with
+'mg mail list AGENT --archived'.
+
+With --json the archived message is emitted as a single object
+{id,mailbox,from,subject}.`,
+	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		agent, msgID, err := parseAgentMsgID(args)
 		if err != nil {
