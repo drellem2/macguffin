@@ -146,7 +146,10 @@ func init() {
 	newCmd.Flags().StringVar(&newAssignee, "assignee", "", "person to assign this item to")
 	newCmd.Flags().StringVar(&newBranch, "branch", "", "branch name for this work item")
 	newCmd.Flags().StringVar(&newPriority, "priority", "", "priority level: low, medium, high (default: medium)")
-	stringSliceVarWithAlias(newCmd.Flags(), &newTags, "tag", "tags", "tags (comma-separated or repeated)")
+	// Canonical flag name is --tags (plural), matching edit's --tags and the
+	// --add-tags/--rm-tags/--depends family; --tag stays as a back-compat alias.
+	// new and edit previously disagreed on which was canonical (gh drellem2/pogo#60).
+	stringSliceVarWithAlias(newCmd.Flags(), &newTags, "tags", "tag", "tags (comma-separated or repeated)")
 	newCmd.Flags().StringVar(&newTitle, "title", "", "work item title (alternative to positional args)")
 	newCmd.Flags().StringVar(&newBody, "body", "", "work item body (markdown)")
 	newCmd.Flags().StringVar(&newRepo, "repo", "", "repo path (defaults to current git toplevel for interactive use; auto-detection is skipped under pogo automation, where POGO_PID is set — pass --repo=PATH explicitly there; --repo=\"\" or --no-repo leaves it empty)")

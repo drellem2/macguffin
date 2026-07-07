@@ -957,7 +957,7 @@ func TestCLI_TagDependsFlagAliases(t *testing.T) {
 		t.Fatalf("mg init failed: %v\n%s", err, out)
 	}
 
-	// mg new --tags (alias for --tag)
+	// mg new --tags (canonical)
 	cmd = exec.Command(bin, "new", "--tags=alpha,beta", "Tagged via --tags")
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
@@ -976,7 +976,7 @@ func TestCLI_TagDependsFlagAliases(t *testing.T) {
 		t.Errorf("expected tags alpha,beta in show output, got:\n%s", out)
 	}
 
-	// mg new --tag (canonical) still works
+	// mg new --tag (back-compat alias) still works
 	cmd = exec.Command(bin, "new", "--tag=gamma", "Tagged via --tag")
 	cmd.Env = env
 	out, err = cmd.CombinedOutput()
@@ -1072,7 +1072,8 @@ func TestCLI_RepeatedTagFlag(t *testing.T) {
 		t.Errorf("repeated --tag dropped 'bar', got:\n%s", out)
 	}
 
-	// Mixing canonical --tag and its alias --tags should also accumulate.
+	// Mixing --tag and --tags (one is canonical, one is its alias) should
+	// still accumulate — they share the same underlying value.
 	cmd = exec.Command(bin, "new", "--type=task", "--title=mixed", "--tag=alpha", "--tags=beta")
 	cmd.Env = env
 	out, err = cmd.CombinedOutput()

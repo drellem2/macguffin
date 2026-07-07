@@ -22,7 +22,7 @@ func mailRoot() (string, error) {
 
 var mailCmd = &cobra.Command{
 	Use:   "mail",
-	Short: "Maildir-style messaging (send, list, read)",
+	Short: "Maildir-style messaging (send, list, read, archive)",
 }
 
 // --json contract (frozen + additive-only). Field names are part of the public
