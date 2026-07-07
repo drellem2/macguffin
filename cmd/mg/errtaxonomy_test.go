@@ -162,11 +162,14 @@ func TestContract_JSONErrorShape(t *testing.T) {
 	if got.Error.Exit != 3 {
 		t.Errorf("error.exit = %d, want 3", got.Error.Exit)
 	}
-	if !strings.Contains(got.Error.Message, "no such work item") {
-		t.Errorf("message = %q", got.Error.Message)
-	}
 	if got.Error.Retryable {
 		t.Error("no_such_item should not be retryable")
+	}
+	// message is HUMAN-FACING and NON-CONTRACTUAL — it may be reworded in any
+	// release. Assert only that it is non-empty (a quality smoke check), never
+	// its exact wording; the contract is the machine fields checked above.
+	if strings.TrimSpace(got.Error.Message) == "" {
+		t.Error("quality: error.message should be non-empty")
 	}
 }
 
@@ -228,11 +231,14 @@ func TestContract_DataJSONUnchanged(t *testing.T) {
 }
 
 // TestContract_JSONRendererFields directly exercises writeJSONError to pin the
-// hint (omitempty) and retryable fields, which the CLI --json paths above don't
-// happen to combine (a hinted, retryable conflict).
+// STRUCTURE of the hint (omitempty presence) and retryable fields, which the
+// CLI --json paths above don't happen to combine (a hinted, retryable
+// conflict). It drives a synthetic mgerr.Error with test-controlled wording:
+// the contract is which fields exist/type, NOT the human hint/message text.
 func TestContract_JSONRendererFields(t *testing.T) {
-	// Hinted + retryable: both fields must be present with correct values.
-	e := mgerr.Conflict("claim_race", "mg-1: race lost", "Run 'mg show mg-1' to check.").WithRetryable(true)
+	// Hinted + retryable: code/category/exit are the frozen fields; hint must be
+	// present, a string, and non-empty (but its wording is not pinned).
+	e := mgerr.Conflict("claim_race", "MSG", "HINT").WithRetryable(true)
 	var buf bytes.Buffer
 	writeJSONError(&buf, e)
 	var got map[string]map[string]any
@@ -243,8 +249,9 @@ func TestContract_JSONRendererFields(t *testing.T) {
 	if body["code"] != "claim_race" || body["category"] != "conflict" || body["exit"].(float64) != 4 {
 		t.Errorf("body = %v", body)
 	}
-	if body["hint"] != "Run 'mg show mg-1' to check." {
-		t.Errorf("hint = %v", body["hint"])
+	hint, ok := body["hint"].(string)
+	if !ok || hint == "" {
+		t.Errorf("hint should be present, a non-empty string; got %v", body["hint"])
 	}
 	if body["retryable"] != true {
 		t.Errorf("retryable = %v, want true", body["retryable"])
@@ -252,7 +259,7 @@ func TestContract_JSONRendererFields(t *testing.T) {
 
 	// No hint: the hint key is omitted (omitempty), but retryable is always
 	// present (false) for predictable parsing.
-	e2 := mgerr.NotFound("no_such_item", "mg-2: no such work item.", "")
+	e2 := mgerr.NotFound("no_such_item", "MSG", "")
 	buf.Reset()
 	writeJSONError(&buf, e2)
 	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
@@ -266,30 +273,30 @@ func TestContract_JSONRendererFields(t *testing.T) {
 	}
 }
 
-// TestContract_HumanErrorFormat pins the human render: "Error: <message>" with
-// the hint on its own indented "  → " line (reproducing the old withHint UX).
+// TestContract_HumanErrorFormat pins the FRAMING of the human render — the
+// "Error: <message>" prefix and the indented "  → <hint>" hint line — using a
+// synthetic mgerr.Error with test-controlled Message/Hint ("MSG"/"HINT"). It
+// deliberately does NOT couple to any product message/hint wording (those are
+// human-facing and non-contractual); only the structural framing is asserted.
 func TestContract_HumanErrorFormat(t *testing.T) {
-	if testing.Short() {
-		t.Skip("builds the binary")
+	// Hinted error → "Error: MSG\n  → HINT\n".
+	var buf bytes.Buffer
+	writeHumanError(&buf, mgerr.Conflict("already_claimed", "MSG", "HINT"))
+	got := buf.String()
+	if !strings.HasPrefix(got, "Error: ") {
+		t.Errorf("human error should start with %q, got %q", "Error: ", got)
 	}
-	bin := buildBinary(t)
-	home := t.TempDir()
-	env := emEnv(home)
-	emInit(t, bin, env)
-	id := emNew(t, bin, env, "human format target")
-	emOK(t, bin, env, "claim", id)
+	if !strings.Contains(got, "Error: MSG") {
+		t.Errorf("message should follow the Error: prefix, got %q", got)
+	}
+	if !strings.Contains(got, "\n  → HINT") {
+		t.Errorf("hint should render on its own indented → line, got %q", got)
+	}
 
-	_, stderr, exit := taxRun(bin, env, "claim", id)
-	if exit != 4 {
-		t.Fatalf("exit = %d, want 4", exit)
-	}
-	if !strings.HasPrefix(stderr, "Error: ") {
-		t.Errorf("human error should start with %q, got %q", "Error: ", stderr)
-	}
-	if !strings.Contains(stderr, "already claimed") {
-		t.Errorf("missing problem statement: %q", stderr)
-	}
-	if !strings.Contains(stderr, "\n  → ") {
-		t.Errorf("hint should render on its own indented → line: %q", stderr)
+	// Hintless error → single "Error: MSG" line, no → line.
+	buf.Reset()
+	writeHumanError(&buf, mgerr.NotFound("no_such_item", "MSG", ""))
+	if got := buf.String(); strings.Contains(got, "→") {
+		t.Errorf("no hint line should render when Hint is empty, got %q", got)
 	}
 }

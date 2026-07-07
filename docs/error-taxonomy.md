@@ -61,9 +61,16 @@ STDERR**, namespaced under a top-level `"error"` key:
 | `code`      | fine slug (§2), frozen/additive |
 | `category`  | frozen category name (`internal` \| `usage` \| `not_found` \| `conflict`) |
 | `exit`      | the int the process exits with (matches §1) — convenient for stderr-only consumers |
-| `message`   | human problem statement (no hint) |
-| `hint`      | remediation; **omitted** when absent (`omitempty`) |
+| `message`   | human problem statement (no hint). **Human-facing, NON-CONTRACTUAL** — may be reworded in any release; never parse it. |
+| `hint`      | remediation; **omitted** when absent (`omitempty`). **Human-facing, NON-CONTRACTUAL** — may be reworded in any release; never parse it. |
 | `retryable` | bool; **always present** for predictable parsing |
+
+**What is frozen vs. not.** The frozen contract is the set of **field names**
+(`code`, `category`, `exit`, `message`, `hint`, `retryable`), the **`code` slug
+values** (§2), the **`category` names**, and the **`exit` ints** (§1). The
+`message` and `hint` **text** is human-facing and **not** frozen — it may be
+reworded between releases without any version bump. Programs must branch only on
+`code`, `category`, and `exit`, never on `message`/`hint` wording.
 
 **Stream separation.** A `--json` *data* command streams its data object to
 **stdout** (unchanged — see the `--json` data-field contract). The error object
@@ -118,5 +125,18 @@ for the `--json`-capable commands such as `show`, `list`, `mail`, `spend`,
 Same as the `--json` data contract: **frozen and additive-only.** To add a new
 failure mode, add a new slug (and, if a genuinely new coarse class is needed, a
 new exit code `≥ 5`). Never change the exit code, category name, or meaning of
-anything already listed here. The contract is enforced by
-`cmd/mg/errtaxonomy_test.go` and `internal/mgerr/mgerr_test.go`.
+anything already listed here.
+
+**What is frozen:** exit codes (§1), category names, error-code slugs (§2), and
+the JSON error-object **field names** (§3).
+
+**What is NOT frozen:** the human-facing `message` and `hint` **text**. These may
+be reworded in any release without a version bump — they are for humans, not
+machines. Agents and scripts must branch **only** on `code`, `category`, and
+`exit`, and must never parse `message`/`hint` wording. Accordingly the contract
+tests (`cmd/mg/errtaxonomy_test.go`) assert machine fields and the structural
+*framing* of the human render, but never pin `message`/`hint` sentences; the
+pre-existing message-quality/sanitization checks in `cmd/mg/errmsg_test.go` and
+`internal/workitem/errors_test.go` are quality tests, not contract tests. The
+contract itself is enforced by `cmd/mg/errtaxonomy_test.go` and
+`internal/mgerr/mgerr_test.go`.
