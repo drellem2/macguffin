@@ -58,6 +58,56 @@ type Message struct {
 	Read    bool
 }
 
+// Mailbox summarizes one agent mailbox under the mail root: the agent name and
+// the number of unread messages (parseable files in new/).
+type Mailbox struct {
+	Name   string
+	Unread int
+}
+
+// MailboxExists reports whether a mailbox directory already exists under the
+// mail root for the given agent. It underpins the first-delivery signal: mail
+// is still delivered to (and the mailbox created for) a never-before-seen
+// recipient, but callers can note that the recipient did not previously exist —
+// the likely-typo case — instead of masking it. A false return means no mail
+// has ever been delivered to that exact agent name.
+func MailboxExists(mailRoot, agent string) bool {
+	info, err := os.Stat(filepath.Join(mailRoot, agent))
+	return err == nil && info.IsDir()
+}
+
+// ListMailboxes enumerates every mailbox directory under the mail root together
+// with its unread count, sorted by name. This is the de-facto agent-identity
+// list: macguffin has no separate registry, so the set of mailbox directories
+// is the set of agents that have ever sent or received mail. A missing mail
+// root yields an empty list (not an error) — nothing has been delivered yet.
+func ListMailboxes(mailRoot string) ([]Mailbox, error) {
+	entries, err := os.ReadDir(mailRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading mail root: %w", err)
+	}
+
+	boxes := make([]Mailbox, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		// Reuse List so the per-box unread count matches exactly what
+		// `mg mail list <agent>` reports (malformed files excluded).
+		msgs, _, err := List(mailRoot, e.Name())
+		if err != nil {
+			return nil, err
+		}
+		boxes = append(boxes, Mailbox{Name: e.Name(), Unread: len(msgs)})
+	}
+
+	sort.Slice(boxes, func(i, j int) bool { return boxes[i].Name < boxes[j].Name })
+	return boxes, nil
+}
+
 // EnsureMaildir creates the Maildir subdirectories (tmp, new, cur) for an agent.
 func EnsureMaildir(mailRoot, agent string) error {
 	for _, sub := range []string{"tmp", "new", "cur"} {

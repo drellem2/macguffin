@@ -671,6 +671,83 @@ func TestAudit_ArchiveFromNew(t *testing.T) {
 	}
 }
 
+func TestMailboxExists(t *testing.T) {
+	root := t.TempDir()
+
+	if MailboxExists(root, "ghost") {
+		t.Error("MailboxExists should be false for a never-created mailbox")
+	}
+
+	// A delivered message creates the mailbox lazily.
+	if _, err := Send(root, "arch", "mayor", "Hi", "body"); err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	if !MailboxExists(root, "arch") {
+		t.Error("MailboxExists should be true after first delivery")
+	}
+
+	// An existing-but-empty mailbox (all mail read/archived) still exists.
+	if EnsureMaildir(root, "empty") != nil {
+		t.Fatal("EnsureMaildir failed")
+	}
+	if !MailboxExists(root, "empty") {
+		t.Error("MailboxExists should be true for an existing empty mailbox")
+	}
+}
+
+func TestListMailboxes(t *testing.T) {
+	root := t.TempDir()
+
+	// Missing mail root -> empty, not an error.
+	boxes, err := ListMailboxes(root)
+	if err != nil {
+		t.Fatalf("ListMailboxes on missing root failed: %v", err)
+	}
+	if len(boxes) != 0 {
+		t.Errorf("expected 0 mailboxes on missing root, got %d", len(boxes))
+	}
+
+	// Two messages to arch, one to witness; read one of arch's.
+	msgID, err := Send(root, "arch", "mayor", "First", "b1")
+	if err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	if _, err := Send(root, "arch", "mayor", "Second", "b2"); err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	if _, err := Send(root, "witness", "mayor", "Only", "b3"); err != nil {
+		t.Fatalf("Send failed: %v", err)
+	}
+	if _, err := Read(root, "arch", msgID); err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	// An existing-but-empty mailbox must still be enumerated (unread 0).
+	if err := EnsureMaildir(root, "aardvark"); err != nil {
+		t.Fatal(err)
+	}
+
+	boxes, err = ListMailboxes(root)
+	if err != nil {
+		t.Fatalf("ListMailboxes failed: %v", err)
+	}
+
+	// Sorted by name: aardvark, arch, witness.
+	want := []Mailbox{
+		{Name: "aardvark", Unread: 0},
+		{Name: "arch", Unread: 1}, // one of two read
+		{Name: "witness", Unread: 1},
+	}
+	if len(boxes) != len(want) {
+		t.Fatalf("expected %d mailboxes, got %d: %+v", len(want), len(boxes), boxes)
+	}
+	for i, w := range want {
+		if boxes[i] != w {
+			t.Errorf("mailbox %d = %+v, want %+v", i, boxes[i], w)
+		}
+	}
+}
+
 func TestParseMessageFile_Malformed(t *testing.T) {
 	dir := t.TempDir()
 	cases := []struct {
