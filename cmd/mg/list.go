@@ -22,6 +22,30 @@ var listTag string
 var listAssignee string
 var listJSON bool
 
+// listStatusValues is the single canonical set of values accepted by
+// `mg list --status`, in the order humans expect to read them. BOTH the
+// --status flag-usage string (see listStatusUsage) and the RunE validation
+// (see isValidListStatus) derive from this slice, so the documented values and
+// the accepted values cannot drift apart. Previously the usage string listed
+// "archived" but not "pending" while the validation accepted "pending" but not
+// "archived" — see gh drellem2/pogo#58.
+var listStatusValues = []string{"available", "claimed", "pending", "done", "shelved", "archived"}
+
+// listStatusUsage renders the --status flag help text from listStatusValues.
+func listStatusUsage() string {
+	return "filter by status (" + strings.Join(listStatusValues, ", ") + ")"
+}
+
+// isValidListStatus reports whether s is one of the canonical --status values.
+func isValidListStatus(s string) bool {
+	for _, v := range listStatusValues {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 // listJSONItem is the stable on-the-wire shape for `mg list --json` output.
 // Field names and order are part of the public CLI contract — callers
 // (kanban viewer, scripts, dashboards) parse this with `json.Unmarshal`.
@@ -125,6 +149,9 @@ Examples:
 		currentUser := resolveCurrentUser()
 
 		if listStatus != "" {
+			if !isValidListStatus(listStatus) {
+				return fmt.Errorf("invalid status %q (must be one of: %s)", listStatus, strings.Join(listStatusValues, ", "))
+			}
 			var items []*workitem.Item
 			if listStatus == "archived" {
 				items, err = workitem.ListArchived(root)
@@ -240,7 +267,7 @@ Examples:
 }
 
 func init() {
-	listCmd.Flags().StringVar(&listStatus, "status", "", "filter by status (available, claimed, done, archived, shelved)")
+	listCmd.Flags().StringVar(&listStatus, "status", "", listStatusUsage())
 	listCmd.Flags().BoolVar(&listAll, "all", false, "include archived and shelved items")
 	listCmd.Flags().BoolVarP(&listArchived, "archived", "a", false, "include archived items")
 	listCmd.Flags().BoolVar(&listShelved, "shelved", false, "include shelved items")

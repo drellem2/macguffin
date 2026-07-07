@@ -1,10 +1,50 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/drellem2/macguffin/internal/workitem"
 )
+
+// TestListStatus_UsageMatchesValidation is the gh drellem2/pogo#58 regression:
+// the --status flag-usage string and the RunE validation must agree on the set
+// of accepted statuses. Both now derive from listStatusValues, so this test
+// fails loudly if a future change reintroduces a separately-maintained list
+// that drifts (the original bug: usage listed "archived" not "pending" while
+// validation accepted "pending" not "archived").
+func TestListStatus_UsageMatchesValidation(t *testing.T) {
+	// Every canonical value must be accepted by the validator...
+	for _, s := range listStatusValues {
+		if !isValidListStatus(s) {
+			t.Errorf("status %q is in listStatusValues but isValidListStatus rejects it", s)
+		}
+	}
+	// ...a value NOT in the slice must be rejected.
+	if isValidListStatus("bogus") {
+		t.Error("isValidListStatus accepted a value not in listStatusValues")
+	}
+
+	// The actual registered flag-usage string must mention exactly the
+	// canonical values — no more, no fewer. This ties the user-facing help
+	// to the validation set, catching drift in either direction.
+	usage := listCmd.Flags().Lookup("status").Usage
+	for _, s := range listStatusValues {
+		if !strings.Contains(usage, s) {
+			t.Errorf("flag usage %q does not document accepted status %q", usage, s)
+		}
+	}
+	// Guard the other direction: any status token in the usage string must be
+	// a value the validator accepts (so the docs can't advertise a status the
+	// command would reject).
+	for _, tok := range []string{"available", "claimed", "pending", "done", "shelved", "archived", "blocked", "wip"} {
+		documented := strings.Contains(usage, tok)
+		accepted := isValidListStatus(tok)
+		if documented != accepted {
+			t.Errorf("status %q: documented-in-usage=%v but accepted-by-validation=%v", tok, documented, accepted)
+		}
+	}
+}
 
 func TestFormatAssignee_Human(t *testing.T) {
 	// "human" assignee should render as blue "human" when current user is set
