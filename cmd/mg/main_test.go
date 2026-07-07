@@ -23,6 +23,38 @@ func TestCLI_Version(t *testing.T) {
 	}
 }
 
+// TestCLI_VersionFlag is the gh drellem2/pogo#59 regression: `mg --version` and
+// its `-v` shorthand must work (previously only the `mg version` subcommand did)
+// and must print the same string as `mg version`.
+func TestCLI_VersionFlag(t *testing.T) {
+	bin := buildBinary(t)
+	// In a dev build (no ldflags) versionString() == version == "dev".
+	want := "mg " + version + "\n"
+	for _, flag := range []string{"--version", "-v"} {
+		t.Run(flag, func(t *testing.T) {
+			out, err := exec.Command(bin, flag).CombinedOutput()
+			if err != nil {
+				t.Fatalf("mg %s failed: %v\n%s", flag, err, out)
+			}
+			if string(out) != want {
+				t.Errorf("mg %s = %q, want %q", flag, out, want)
+			}
+		})
+	}
+	// The flag output must match the subcommand output exactly.
+	flagOut, err := exec.Command(bin, "--version").CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg --version failed: %v\n%s", err, flagOut)
+	}
+	subOut, err := exec.Command(bin, "version").CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg version failed: %v\n%s", err, subOut)
+	}
+	if string(flagOut) != string(subOut) {
+		t.Errorf("mg --version = %q but mg version = %q; they must match", flagOut, subOut)
+	}
+}
+
 func TestCLI_Help(t *testing.T) {
 	bin := buildBinary(t)
 	out, err := exec.Command(bin, "help").CombinedOutput()
