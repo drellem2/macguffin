@@ -117,7 +117,7 @@ mg log                 # view snapshot history
 | `mg spend [--by AXIS] [--since D] [--window W] [--total] [--json]` | Aggregate token consumption per item, tag, repo, agent, etc. `--since` is a rolling duration (`24h`, `7d`); `--window today\|week` is calendar-anchored; `--total` prints the today/this-week/all-time headline. See [Token spend accounting](#token-spend-accounting). |
 | `mg snapshot` | Commit a git snapshot of current state. |
 | `mg log [args]` | Show snapshot history (passes args to `git log`). |
-| `mg schema` | Dump the full command tree as one JSON document (command names, use, flags, and a `mutates`/`idempotent` hint per command) for agent/tooling consumers. Frozen, additive-only shape versioned by `schema_version`. |
+| `mg schema` | Dump the full command tree as one JSON document (command names, use, flags, and a `mutates`/`idempotent` hint per command) for agent/tooling consumers. Frozen, additive-only shape versioned by `schema_version` (see [schema contract](#mg-schema-contract)). |
 | `mg version` / `mg --version` / `mg -v` | Print version. Release builds include commit + date build metadata (e.g. `mg v0.1.3 (abc1234, 2026-07-08)`). |
 
 ### `--json` output contract
@@ -128,6 +128,25 @@ can parse them uniformly: **collections emit NDJSON** (one JSON object per line 
 (`show`, and `flow`, which marshals one snapshot object). Field names are a
 **frozen, additive-only** contract: new fields may be added over time, but
 existing ones are never renamed or removed.
+
+### `mg schema` contract
+
+`mg schema` emits **one JSON document** describing the whole command tree, so
+agent/tooling consumers can discover mg's surface without scraping `--help`. Its
+shape follows the same discipline as `--json`: field names are **frozen and
+additive-only**, and `schema_version` is bumped only on a breaking shape change.
+
+`schema_version` gates the **shape only**. Two things it deliberately does *not*
+gate — a consumer diffing the command surface for stability must **ignore** both:
+
+- **`version`** (top-level) is **build metadata** — the mg binary's version
+  string. It changes every release and describes nothing about the command
+  surface, so exclude it from surface diffs.
+- Each command's **`mutates` / `idempotent`** booleans are **advisory** planner
+  hints ("is this safe to retry?"). Their *values* may be refined between
+  releases **without** a `schema_version` bump; only their presence and type are
+  frozen. Where idempotency is flag-dependent (e.g. `edit --title` converges but
+  `edit --add-tags` accumulates) the hint takes the conservative value (`false`).
 
 ## Directory Layout
 

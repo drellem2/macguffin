@@ -64,7 +64,7 @@ func TestSchema_EmitsValidJSON(t *testing.T) {
 	}{
 		{"mg list", false, true},
 		{"mg new", true, false},
-		{"mg edit", true, true},
+		{"mg edit", true, false}, // flag-dependent idempotency -> conservative false (--add-tags/--rm-tags accumulate)
 		{"mg schema", false, true},
 		{"mg mail send", true, false},
 		{"mg mail read", true, true},

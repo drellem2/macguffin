@@ -29,10 +29,16 @@ const schemaVersion = 1
 //   - The output is ONE JSON document describing the whole tree (not NDJSON),
 //     because the tree is a single nested structure, not a collection of peers.
 //
-// The `mutates` / `idempotent` hints are provisional side-effect annotations for
-// agent planners (e.g. "is this command safe to retry?"). Their per-command
-// classification (see commandEffects) is flagged for architect review — the
-// SHAPE is the contract; the individual bool values may be refined.
+// schema_version gates the SHAPE only. Two things it deliberately does NOT gate,
+// which consumers must therefore IGNORE when diffing the surface for stability:
+//
+//   - The top-level `version` field is BUILD METADATA (the mg binary's version
+//     string). It changes every release and says nothing about the command
+//     surface; a surface diff must exclude it.
+//   - The per-command `mutates` / `idempotent` hints are ADVISORY side-effect
+//     annotations for agent planners (e.g. "is this safe to retry?"). Their
+//     VALUES may be refined between releases WITHOUT a schema_version bump. The
+//     SHAPE (that the fields exist and are bools) is frozen; the values are not.
 
 // schemaFlag is the frozen JSON shape for one flag on a command.
 type schemaFlag struct {
@@ -72,6 +78,15 @@ type schemaDoc struct {
 //   - idempotent: re-running with identical arguments converges to the same
 //     state rather than compounding the effect. Only meaningful when mutates is
 //     true; read-only commands are trivially idempotent (true).
+//
+// When idempotency is FLAG-DEPENDENT — some invocations converge, others
+// accumulate (e.g. `mg edit --title` is idempotent but `mg edit --add-tags`
+// accumulates) — the bool takes the CONSERVATIVE value (false), so a consumer
+// never treats a command as safe-to-retry when some flag combination isn't.
+//
+// These two bools are ADVISORY, not part of the frozen shape: their VALUES may
+// change between releases WITHOUT a schema_version bump (schema_version gates
+// the document SHAPE only). Consumers must not diff them for contract stability.
 type commandEffect struct {
 	mutates    bool
 	idempotent bool
@@ -96,7 +111,7 @@ var commandEffects = map[string]commandEffect{
 	"mg claim":     {mutates: true, idempotent: false},
 	"mg unclaim":   {mutates: true, idempotent: false},
 	"mg done":      {mutates: true, idempotent: false},
-	"mg edit":      {mutates: true, idempotent: true}, // set-field: same fields -> same state
+	"mg edit":      {mutates: true, idempotent: false}, // --add-tags/--rm-tags accumulate; flag-dependent idempotency takes the conservative false
 	"mg assign":    {mutates: true, idempotent: true},
 	"mg reopen":    {mutates: true, idempotent: false},
 	"mg shelve":    {mutates: true, idempotent: false},
@@ -141,7 +156,13 @@ flags, and 'mutates'/'idempotent' side-effect hints.
 
 The JSON shape is a frozen, additive-only public contract: field names are
 never renamed or removed, new fields may be added, and a breaking change bumps
-"schema_version".`,
+"schema_version".
+
+schema_version gates the SHAPE only. When diffing the command surface for
+stability, IGNORE two things it does not gate: the top-level "version" field is
+build metadata (the mg binary version, changes every release), and each
+command's "mutates"/"idempotent" hints are ADVISORY — their values may change
+between releases without a schema_version bump.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		doc := schemaDoc{
