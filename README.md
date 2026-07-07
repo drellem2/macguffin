@@ -101,7 +101,7 @@ mg log                 # view snapshot history
 |---------|-------------|
 | `mg init [--git]` | Create the `~/.macguffin` directory tree. `--git` enables snapshot tracking. |
 | `mg new` | Create a new work item (Markdown + YAML frontmatter). |
-| `mg show <id>` | Display a work item by ID. |
+| `mg show <id> [--json]` | Display a work item by ID. `--json` emits the full item as one JSON object (adds `creator`, `body`, `budget`, `spent` to the `list --json` field set). |
 | `mg list [--json]` | List work items. `--json` emits NDJSON (one JSON object per line) for scripts and dashboards. |
 | `mg claim ID` | Atomically claim a work item by ID. |
 | `mg done ID` | Mark a claimed work item as done. |
@@ -112,12 +112,21 @@ mg log                 # view snapshot history
 | `mg schedule` | Promote pending items whose dependencies are met. |
 | `mg mail send\|list\|read\|archive` | Maildir-style messaging between agents. `archive AGENT/MSG-ID` moves a message out of the active mailbox; `list AGENT --archived` inspects archived messages. Each operation logs a `mail.sent`/`mail.read`/`mail.archived` event to `events.jsonl` and a caller-attributed line (pid + `POGO_AGENT_NAME`) to `log/mail-audit.log`; malformed message files are skipped loudly (`mail.malformed` event, stderr warning, count in `list` output). `read` refuses to touch another agent's mailbox when `POGO_AGENT_NAME` is set (reading marks the message read for its owner) unless `--force` is given; denials and forced reads are audited too. |
 | `mg event append <type> [--key=value ...]` | Append a structured event to `events.jsonl`. |
-| `mg event list [--type=T] [--since=TS] [--tail=N]` | List events with optional filtering. |
-| `mg flow [--live] [--repo=P] [--blocked-after=D]` | Per-status flow view: throughput, median age, bottleneck, blocked chains. |
+| `mg event list [--type=T] [--since=TS] [--tail=N] [--json]` | List events with optional filtering. Output is already NDJSON; `--json` is accepted for consistency (no behavior change). |
+| `mg flow [--live] [--repo=P] [--blocked-after=D] [--group-by AXIS] [--json]` | Per-status flow view: throughput, median age, bottleneck, blocked chains. `--json` emits the computed snapshot as one JSON object under a single stable schema — the same top-level keys for the status and `--group-by` paths; the grouped path fills `groups` and leaves the status-only fields empty. |
 | `mg spend [--by AXIS] [--since D] [--window W] [--total] [--json]` | Aggregate token consumption per item, tag, repo, agent, etc. `--since` is a rolling duration (`24h`, `7d`); `--window today\|week` is calendar-anchored; `--total` prints the today/this-week/all-time headline. See [Token spend accounting](#token-spend-accounting). |
 | `mg snapshot` | Commit a git snapshot of current state. |
 | `mg log [args]` | Show snapshot history (passes args to `git log`). |
 | `mg version` | Print version. |
+
+### `--json` output contract
+
+Commands that support `--json` follow one convention so scripts and dashboards
+can parse them uniformly: **collections emit NDJSON** (one JSON object per line —
+`list`, `spend`, `event list`) and **single items emit one JSON object**
+(`show`, and `flow`, which marshals one snapshot object). Field names are a
+**frozen, additive-only** contract: new fields may be added over time, but
+existing ones are never renamed or removed.
 
 ## Directory Layout
 

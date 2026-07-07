@@ -30,6 +30,13 @@ Example:
 	Args:               cobra.MinimumNArgs(1),
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// DisableFlagParsing means cobra never intercepts --help/-h, so guard
+		// it here BEFORE any side effect — otherwise `mg event append --help`
+		// persists a junk {"type":"--help"} event. See drellem2/pogo#54.
+		if helpRequested(args) {
+			return cmd.Help()
+		}
+
 		root, err := workspace.DefaultRoot()
 		if err != nil {
 			return err
@@ -64,6 +71,7 @@ Example:
 var eventListType string
 var eventListSince string
 var eventListTail int
+var eventListJSON bool
 
 var eventListCmd = &cobra.Command{
 	Use:   "list",
@@ -108,6 +116,11 @@ func init() {
 	eventListCmd.Flags().StringVar(&eventListType, "type", "", "filter by event type")
 	eventListCmd.Flags().StringVar(&eventListSince, "since", "", "filter events at or after this RFC3339 timestamp")
 	eventListCmd.Flags().IntVar(&eventListTail, "tail", 0, "show only the last N entries")
+	// `event list` output is already unconditional NDJSON (one JSON object per
+	// line), so --json is accepted for consistency with list/spend/show and is
+	// a no-op. Registering it turns the previous "unknown flag" error into a
+	// success. See drellem2/pogo#55.
+	eventListCmd.Flags().BoolVar(&eventListJSON, "json", false, "emit events as NDJSON (already the default; accepted for consistency)")
 
 	eventCmd.AddCommand(eventAppendCmd)
 	eventCmd.AddCommand(eventListCmd)

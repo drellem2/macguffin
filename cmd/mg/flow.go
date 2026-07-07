@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -21,6 +22,7 @@ var (
 	flowInterval        time.Duration
 	flowGroupBy         string
 	flowAgeDistribution bool
+	flowJSONOut         bool
 )
 
 var flowCmd = &cobra.Command{
@@ -68,6 +70,9 @@ Examples:
 			if err != nil {
 				return err
 			}
+			if flowJSONOut {
+				return writeFlowGroupedJSON(gsnap)
+			}
 			flow.RenderGrouped(cmd.OutOrStdout(), gsnap, true)
 			if flowAgeDistribution {
 				flow.RenderAgeDistribution(cmd.OutOrStdout(), flow.ComputeAgeDistribution(gsnap.Records))
@@ -78,6 +83,15 @@ Examples:
 		opts := flow.Options{
 			BlockedAfter: flowBlockedAfter,
 			RepoFilter:   flowRepo,
+		}
+		if flowJSONOut {
+			// --json emits a single snapshot; the --live re-render loop is a
+			// human-terminal affordance and does not apply.
+			snap, err := flow.Compute(root, opts)
+			if err != nil {
+				return err
+			}
+			return writeFlowStatusJSON(snap)
 		}
 		if flowLive {
 			return runLive(cmd.OutOrStdout(), root, opts, flowInterval)
@@ -191,4 +205,142 @@ func init() {
 	flowCmd.Flags().DurationVar(&flowInterval, "interval", time.Second, "polling interval for --live mode")
 	flowCmd.Flags().StringVar(&flowGroupBy, "group-by", "status", "partition axis: status, repo, tag, tag:<value>, assignee, priority, age")
 	flowCmd.Flags().BoolVar(&flowAgeDistribution, "age-distribution", false, "append a four-bucket age histogram below the main table")
+	flowCmd.Flags().BoolVar(&flowJSONOut, "json", false, "emit the computed snapshot as one JSON object instead of the rendered table")
+}
+
+// flowJSON is the single, stable wire shape for `mg flow --json`. It covers
+// BOTH the default status path and every --group-by path with ONE schema: the
+// top-level keys never change with the invocation flag. On the status path
+// `statuses`, `blocked`, and `spawn` are populated and `groups` is empty; on a
+// --group-by path `groups` is populated and the status-only fields are empty
+// (`spawn` is null). `group_by` names the active axis ("status" by default, or
+// the grouping name). Field names are FROZEN and additive-only — new fields may
+// be added, existing ones are never renamed or removed. See drellem2/pogo#55.
+type flowJSON struct {
+	GeneratedAt time.Time         `json:"generated_at"`
+	GroupBy     string            `json:"group_by"`
+	Bottleneck  string            `json:"bottleneck"`
+	Statuses    []flowStatusJSON  `json:"statuses"`
+	Groups      []flowGroupJSON   `json:"groups"`
+	Blocked     []flowBlockedJSON `json:"blocked"`
+	Spawn       *flowSpawnJSON    `json:"spawn"`
+}
+
+// flowStatusJSON mirrors flow.StatusMetrics for the status path. Durations are
+// serialized as float hours (median_age_hours / oldest_age_hours) to stay both
+// machine-friendly and consistent with the grouped path's hour-based ages.
+type flowStatusJSON struct {
+	Status         string  `json:"status"`
+	Count          int     `json:"count"`
+	In24h          int     `json:"in_24h"`
+	Out24h         int     `json:"out_24h"`
+	Net24h         int     `json:"net_24h"`
+	In7d           int     `json:"in_7d"`
+	Out7d          int     `json:"out_7d"`
+	Net7d          int     `json:"net_7d"`
+	MedianAgeHours float64 `json:"median_age_hours"`
+	OldestAgeHours float64 `json:"oldest_age_hours"`
+	OldestID       string  `json:"oldest_id"`
+}
+
+// flowGroupJSON mirrors flow.GroupedMetrics for the --group-by paths.
+type flowGroupJSON struct {
+	Key            string  `json:"key"`
+	Label          string  `json:"label"`
+	Active         int     `json:"active"`
+	Done7d         int     `json:"done_7d"`
+	MedianAgeHours float64 `json:"median_age_hours"`
+	OldestID       string  `json:"oldest_id"`
+	OldestAgeHours float64 `json:"oldest_age_hours"`
+}
+
+// flowBlockedJSON mirrors flow.BlockedItem (status path only).
+type flowBlockedJSON struct {
+	ID       string   `json:"id"`
+	Status   string   `json:"status"`
+	Title    string   `json:"title"`
+	AgeHours float64  `json:"age_hours"`
+	Blocking []string `json:"blocking"`
+}
+
+// flowSpawnJSON mirrors flow.SpawnPressure (status path only).
+type flowSpawnJSON struct {
+	Available  int  `json:"available"`
+	Polecats   int  `json:"polecats"`
+	PolecatsOK bool `json:"polecats_ok"`
+}
+
+func writeFlowStatusJSON(snap flow.Snapshot) error {
+	out := flowJSON{
+		GeneratedAt: snap.GeneratedAt,
+		GroupBy:     "status",
+		Bottleneck:  snap.Bottleneck,
+		Statuses:    make([]flowStatusJSON, 0, len(snap.Statuses)),
+		Groups:      []flowGroupJSON{},
+		Blocked:     make([]flowBlockedJSON, 0, len(snap.Blocked)),
+	}
+	for _, s := range snap.Statuses {
+		out.Statuses = append(out.Statuses, flowStatusJSON{
+			Status:         s.Status,
+			Count:          s.Count,
+			In24h:          s.In24h,
+			Out24h:         s.Out24h,
+			Net24h:         s.Net24h,
+			In7d:           s.In7d,
+			Out7d:          s.Out7d,
+			Net7d:          s.Net7d,
+			MedianAgeHours: s.MedianAge.Hours(),
+			OldestAgeHours: s.OldestAge.Hours(),
+			OldestID:       s.OldestID,
+		})
+	}
+	for _, b := range snap.Blocked {
+		blocking := b.Blocking
+		if blocking == nil {
+			blocking = []string{}
+		}
+		out.Blocked = append(out.Blocked, flowBlockedJSON{
+			ID:       b.ID,
+			Status:   b.Status,
+			Title:    b.Title,
+			AgeHours: b.Age.Hours(),
+			Blocking: blocking,
+		})
+	}
+	out.Spawn = &flowSpawnJSON{
+		Available:  snap.Spawn.Available,
+		Polecats:   snap.Spawn.Polecats,
+		PolecatsOK: snap.Spawn.PolecatsOK,
+	}
+	return encodeFlowJSON(out)
+}
+
+func writeFlowGroupedJSON(snap *flow.GroupedSnapshot) error {
+	out := flowJSON{
+		GeneratedAt: snap.GeneratedAt,
+		GroupBy:     snap.GroupBy,
+		Bottleneck:  snap.Bottleneck,
+		Statuses:    []flowStatusJSON{},
+		Groups:      make([]flowGroupJSON, 0, len(snap.Groups)),
+		Blocked:     []flowBlockedJSON{},
+		Spawn:       nil,
+	}
+	for _, g := range snap.Groups {
+		out.Groups = append(out.Groups, flowGroupJSON{
+			Key:            g.Key,
+			Label:          g.Label,
+			Active:         g.Active,
+			Done7d:         g.Done7d,
+			MedianAgeHours: g.MedianAgeHours,
+			OldestID:       g.OldestID,
+			OldestAgeHours: g.OldestAgeHours,
+		})
+	}
+	return encodeFlowJSON(out)
+}
+
+func encodeFlowJSON(out flowJSON) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
 }

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/spend"
@@ -9,6 +11,22 @@ import (
 	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
 )
+
+var showJSON bool
+
+// showJSONItem is the stable on-the-wire shape for `mg show ID --json`: the
+// full work item as ONE JSON object. It embeds listJSONItem so the fields
+// shared with `mg list --json` keep identical names (the frozen, additive-only
+// CLI contract), and adds the single-item extras that the list view omits:
+// creator, the full body, and budget/spend. Field names are FROZEN — new
+// fields may be added, but existing ones are never renamed or removed.
+type showJSONItem struct {
+	listJSONItem
+	Creator string `json:"creator"`
+	Body    string `json:"body"`
+	Budget  *int   `json:"budget"` // null when unset
+	Spent   int    `json:"spent"`  // total tokens recorded against this item
+}
 
 var showCmd = &cobra.Command{
 	Use:   "show ID",
@@ -28,6 +46,10 @@ var showCmd = &cobra.Command{
 		status, err := workitem.Status(root, args[0])
 		if err != nil {
 			return err
+		}
+
+		if showJSON {
+			return writeShowJSON(root, item, status)
 		}
 
 		fmt.Printf("%-10s %s\n", "ID:", item.ID)
@@ -75,6 +97,32 @@ var showCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+func init() {
+	showCmd.Flags().BoolVar(&showJSON, "json", false, "emit the full work item as one JSON object")
+}
+
+// writeShowJSON marshals the work item as a single JSON object on stdout.
+// Spend is summed from the per-item spend records (0 when none are recorded),
+// mirroring the human view's Spent line.
+func writeShowJSON(root string, item *workitem.Item, status string) error {
+	spent := 0
+	if recs, err := spend.ReadItem(root, item.ID); err == nil {
+		for _, r := range recs {
+			spent += r.Input + r.CacheRead + r.CacheCreate + r.Output
+		}
+	}
+	out := showJSONItem{
+		listJSONItem: toJSONItem(item, status),
+		Creator:      item.Creator,
+		Body:         item.Body,
+		Budget:       item.Budget,
+		Spent:        spent,
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(out)
 }
 
 // pctOfBudget rounds spent/budget to a whole percentage. A zero budget is
