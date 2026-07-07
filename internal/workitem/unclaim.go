@@ -48,7 +48,7 @@ func Unclaim(root, id string) (*UnclaimResult, error) {
 	dst := filepath.Join(availableDir, id+".md")
 
 	if err := os.Rename(src, dst); err != nil {
-		return nil, fmt.Errorf("%s: could not release claim: %s", id, fsErrText(err))
+		return nil, ioErr(fmt.Sprintf("%s: could not release claim: %s", id, fsErrText(err)))
 	}
 
 	kvs := map[string]string{

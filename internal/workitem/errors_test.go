@@ -1,8 +1,11 @@
 package workitem
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/drellem2/macguffin/internal/mgerr"
 )
 
 // leakMarkers are substrings that would indicate a state-transition error has
@@ -45,10 +48,23 @@ func TestTransitionErrorMessages(t *testing.T) {
 		}
 		_, err = Claim(root, item.ID, 0)
 		assertNoLeak(t, err)
-		for _, want := range []string{item.ID, "already claimed", "by PID 4242", "mg unclaim"} {
+		// Message carries the problem; the remediation now lives in the typed
+		// error's Hint field (rendered on its own line by the CLI), not
+		// flattened into Error(). See mg-931f / mgerr.
+		for _, want := range []string{item.ID, "already claimed", "by PID 4242"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("Claim error %q missing %q", err.Error(), want)
 			}
+		}
+		var me *mgerr.Error
+		if !errors.As(err, &me) {
+			t.Fatalf("Claim error is not an *mgerr.Error: %T", err)
+		}
+		if me.Category != mgerr.CatConflict || me.Code != "already_claimed" {
+			t.Errorf("category/code = %v/%q, want conflict/already_claimed", me.Category, me.Code)
+		}
+		if !strings.Contains(me.Hint, "mg unclaim") {
+			t.Errorf("Hint %q missing %q", me.Hint, "mg unclaim")
 		}
 	})
 

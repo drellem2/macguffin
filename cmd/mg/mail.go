@@ -122,7 +122,7 @@ recipient is visible rather than silently swallowed.
 able to send its first message before it has a mailbox. Run 'mg mail list' with
 no arguments to see the existing mailboxes, which is the de-facto list of agent
 identities to draw a --from value from.`,
-	Args: cobra.ExactArgs(1),
+	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		recipient := args[0]
 
@@ -182,7 +182,7 @@ too; with --archived, archived messages). If the agent's mailbox never existed
 this is called out distinctly from an existing-but-empty mailbox. Under --json
 each message is one NDJSON object {id,from,subject,date,read}; the MSG-ID it
 prints is the token 'mg mail read'/'mg mail archive' accept.`,
-	Args: cobra.MaximumNArgs(1),
+	Args: usageArgs(cobra.MaximumNArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		mr, err := mailRoot()
 		if err != nil {
@@ -310,7 +310,7 @@ it marks the message read and hides it from that agent's unread list.
 
 With --json the message is emitted as a single object {id,from,subject,date,
 read,body} instead of the human-formatted headers-and-body.`,
-	Args: cobra.RangeArgs(1, 2),
+	Args: usageArgs(cobra.RangeArgs(1, 2)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		agent, msgID, err := parseAgentMsgID(args)
 		if err != nil {
@@ -372,7 +372,7 @@ already-archived message is a no-op. Archived mail is inspected with
 
 With --json the archived message is emitted as a single object
 {id,mailbox,from,subject}.`,
-	Args: cobra.RangeArgs(1, 2),
+	Args: usageArgs(cobra.RangeArgs(1, 2)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		agent, msgID, err := parseAgentMsgID(args)
 		if err != nil {

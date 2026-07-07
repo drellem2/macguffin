@@ -125,7 +125,7 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 	content := Render(item)
 
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return nil, fmt.Errorf("could not create work item: %s", fsErrText(err))
+		return nil, ioErr(fmt.Sprintf("could not create work item: %s", fsErrText(err)))
 	}
 
 	event.Emit(root, "work.created", map[string]string{

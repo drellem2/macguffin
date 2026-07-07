@@ -18,7 +18,7 @@ listing. Shelved items can be listed with 'mg list --status=shelved' and
 restored with 'mg unshelve'.
 
 Use --tag to shelve all items with a given tag.`,
-	Args: cobra.MaximumNArgs(1),
+	Args: usageArgs(cobra.MaximumNArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := workspace.DefaultRoot()
 		if err != nil {

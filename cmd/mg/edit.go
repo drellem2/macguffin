@@ -42,7 +42,7 @@ an ephemeral polecat (named after the work-item ID at spawn time)
 regardless of the assignee. Polecats are never named in advance, so they
 cannot be assigned ahead of time; the assignee is the durable owner who
 decides whether to dispatch the work, hold it, or close it.`,
-	Args: cobra.ExactArgs(1),
+	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := workspace.DefaultRoot()
 		if err != nil {

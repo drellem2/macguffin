@@ -14,7 +14,7 @@ var unarchiveCmd = &cobra.Command{
 	Long: `Unarchive restores a previously archived work item back to
 available/. The item must currently be in the archive. Any result.json
 sidecar from the prior done state is moved alongside the work item.`,
-	Args: cobra.ExactArgs(1),
+	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := workspace.DefaultRoot()
 		if err != nil {

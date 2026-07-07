@@ -14,7 +14,7 @@ var doneResult string
 var doneCmd = &cobra.Command{
 	Use:   "done ID",
 	Short: "Mark a claimed work item as done",
-	Args:  cobra.ExactArgs(1),
+	Args:  usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		id := args[0]
 

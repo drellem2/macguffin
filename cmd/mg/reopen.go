@@ -11,7 +11,7 @@ import (
 var reopenCmd = &cobra.Command{
 	Use:   "reopen ID",
 	Short: "Move a done work item back to claimed",
-	Args:  cobra.ExactArgs(1),
+	Args:  usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := workspace.DefaultRoot()
 		if err != nil {

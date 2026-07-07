@@ -11,7 +11,7 @@ import (
 var assignCmd = &cobra.Command{
 	Use:   "assign ID ASSIGNEE",
 	Short: "Assign a work item (shortcut for edit --assignee)",
-	Args:  cobra.ExactArgs(2),
+	Args:  usageArgs(cobra.ExactArgs(2)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := workspace.DefaultRoot()
 		if err != nil {

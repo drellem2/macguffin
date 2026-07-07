@@ -31,7 +31,7 @@ type showJSONItem struct {
 var showCmd = &cobra.Command{
 	Use:   "show ID",
 	Short: "Show a work item by ID",
-	Args:  cobra.ExactArgs(1),
+	Args:  usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := workspace.DefaultRoot()
 		if err != nil {

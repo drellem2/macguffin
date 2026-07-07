@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/drellem2/macguffin/internal/event"
+	"github.com/drellem2/macguffin/internal/mgerr"
 )
 
 // ErrMalformed marks a message file that exists but cannot be parsed as a
@@ -123,7 +124,7 @@ func EnsureMaildir(mailRoot, agent string) error {
 // atomic delivery: write to tmp/, then rename to new/.
 func Send(mailRoot, recipient, from, subject, body string) (string, error) {
 	if err := EnsureMaildir(mailRoot, recipient); err != nil {
-		return "", fmt.Errorf("could not deliver message to %s: %s", recipient, fsErrText(err))
+		return "", mgerr.Wrap(mgerr.CatInternal, "io_error", fmt.Errorf("could not deliver message to %s: %s", recipient, fsErrText(err)), "")
 	}
 
 	msgID := fmt.Sprintf("%d.%d.%d", time.Now().UnixNano(), os.Getpid(), time.Now().UnixNano()%10000)
@@ -135,12 +136,12 @@ func Send(mailRoot, recipient, from, subject, body string) (string, error) {
 	newPath := filepath.Join(mailRoot, recipient, "new", msgID)
 
 	if err := os.WriteFile(tmpPath, []byte(content), 0o644); err != nil {
-		return "", fmt.Errorf("could not deliver message to %s: %s", recipient, fsErrText(err))
+		return "", mgerr.Wrap(mgerr.CatInternal, "io_error", fmt.Errorf("could not deliver message to %s: %s", recipient, fsErrText(err)), "")
 	}
 
 	if err := os.Rename(tmpPath, newPath); err != nil {
 		os.Remove(tmpPath) // best-effort cleanup
-		return "", fmt.Errorf("could not deliver message to %s: %s", recipient, fsErrText(err))
+		return "", mgerr.Wrap(mgerr.CatInternal, "io_error", fmt.Errorf("could not deliver message to %s: %s", recipient, fsErrText(err)), "")
 	}
 
 	event.Emit(eventsRoot(mailRoot), "mail.sent", map[string]string{
@@ -238,15 +239,18 @@ func Read(mailRoot, agent, msgID string) (*Message, error) {
 	msg, err := parseMessageFile(newPath, msgID)
 	if err != nil {
 		if errors.Is(err, ErrMalformed) {
-			return nil, fmt.Errorf("message %q in %s's mailbox: %w", msgID, agent, err)
+			// Exists but unparseable → not_found category with the distinct
+			// malformed_message slug; the wrapped ErrMalformed keeps errors.Is
+			// working for internal callers.
+			return nil, mgerr.Wrap(mgerr.CatNotFound, "malformed_message", fmt.Errorf("message %q in %s's mailbox: %w", msgID, agent, err), "")
 		}
 		// Maybe already in cur/?
 		msg, err2 := parseMessageFile(curPath, msgID)
 		if err2 != nil {
 			if errors.Is(err2, ErrMalformed) {
-				return nil, fmt.Errorf("message %q in %s's mailbox: %w", msgID, agent, err2)
+				return nil, mgerr.Wrap(mgerr.CatNotFound, "malformed_message", fmt.Errorf("message %q in %s's mailbox: %w", msgID, agent, err2), "")
 			}
-			return nil, fmt.Errorf("message %q not found: %w", msgID, err)
+			return nil, mgerr.Wrap(mgerr.CatNotFound, "no_such_message", fmt.Errorf("message %q not found: %w", msgID, err), "")
 		}
 		event.Emit(eventsRoot(mailRoot), "mail.read", map[string]string{
 			"msg_id":  msgID,
@@ -299,7 +303,7 @@ func Archive(mailRoot, agent, msgID string) (*Message, error) {
 			msg.Read = true
 			return &msg, nil
 		}
-		return nil, fmt.Errorf("message %q not found for %s", msgID, agent)
+		return nil, mgerr.NotFound("no_such_message", fmt.Sprintf("message %q not found for %s", msgID, agent), "")
 	}
 
 	msg, err := parseMessageFile(srcPath, msgID)

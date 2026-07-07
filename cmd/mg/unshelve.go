@@ -14,7 +14,7 @@ var unshelveCmd = &cobra.Command{
 	Long: `Unshelve restores a previously shelved work item and any of its
 dependents that are also shelved. Items with unmet dependencies are
 placed in pending/; others go to available/.`,
-	Args: cobra.ExactArgs(1),
+	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := workspace.DefaultRoot()
 		if err != nil {

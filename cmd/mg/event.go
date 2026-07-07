@@ -27,7 +27,7 @@ Event type is positional arg, all other fields are --key=value flags.
 Example:
   mg event append agent.start --agent=crew-arch --type=crew
   mg event append work.claim --agent=cat-a3f --item=gt-a3f`,
-	Args:               cobra.MinimumNArgs(1),
+	Args:               usageArgs(cobra.MinimumNArgs(1)),
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// DisableFlagParsing means cobra never intercepts --help/-h, so guard

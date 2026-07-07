@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/drellem2/macguffin/internal/mgerr"
 )
 
 // This file centralizes user-facing error construction for the state-transition
@@ -59,17 +61,18 @@ func remediation(status, id string) string {
 	return ""
 }
 
-// withHint joins a problem statement with an optional remediation hint.
-func withHint(problem, hint string) error {
-	if hint == "" {
-		return errors.New(problem)
-	}
-	return fmt.Errorf("%s %s", problem, hint)
+// errNoSuchItem is the standard "this ID does not exist anywhere" error. It is
+// the not_found category (exit 3): a named entity that exists in no directory.
+func errNoSuchItem(id string) *mgerr.Error {
+	return mgerr.NotFound("no_such_item", fmt.Sprintf("%s: no such work item.", id), "")
 }
 
-// errNoSuchItem is the standard "this ID does not exist anywhere" message.
-func errNoSuchItem(id string) error {
-	return fmt.Errorf("%s: no such work item.", id)
+// ioErr wraps a sanitized IO failure (from fsErrText) as the internal category
+// (exit 1) with the io_error slug. The message is already scrubbed of maildir
+// internals by the caller; we keep it verbatim and do NOT surface the raw
+// *os.LinkError, matching the pre-taxonomy behavior while adding a machine slug.
+func ioErr(msg string) *mgerr.Error {
+	return &mgerr.Error{Category: mgerr.CatInternal, Code: "io_error", Message: msg}
 }
 
 // fsErrText extracts the underlying cause from an os.Rename/os.Open style error
@@ -89,8 +92,10 @@ func fsErrText(err error) string {
 }
 
 // explainClaimFailure produces a user-facing error when 'claim' could not move
-// the item out of available/, by diagnosing where the item actually is.
-func explainClaimFailure(root, id string) error {
+// the item out of available/, by diagnosing where the item actually is. The
+// state cases are conflicts (exit 4); a genuinely-absent item is not_found
+// (exit 3); the race case is a retryable conflict.
+func explainClaimFailure(root, id string) *mgerr.Error {
 	status, pid := statusWithPID(root, id)
 	switch status {
 	case "":
@@ -100,98 +105,98 @@ func explainClaimFailure(root, id string) error {
 		if pid > 0 {
 			who = fmt.Sprintf(" (by PID %d)", pid)
 		}
-		return withHint(fmt.Sprintf("%s: already claimed%s.", id, who), remediation("claimed", id))
+		return mgerr.Conflict("already_claimed", fmt.Sprintf("%s: already claimed%s.", id, who), remediation("claimed", id))
 	case "done":
-		return withHint(fmt.Sprintf("%s: already done.", id), remediation("done", id))
+		return mgerr.Conflict("already_done", fmt.Sprintf("%s: already done.", id), remediation("done", id))
 	case "pending":
-		return withHint(fmt.Sprintf("%s: not available yet — it is waiting on unmet dependencies.", id), remediation("pending", id))
+		return mgerr.Conflict("unmet_dependencies", fmt.Sprintf("%s: not available yet — it is waiting on unmet dependencies.", id), remediation("pending", id))
 	case "shelved":
-		return withHint(fmt.Sprintf("%s: is shelved.", id), remediation("shelved", id))
+		return mgerr.Conflict("item_shelved", fmt.Sprintf("%s: is shelved.", id), remediation("shelved", id))
 	case "archived":
-		return withHint(fmt.Sprintf("%s: is archived.", id), remediation("archived", id))
+		return mgerr.Conflict("item_archived", fmt.Sprintf("%s: is archived.", id), remediation("archived", id))
 	default:
 		// Item is (or just became) available but the rename still failed —
 		// most likely a race with another worker that just claimed it.
-		return fmt.Errorf("%s: could not be claimed; it may have just been claimed by another worker. Run 'mg show %s' to check.", id, id)
+		return mgerr.Conflict("claim_race", fmt.Sprintf("%s: could not be claimed; it may have just been claimed by another worker. Run 'mg show %s' to check.", id, id), "").WithRetryable(true)
 	}
 }
 
 // explainDoneFailure produces a user-facing error when 'done' could not find
 // the item in claimed/.
-func explainDoneFailure(root, id string) error {
+func explainDoneFailure(root, id string) *mgerr.Error {
 	status, _ := statusWithPID(root, id)
 	switch status {
 	case "":
 		return errNoSuchItem(id)
 	case "available":
-		return withHint(fmt.Sprintf("%s: not claimed, so it cannot be completed.", id), remediation("available", id))
+		return mgerr.Conflict("not_claimed", fmt.Sprintf("%s: not claimed, so it cannot be completed.", id), remediation("available", id))
 	case "pending":
-		return withHint(fmt.Sprintf("%s: not claimed — it is still pending on dependencies.", id), remediation("pending", id))
+		return mgerr.Conflict("not_claimed", fmt.Sprintf("%s: not claimed — it is still pending on dependencies.", id), remediation("pending", id))
 	case "done":
-		return withHint(fmt.Sprintf("%s: already done.", id), remediation("done", id))
+		return mgerr.Conflict("already_done", fmt.Sprintf("%s: already done.", id), remediation("done", id))
 	case "shelved":
-		return withHint(fmt.Sprintf("%s: is shelved, not claimed.", id), remediation("shelved", id))
+		return mgerr.Conflict("item_shelved", fmt.Sprintf("%s: is shelved, not claimed.", id), remediation("shelved", id))
 	case "archived":
-		return withHint(fmt.Sprintf("%s: is archived, not claimed.", id), remediation("archived", id))
+		return mgerr.Conflict("item_archived", fmt.Sprintf("%s: is archived, not claimed.", id), remediation("archived", id))
 	default:
-		return fmt.Errorf("%s: could not be completed; its claim may have just changed. Run 'mg show %s' to check.", id, id)
+		return mgerr.Conflict("claim_race", fmt.Sprintf("%s: could not be completed; its claim may have just changed. Run 'mg show %s' to check.", id, id), "").WithRetryable(true)
 	}
 }
 
 // explainUnclaimFailure produces a user-facing error when 'unclaim' could not
 // find the item in claimed/.
-func explainUnclaimFailure(root, id string) error {
+func explainUnclaimFailure(root, id string) *mgerr.Error {
 	status, _ := statusWithPID(root, id)
 	switch status {
 	case "":
 		return errNoSuchItem(id)
 	case "available":
-		return fmt.Errorf("%s: not claimed, so there is nothing to release.", id)
+		return mgerr.Conflict("not_claimed", fmt.Sprintf("%s: not claimed, so there is nothing to release.", id), "")
 	case "pending":
-		return fmt.Errorf("%s: not claimed — it is pending on dependencies.", id)
+		return mgerr.Conflict("not_claimed", fmt.Sprintf("%s: not claimed — it is pending on dependencies.", id), "")
 	case "done":
-		return withHint(fmt.Sprintf("%s: already done, not claimed.", id), remediation("done", id))
+		return mgerr.Conflict("already_done", fmt.Sprintf("%s: already done, not claimed.", id), remediation("done", id))
 	case "shelved":
-		return withHint(fmt.Sprintf("%s: is shelved, not claimed.", id), remediation("shelved", id))
+		return mgerr.Conflict("item_shelved", fmt.Sprintf("%s: is shelved, not claimed.", id), remediation("shelved", id))
 	case "archived":
-		return withHint(fmt.Sprintf("%s: is archived, not claimed.", id), remediation("archived", id))
+		return mgerr.Conflict("item_archived", fmt.Sprintf("%s: is archived, not claimed.", id), remediation("archived", id))
 	default:
-		return fmt.Errorf("%s: could not release claim; it may have just changed. Run 'mg show %s' to check.", id, id)
+		return mgerr.Conflict("claim_race", fmt.Sprintf("%s: could not release claim; it may have just changed. Run 'mg show %s' to check.", id, id), "").WithRetryable(true)
 	}
 }
 
 // explainReopenFailure produces a user-facing error when 'reopen' could not
 // find the item in done/.
-func explainReopenFailure(root, id string) error {
+func explainReopenFailure(root, id string) *mgerr.Error {
 	status, _ := statusWithPID(root, id)
 	switch status {
 	case "":
 		return errNoSuchItem(id)
 	case "available":
-		return fmt.Errorf("%s: not done — it is available, so there is nothing to reopen.", id)
+		return mgerr.Conflict("not_done", fmt.Sprintf("%s: not done — it is available, so there is nothing to reopen.", id), "")
 	case "claimed":
-		return fmt.Errorf("%s: not done — it is already claimed (in progress).", id)
+		return mgerr.Conflict("not_done", fmt.Sprintf("%s: not done — it is already claimed (in progress).", id), "")
 	case "pending":
-		return fmt.Errorf("%s: not done — it is pending on dependencies.", id)
+		return mgerr.Conflict("not_done", fmt.Sprintf("%s: not done — it is pending on dependencies.", id), "")
 	case "shelved":
-		return withHint(fmt.Sprintf("%s: is shelved, not done.", id), remediation("shelved", id))
+		return mgerr.Conflict("item_shelved", fmt.Sprintf("%s: is shelved, not done.", id), remediation("shelved", id))
 	case "archived":
-		return withHint(fmt.Sprintf("%s: is archived, not done.", id), remediation("archived", id))
+		return mgerr.Conflict("item_archived", fmt.Sprintf("%s: is archived, not done.", id), remediation("archived", id))
 	default:
-		return fmt.Errorf("%s: could not be reopened; it may have just changed. Run 'mg show %s' to check.", id, id)
+		return mgerr.Conflict("claim_race", fmt.Sprintf("%s: could not be reopened; it may have just changed. Run 'mg show %s' to check.", id, id), "").WithRetryable(true)
 	}
 }
 
 // explainUnshelveFailure produces a user-facing error when 'unshelve' could not
 // find the item in shelved/.
-func explainUnshelveFailure(root, id string) error {
+func explainUnshelveFailure(root, id string) *mgerr.Error {
 	status, _ := statusWithPID(root, id)
 	switch status {
 	case "":
 		return errNoSuchItem(id)
 	case "shelved":
-		return fmt.Errorf("%s: could not be unshelved; it may have just changed. Run 'mg show %s' to check.", id, id)
+		return mgerr.Conflict("claim_race", fmt.Sprintf("%s: could not be unshelved; it may have just changed. Run 'mg show %s' to check.", id, id), "").WithRetryable(true)
 	default:
-		return fmt.Errorf("%s: is not shelved (status: %s), so there is nothing to unshelve.", id, status)
+		return mgerr.Conflict("not_shelved", fmt.Sprintf("%s: is not shelved (status: %s), so there is nothing to unshelve.", id, status), "")
 	}
 }

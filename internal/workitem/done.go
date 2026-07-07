@@ -49,7 +49,7 @@ func Done(root, id string, resultJSON json.RawMessage) (*Item, []*Item, error) {
 
 	// rename(2) is atomic on local filesystems.
 	if err := os.Rename(srcPath, dstPath); err != nil {
-		return nil, nil, fmt.Errorf("%s: could not be completed: %s", id, fsErrText(err))
+		return nil, nil, ioErr(fmt.Sprintf("%s: could not be completed: %s", id, fsErrText(err)))
 	}
 
 	// Write result sidecar if provided

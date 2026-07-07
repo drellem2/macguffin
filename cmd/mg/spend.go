@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/drellem2/macguffin/internal/mgerr"
 	"github.com/drellem2/macguffin/internal/spend"
 	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
@@ -74,7 +75,7 @@ Examples:
 		sinceSet := cmd.Flags().Changed("since")
 		windowSet := cmd.Flags().Changed("window")
 		if sinceSet && windowSet {
-			return fmt.Errorf("--since and --window are mutually exclusive: --since is a rolling duration, --window is a calendar anchor")
+			return mgerr.Usage("mutually_exclusive_flags", "--since and --window are mutually exclusive: --since is a rolling duration, --window is a calendar anchor", "")
 		}
 
 		now := time.Now()
@@ -83,7 +84,7 @@ Examples:
 		// with the grouping/windowing flags.
 		if spendTotal {
 			if sinceSet || windowSet || cmd.Flags().Changed("by") {
-				return fmt.Errorf("--total is a standalone summary; drop --since/--window/--by")
+				return mgerr.Usage("mutually_exclusive_flags", "--total is a standalone summary; drop --since/--window/--by", "")
 			}
 			return runSpendTotal(root, now)
 		}
@@ -94,12 +95,12 @@ Examples:
 		case windowSet:
 			sinceTime, err = spend.WindowStart(spendWindow, now)
 			if err != nil {
-				return fmt.Errorf("--window: %w", err)
+				return mgerr.Usage("invalid_value", fmt.Sprintf("--window: %s", err), "")
 			}
 		case spendSince != "":
 			since, err = parseDuration(spendSince)
 			if err != nil {
-				return fmt.Errorf("--since: %w", err)
+				return mgerr.Usage("invalid_value", fmt.Sprintf("--since: %s", err), "")
 			}
 		}
 

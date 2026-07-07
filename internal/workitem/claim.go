@@ -27,7 +27,7 @@ func Claim(root, id string, pid int) (*Item, error) {
 			// The source wasn't in available/ — diagnose where it really is.
 			return nil, explainClaimFailure(root, id)
 		}
-		return nil, fmt.Errorf("%s: could not be claimed: %s", id, fsErrText(err))
+		return nil, ioErr(fmt.Sprintf("%s: could not be claimed: %s", id, fsErrText(err)))
 	}
 
 	item, err := readFile(dst)

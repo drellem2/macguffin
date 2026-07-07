@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/drellem2/macguffin/internal/mgerr"
 	"github.com/spf13/cobra"
 )
 
@@ -84,11 +85,31 @@ func init() {
 	rootCmd.AddCommand(flowCmd)
 	rootCmd.AddCommand(spendCmd)
 	rootCmd.AddCommand(schemaCmd)
+
+	// Route cobra-generated flag errors (unknown flag, bad flag value) to the
+	// usage category (exit 2). Arg-count validators are routed via the
+	// usageArgs() wrapper on each command's Args field. See §6.
+	rootCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		return mgerr.Usage("usage", err.Error(), cmd.UseLine())
+	})
+	registerErrorRendering()
 }
 
+// main is the single exit seam for the whole binary. rootCmd sets
+// SilenceErrors+SilenceUsage, so EVERY error — RunE returns, cobra usage
+// errors, everything — funnels here. It coerces the error into the typed
+// taxonomy, renders it (JSON to stderr when --json was requested, otherwise
+// human text), and exits with the category's frozen code (§5).
 func main() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
-		os.Exit(1)
+	err := rootCmd.Execute()
+	if err == nil {
+		return
 	}
+	e := mgerr.Coerce(err)
+	if outputJSON {
+		writeJSONError(os.Stderr, e)
+	} else {
+		writeHumanError(os.Stderr, e)
+	}
+	os.Exit(e.ExitCode())
 }

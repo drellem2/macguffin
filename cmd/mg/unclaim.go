@@ -18,7 +18,7 @@ PID. The recorded PID is unreliable because it may be the short-lived
 'mg claim' subprocess rather than the owning agent — relying on it can
 release claims held by live, healthy workers. To release a claim, the caller
 must know the work item ID.`,
-	Args: cobra.ExactArgs(1),
+	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := workspace.DefaultRoot()
 		if err != nil {

@@ -15,7 +15,7 @@ var claimPID int
 var claimCmd = &cobra.Command{
 	Use:   "claim ID",
 	Short: "Atomically claim a work item by ID",
-	Args:  cobra.ExactArgs(1),
+	Args:  usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := workspace.DefaultRoot()
 		if err != nil {

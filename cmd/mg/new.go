@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/drellem2/macguffin/internal/mgerr"
 	"github.com/drellem2/macguffin/internal/workitem"
 	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
@@ -57,10 +58,10 @@ optional internal hyphens, and must end in a hyphen.`,
 		if title == "" {
 			title = strings.Join(args, " ")
 		} else if len(args) > 0 {
-			return fmt.Errorf("cannot use both --title flag and positional arguments")
+			return mgerr.Usage("mutually_exclusive_flags", "cannot use both --title flag and positional arguments", "")
 		}
 		if title == "" {
-			return fmt.Errorf("title is required (use --title flag or positional arguments)")
+			return mgerr.Usage("missing_required", "title is required (use --title flag or positional arguments)", "")
 		}
 
 		deps := normSlice(newDepends)
@@ -73,14 +74,14 @@ optional internal hyphens, and must end in a hyphen.`,
 		prefix := workspace.Prefix(root)
 		if cmd.Flags().Changed("prefix") {
 			if !validPrefixRe.MatchString(newPrefix) {
-				return fmt.Errorf("invalid prefix %q: must be lowercase alphanumeric (with internal hyphens) ending in a hyphen, e.g. 'dr-'", newPrefix)
+				return mgerr.Usage("invalid_value", fmt.Sprintf("invalid prefix %q: must be lowercase alphanumeric (with internal hyphens) ending in a hyphen, e.g. 'dr-'", newPrefix), "")
 			}
 			prefix = newPrefix
 		}
 
 		var opts []workitem.CreateOption
 		if newNoRepo && cmd.Flags().Changed("repo") && newRepo != "" {
-			return fmt.Errorf("cannot use --no-repo with a non-empty --repo")
+			return mgerr.Usage("mutually_exclusive_flags", "cannot use --no-repo with a non-empty --repo", "")
 		}
 		var repo string
 		switch {
@@ -109,7 +110,7 @@ optional internal hyphens, and must end in a hyphen.`,
 			case "low", "medium", "high":
 				opts = append(opts, workitem.WithPriority(priority))
 			default:
-				return fmt.Errorf("invalid priority %q: must be low, medium, or high", priority)
+				return mgerr.Usage("invalid_value", fmt.Sprintf("invalid priority %q: must be low, medium, or high", priority), "")
 			}
 		}
 		if tags := normSlice(newTags); len(tags) > 0 {
@@ -120,7 +121,7 @@ optional internal hyphens, and must end in a hyphen.`,
 		}
 		if cmd.Flags().Changed("budget") {
 			if newBudget < 0 {
-				return fmt.Errorf("invalid budget %d: must be non-negative", newBudget)
+				return mgerr.Usage("invalid_value", fmt.Sprintf("invalid budget %d: must be non-negative", newBudget), "")
 			}
 			if newBudget > 0 {
 				opts = append(opts, workitem.WithBudget(newBudget))
