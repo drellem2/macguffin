@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -71,7 +72,7 @@ Examples:
 				return err
 			}
 			if flowJSONOut {
-				return writeFlowGroupedJSON(gsnap)
+				return writeFlowGroupedJSON(cmd.OutOrStdout(), gsnap)
 			}
 			flow.RenderGrouped(cmd.OutOrStdout(), gsnap, true)
 			if flowAgeDistribution {
@@ -91,7 +92,7 @@ Examples:
 			if err != nil {
 				return err
 			}
-			return writeFlowStatusJSON(snap)
+			return writeFlowStatusJSON(cmd.OutOrStdout(), snap)
 		}
 		if flowLive {
 			return runLive(cmd.OutOrStdout(), root, opts, flowInterval)
@@ -270,7 +271,7 @@ type flowSpawnJSON struct {
 	PolecatsOK bool `json:"polecats_ok"`
 }
 
-func writeFlowStatusJSON(snap flow.Snapshot) error {
+func writeFlowStatusJSON(w io.Writer, snap flow.Snapshot) error {
 	out := flowJSON{
 		GeneratedAt: snap.GeneratedAt,
 		GroupBy:     "status",
@@ -312,10 +313,10 @@ func writeFlowStatusJSON(snap flow.Snapshot) error {
 		Polecats:   snap.Spawn.Polecats,
 		PolecatsOK: snap.Spawn.PolecatsOK,
 	}
-	return encodeFlowJSON(out)
+	return encodeFlowJSON(w, out)
 }
 
-func writeFlowGroupedJSON(snap *flow.GroupedSnapshot) error {
+func writeFlowGroupedJSON(w io.Writer, snap *flow.GroupedSnapshot) error {
 	out := flowJSON{
 		GeneratedAt: snap.GeneratedAt,
 		GroupBy:     snap.GroupBy,
@@ -336,11 +337,11 @@ func writeFlowGroupedJSON(snap *flow.GroupedSnapshot) error {
 			OldestAgeHours: g.OldestAgeHours,
 		})
 	}
-	return encodeFlowJSON(out)
+	return encodeFlowJSON(w, out)
 }
 
-func encodeFlowJSON(out flowJSON) error {
-	enc := json.NewEncoder(os.Stdout)
+func encodeFlowJSON(w io.Writer, out flowJSON) error {
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
 }
