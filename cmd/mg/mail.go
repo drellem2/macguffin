@@ -305,8 +305,9 @@ The message may be addressed either way:
   mg mail read AGENT MSG-ID     # two arguments
 
 MSG-ID is exactly the token printed by 'mg mail list AGENT' (the part after
-"AGENT/"). Reading another agent's mailbox is refused unless --force, because
-it marks the message read and hides it from that agent's unread list.
+"AGENT/"); an id containing a path separator or ".." is refused. Reading
+another agent's mailbox is refused unless --force, because it marks the message
+read and hides it from that agent's unread list.
 
 With --json the message is emitted as a single object {id,from,subject,date,
 read,body} instead of the human-formatted headers-and-body.`,
@@ -366,9 +367,9 @@ The message may be addressed either way:
   mg mail archive AGENT MSG-ID  # two arguments
 
 MSG-ID is exactly the token printed by 'mg mail list AGENT' (the part after
-"AGENT/"). An unread (new/) or read (cur/) message is handled; archiving an
-already-archived message is a no-op. Archived mail is inspected with
-'mg mail list AGENT --archived'.
+"AGENT/"); an id containing a path separator or ".." is refused. An unread
+(new/) or read (cur/) message is handled; archiving an already-archived message
+is a no-op. Archived mail is inspected with 'mg mail list AGENT --archived'.
 
 With --json the archived message is emitted as a single object
 {id,mailbox,from,subject}.`,

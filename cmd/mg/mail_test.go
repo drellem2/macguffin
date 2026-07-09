@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -373,4 +374,58 @@ func TestCLI_MailLifecycleEvents(t *testing.T) {
 	if !strings.Contains(string(data), msgID) {
 		t.Errorf("events.jsonl should reference msg_id %s; contents:\n%s", msgID, data)
 	}
+}
+
+// TestCLI_MailReadRejectsTraversalMsgID: a crafted MSG-ID must not read a file
+// outside the mailbox, in either argument form, and must exit 2 (usage) rather
+// than 0. Regression for the mg-ea5a path-traversal surface.
+func TestCLI_MailReadRejectsTraversalMsgID(t *testing.T) {
+	bin, env := mailInit(t)
+
+	// Plant a parseable message file in the workspace root, one level above the
+	// mail root. Unsanitized, filepath.Join(<ws>/mail, "arch", "new",
+	// "../../../secret") resolves straight onto it.
+	var home string
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "HOME=") {
+			home = strings.TrimPrefix(kv, "HOME=")
+		}
+	}
+	secret := filepath.Join(home, ".macguffin", "secret")
+	if err := os.WriteFile(secret, []byte("From: x\nSubject: s\nDate: d\n\ntop secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Give the agent a real mailbox so only the MSG-ID is at fault.
+	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=s", "--body=b"); err != nil {
+		t.Fatalf("seed send failed: %v", err)
+	}
+
+	for _, args := range [][]string{
+		{"read", "arch", "../../../secret"},
+		{"read", "arch/../../../secret"},
+		{"read", "arch", ".."},
+		{"archive", "arch", "../../../secret"},
+	} {
+		out, errOut, err := runMail(t, bin, env, args...)
+		if err == nil {
+			t.Errorf("%v: exited 0, want rejection (stdout=%q)", args, out)
+			continue
+		}
+		if strings.Contains(out, "top secret") {
+			t.Errorf("%v: leaked out-of-mailbox file content", args)
+		}
+		if got := exitCodeOf(err); got != 2 {
+			t.Errorf("%v: exit = %d, want 2 (usage); stderr=%q", args, got, errOut)
+		}
+	}
+}
+
+// exitCodeOf extracts the process exit code from an *exec.ExitError.
+func exitCodeOf(err error) int {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return -1
 }

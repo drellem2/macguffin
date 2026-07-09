@@ -19,6 +19,51 @@ import (
 // Check with errors.Is.
 var ErrMalformed = errors.New("malformed message")
 
+// errCollision reports that the target msgID is already taken in new/. It is
+// internal to the delivery retry loop and never escapes Send.
+var errCollision = errors.New("msgID collision")
+
+// maxDeliveryAttempts bounds Send's msgID re-mint loop. A collision means two
+// deliveries minted the same nanosecond-derived id; a fresh mint resolves it.
+// Rather than overwrite the existing message (a silent mail drop) we re-mint,
+// and after this many consecutive collisions we fail loudly.
+const maxDeliveryAttempts = 5
+
+// validComponent reports whether s is safe to path-join as a single mailbox or
+// message-ID path component. Every mail function joins the agent name and the
+// msgID straight onto the mail root, and filepath.Join resolves "..", so an
+// unchecked msgID of "../../etc/passwd" reads outside the mailbox entirely.
+// A component must be non-empty, must not be a directory-traversal token, and
+// must contain no separator (either flavour, so a Windows-style "..\\" cannot
+// slip through a unix build's checks) or NUL.
+func validComponent(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	return !strings.ContainsAny(s, `/\`+"\x00")
+}
+
+// checkMailbox validates an agent/mailbox name before it is path-joined.
+func checkMailbox(agent string) error {
+	if !validComponent(agent) {
+		return mgerr.Usage("invalid_value", fmt.Sprintf("invalid mailbox name %q: must be a single path component with no separators or %q", agent, ".."), "")
+	}
+	return nil
+}
+
+// checkMsgID validates a message ID before it is path-joined. MSG-IDs come
+// straight from the command line ('mg mail read AGENT MSG-ID'), so this is the
+// boundary that keeps a crafted id from escaping the mailbox directory.
+func checkMsgID(agent, msgID string) error {
+	if err := checkMailbox(agent); err != nil {
+		return err
+	}
+	if !validComponent(msgID) {
+		return mgerr.Usage("invalid_value", fmt.Sprintf("invalid message id %q: must be a single path component with no separators or %q", msgID, ".."), "run 'mg mail list "+agent+"' to see valid message ids")
+	}
+	return nil
+}
+
 // eventsRoot returns the workspace root owning the events log for a mail
 // root. By convention the mail root is <workspace>/mail, so mail events land
 // in <workspace>/events.jsonl alongside the work-item events.
@@ -73,6 +118,9 @@ type Mailbox struct {
 // the likely-typo case — instead of masking it. A false return means no mail
 // has ever been delivered to that exact agent name.
 func MailboxExists(mailRoot, agent string) bool {
+	if !validComponent(agent) {
+		return false
+	}
 	info, err := os.Stat(filepath.Join(mailRoot, agent))
 	return err == nil && info.IsDir()
 }
@@ -111,6 +159,9 @@ func ListMailboxes(mailRoot string) ([]Mailbox, error) {
 
 // EnsureMaildir creates the Maildir subdirectories (tmp, new, cur) for an agent.
 func EnsureMaildir(mailRoot, agent string) error {
+	if err := checkMailbox(agent); err != nil {
+		return err
+	}
 	for _, sub := range []string{"tmp", "new", "cur"} {
 		dir := filepath.Join(mailRoot, agent, sub)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -121,27 +172,38 @@ func EnsureMaildir(mailRoot, agent string) error {
 }
 
 // Send delivers a message to the recipient's mailbox using Maildir-style
-// atomic delivery: write to tmp/, then rename to new/.
+// atomic delivery: write to tmp/, then link into new/. The returned msgID is
+// the id the message was actually delivered under, which is not necessarily
+// the first one minted — see deliverOnce.
 func Send(mailRoot, recipient, from, subject, body string) (string, error) {
+	// Checked before EnsureMaildir so a bad recipient surfaces as the usage
+	// error it is, rather than being re-wrapped below as an internal io_error.
+	if err := checkMailbox(recipient); err != nil {
+		return "", err
+	}
 	if err := EnsureMaildir(mailRoot, recipient); err != nil {
 		return "", mgerr.Wrap(mgerr.CatInternal, "io_error", fmt.Errorf("could not deliver message to %s: %s", recipient, fsErrText(err)), "")
 	}
 
-	msgID := fmt.Sprintf("%d.%d.%d", time.Now().UnixNano(), os.Getpid(), time.Now().UnixNano()%10000)
-
 	content := fmt.Sprintf("From: %s\nSubject: %s\nDate: %s\n\n%s\n",
 		from, subject, time.Now().UTC().Format(time.RFC3339), body)
 
-	tmpPath := filepath.Join(mailRoot, recipient, "tmp", msgID)
-	newPath := filepath.Join(mailRoot, recipient, "new", msgID)
-
-	if err := os.WriteFile(tmpPath, []byte(content), 0o644); err != nil {
-		return "", mgerr.Wrap(mgerr.CatInternal, "io_error", fmt.Errorf("could not deliver message to %s: %s", recipient, fsErrText(err)), "")
-	}
-
-	if err := os.Rename(tmpPath, newPath); err != nil {
-		os.Remove(tmpPath) // best-effort cleanup
-		return "", mgerr.Wrap(mgerr.CatInternal, "io_error", fmt.Errorf("could not deliver message to %s: %s", recipient, fsErrText(err)), "")
+	// Deliver under a freshly minted msgID, re-minting on collision. Delivery
+	// never overwrites an existing message (see deliverOnce), so a collision
+	// costs a retry rather than silently dropping already-delivered mail.
+	var msgID string
+	for attempt := 1; ; attempt++ {
+		msgID = mintMsgID()
+		err := deliverOnce(mailRoot, recipient, msgID, content)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, errCollision) {
+			return "", mgerr.Wrap(mgerr.CatInternal, "io_error", fmt.Errorf("could not deliver message to %s: %s", recipient, fsErrText(err)), "")
+		}
+		if attempt == maxDeliveryAttempts {
+			return "", mgerr.Wrap(mgerr.CatInternal, "io_error", fmt.Errorf("could not deliver message to %s: message id still colliding after %d attempts", recipient, maxDeliveryAttempts), "")
+		}
 	}
 
 	event.Emit(eventsRoot(mailRoot), "mail.sent", map[string]string{
@@ -152,6 +214,56 @@ func Send(mailRoot, recipient, from, subject, body string) (string, error) {
 	Audit(mailRoot, "send", recipient, msgID, map[string]string{"from": from})
 
 	return msgID, nil
+}
+
+// mintMsgID generates a message ID from the wall clock and the sending pid.
+// Uniqueness is best-effort only — deliverOnce, not this function, is what
+// guarantees a colliding id cannot clobber a delivered message. It is a var so
+// tests can force the collision a real clock makes vanishingly rare.
+var mintMsgID = func() string {
+	return fmt.Sprintf("%d.%d.%d", time.Now().UnixNano(), os.Getpid(), time.Now().UnixNano()%10000)
+}
+
+// deliverOnce performs one Maildir delivery attempt for msgID: write the
+// content to tmp/, then hard-link it into new/ and unlink the tmp copy.
+//
+// The link is what makes delivery non-destructive. os.Rename would happily
+// replace an existing new/<msgID>, so a msgID collision silently destroyed an
+// already-delivered message — the mail-drop class the mail-bridge reliability
+// arc exists to eliminate. link(2) instead fails with EEXIST, which we report
+// as errCollision so Send can re-mint. The O_EXCL on tmp/ gives the same
+// protection against clobbering another sender's in-flight delivery.
+func deliverOnce(mailRoot, recipient, msgID, content string) error {
+	tmpPath := filepath.Join(mailRoot, recipient, "tmp", msgID)
+	newPath := filepath.Join(mailRoot, recipient, "new", msgID)
+
+	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return errCollision
+		}
+		return err
+	}
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+
+	if err := os.Link(tmpPath, newPath); err != nil {
+		os.Remove(tmpPath) // best-effort cleanup
+		if errors.Is(err, fs.ErrExist) {
+			return errCollision
+		}
+		return err
+	}
+
+	os.Remove(tmpPath) // best-effort: the message now lives in new/
+	return nil
 }
 
 // List returns all unread messages (in new/) for the given agent, plus a
@@ -185,6 +297,9 @@ func ListArchived(mailRoot, agent string) ([]Message, int, error) {
 }
 
 func listDir(mailRoot, agent, subdir string, read bool) ([]Message, int, error) {
+	if err := checkMailbox(agent); err != nil {
+		return nil, 0, err
+	}
 	dir := filepath.Join(mailRoot, agent, subdir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -231,6 +346,9 @@ func listDir(mailRoot, agent, subdir string, read bool) ([]Message, int, error) 
 
 // Read reads a message by ID from new/ and moves it to cur/ (marks as read).
 func Read(mailRoot, agent, msgID string) (*Message, error) {
+	if err := checkMsgID(agent, msgID); err != nil {
+		return nil, err
+	}
 	newPath := filepath.Join(mailRoot, agent, "new", msgID)
 	curDir := filepath.Join(mailRoot, agent, "cur")
 	curPath := filepath.Join(curDir, msgID)
@@ -284,6 +402,9 @@ func Read(mailRoot, agent, msgID string) (*Message, error) {
 // (in cur/); both are handled. If the message is already in archive/ it is
 // returned without error (idempotent). Mirrors the new/→cur/ Read pattern.
 func Archive(mailRoot, agent, msgID string) (*Message, error) {
+	if err := checkMsgID(agent, msgID); err != nil {
+		return nil, err
+	}
 	newPath := filepath.Join(mailRoot, agent, "new", msgID)
 	curPath := filepath.Join(mailRoot, agent, "cur", msgID)
 	archiveDir := filepath.Join(mailRoot, agent, "archive")

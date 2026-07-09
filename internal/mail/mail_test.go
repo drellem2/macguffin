@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/drellem2/macguffin/internal/event"
+	"github.com/drellem2/macguffin/internal/mgerr"
 )
 
 // eventTestRoots returns a workspace root and its mail root laid out the way
@@ -767,5 +768,284 @@ func TestParseMessageFile_Malformed(t *testing.T) {
 		if !errors.Is(err, ErrMalformed) {
 			t.Errorf("%s: err = %v, want ErrMalformed", tc.name, err)
 		}
+	}
+}
+
+// --- mg-ea5a: path-traversal + collision hardening ---------------------------
+
+// traversalTokens are the msgID / mailbox values a caller must never be able
+// to path-join into the mail root.
+var traversalTokens = []string{
+	"..",
+	"../../../etc/passwd",
+	"../cur/other",
+	"sub/dir",
+	`..\..\windows`,
+	".",
+	"",
+}
+
+// TestRead_RejectsTraversalMsgID: 'mg mail read AGENT MSG-ID' must not let a
+// crafted MSG-ID escape the mailbox directory. The secret file next to the
+// mail root stays unreadable and the error is a usage error (exit 2).
+func TestRead_RejectsTraversalMsgID(t *testing.T) {
+	workRoot, root := eventTestRoots(t)
+	if err := EnsureMaildir(root, "arch"); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(workRoot, "secret")
+	if err := os.WriteFile(secret, []byte("From: x\nSubject: s\nDate: d\n\ntop secret\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Unguarded, filepath.Join(<root>, "arch", "new", "../../../secret")
+	// resolves to the parseable file above — a read outside the mailbox.
+	for _, tok := range append(traversalTokens, "../../../secret") {
+		msg, err := Read(root, "arch", tok)
+		if err == nil {
+			t.Errorf("Read(msgID=%q) succeeded, want rejection (body=%q)", tok, msg.Body)
+			continue
+		}
+		if strings.Contains(err.Error(), "top secret") {
+			t.Errorf("Read(msgID=%q) leaked out-of-mailbox content", tok)
+		}
+		assertUsageError(t, err, tok)
+	}
+}
+
+// TestRead_RejectsTraversalMailbox: the agent name is path-joined too, so it
+// gets the same treatment as the msgID.
+func TestRead_RejectsTraversalMailbox(t *testing.T) {
+	root := t.TempDir()
+	for _, tok := range traversalTokens {
+		if _, err := Read(root, tok, "someid"); err == nil {
+			t.Errorf("Read(agent=%q) succeeded, want rejection", tok)
+		} else {
+			assertUsageError(t, err, tok)
+		}
+	}
+}
+
+// TestArchive_RejectsTraversal: Archive moves files, so a traversing msgID
+// would be a write outside the mailbox, not just a read.
+func TestArchive_RejectsTraversal(t *testing.T) {
+	root := t.TempDir()
+	if err := EnsureMaildir(root, "arch"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tok := range traversalTokens {
+		if _, err := Archive(root, "arch", tok); err == nil {
+			t.Errorf("Archive(msgID=%q) succeeded, want rejection", tok)
+		} else {
+			assertUsageError(t, err, tok)
+		}
+	}
+}
+
+// TestEnsureMaildir_RejectsTraversalMailbox: delivery to a traversing
+// recipient must not create directories outside the mail root.
+func TestEnsureMaildir_RejectsTraversalMailbox(t *testing.T) {
+	workRoot, root := eventTestRoots(t)
+	for _, tok := range traversalTokens {
+		if err := EnsureMaildir(root, tok); err == nil {
+			t.Errorf("EnsureMaildir(agent=%q) succeeded, want rejection", tok)
+		} else {
+			assertUsageError(t, err, tok)
+		}
+		if _, err := Send(root, tok, "mayor", "s", "b"); err == nil {
+			t.Errorf("Send(recipient=%q) succeeded, want rejection", tok)
+		} else {
+			assertUsageError(t, err, tok)
+		}
+	}
+	// Nothing escaped: <workRoot>/new must not exist ("../new" would land there).
+	if _, err := os.Stat(filepath.Join(workRoot, "new")); !os.IsNotExist(err) {
+		t.Errorf("traversing recipient created a directory outside the mail root")
+	}
+}
+
+// TestList_RejectsTraversalMailbox pins the same guard on the listing path.
+func TestList_RejectsTraversalMailbox(t *testing.T) {
+	root := t.TempDir()
+	if _, _, err := List(root, "../.."); err == nil {
+		t.Error("List with traversing agent succeeded, want rejection")
+	}
+	if MailboxExists(root, "../..") {
+		t.Error("MailboxExists reported true for a traversing agent name")
+	}
+}
+
+// assertUsageError checks the rejection is a typed usage (exit 2) error rather
+// than a bare fs error, so the CLI renders it as caller misuse.
+func assertUsageError(t *testing.T, err error, tok string) {
+	t.Helper()
+	var me *mgerr.Error
+	if !errors.As(err, &me) {
+		t.Errorf("token %q: err = %v (%T), want *mgerr.Error", tok, err, err)
+		return
+	}
+	if me.Category != mgerr.CatUsage {
+		t.Errorf("token %q: category = %v, want usage", tok, me.Category)
+	}
+}
+
+// TestDeliverOnce_CollisionDoesNotOverwrite is the regression for the silent
+// mail drop: delivering a second message under an already-taken msgID must
+// fail rather than replace the delivered message.
+func TestDeliverOnce_CollisionDoesNotOverwrite(t *testing.T) {
+	root := t.TempDir()
+	if err := EnsureMaildir(root, "arch"); err != nil {
+		t.Fatal(err)
+	}
+	const id = "1234.5678.9"
+	first := "From: mayor\nSubject: first\nDate: d\n\nkeep me\n"
+	second := "From: attacker\nSubject: second\nDate: d\n\nclobbered\n"
+
+	if err := deliverOnce(root, "arch", id, first); err != nil {
+		t.Fatalf("first delivery: %v", err)
+	}
+	err := deliverOnce(root, "arch", id, second)
+	if !errors.Is(err, errCollision) {
+		t.Fatalf("second delivery err = %v, want errCollision", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(root, "arch", "new", id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != first {
+		t.Errorf("colliding delivery overwrote the message:\n got %q\nwant %q", got, first)
+	}
+
+	// The tmp/ spool is left clean after both the success and the collision.
+	entries, err := os.ReadDir(filepath.Join(root, "arch", "tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("tmp/ not cleaned up: %d leftover file(s)", len(entries))
+	}
+}
+
+// squatterBody is the content of the already-delivered message the collision
+// tests protect.
+const squatterBody = "From: mayor\nSubject: squatter\nDate: d\n\nkeep me\n"
+
+// stubMint replaces the msgID minter for the duration of the test, handing out
+// each id in turn and repeating the last one forever after, so a collision the
+// real clock makes vanishingly rare becomes deterministic.
+func stubMint(t *testing.T, ids ...string) {
+	t.Helper()
+	orig := mintMsgID
+	t.Cleanup(func() { mintMsgID = orig })
+	i := 0
+	mintMsgID = func() string {
+		id := ids[i]
+		if i < len(ids)-1 {
+			i++
+		}
+		return id
+	}
+}
+
+// TestSend_ReMintsOnCollision: a taken msgID costs Send a re-mint, not the
+// delivery. The pre-existing message survives untouched and the new one lands
+// under the next id.
+func TestSend_ReMintsOnCollision(t *testing.T) {
+	root := t.TempDir()
+	if err := EnsureMaildir(root, "arch"); err != nil {
+		t.Fatal(err)
+	}
+	const taken, fresh = "taken.id.1", "fresh.id.2"
+	if err := deliverOnce(root, "arch", taken, squatterBody); err != nil {
+		t.Fatal(err)
+	}
+	stubMint(t, taken, taken, fresh)
+
+	msgID, err := Send(root, "arch", "mayor", "second", "body")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if msgID != fresh {
+		t.Errorf("msgID = %q, want the re-minted %q", msgID, fresh)
+	}
+
+	got, err := os.ReadFile(filepath.Join(root, "arch", "new", taken))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != squatterBody {
+		t.Errorf("Send overwrote the message holding the taken id:\n got %q\nwant %q", got, squatterBody)
+	}
+
+	msgs, malformed, err := List(root, "arch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if malformed != 0 {
+		t.Errorf("malformed = %d, want 0", malformed)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("got %d messages, want 2 (the squatter must survive)", len(msgs))
+	}
+}
+
+// TestSend_FailsLoudlyWhenCollisionPersists: if every re-mint collides, Send
+// reports an error instead of overwriting. A failed send is recoverable;
+// clobbering delivered mail is not.
+func TestSend_FailsLoudlyWhenCollisionPersists(t *testing.T) {
+	root := t.TempDir()
+	if err := EnsureMaildir(root, "arch"); err != nil {
+		t.Fatal(err)
+	}
+	const taken = "taken.id.1"
+	if err := deliverOnce(root, "arch", taken, squatterBody); err != nil {
+		t.Fatal(err)
+	}
+	stubMint(t, taken)
+
+	if _, err := Send(root, "arch", "mayor", "second", "body"); err == nil {
+		t.Fatal("Send succeeded despite a permanently colliding msgID")
+	}
+
+	got, err := os.ReadFile(filepath.Join(root, "arch", "new", taken))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != squatterBody {
+		t.Errorf("failed Send still overwrote the delivered message: got %q", got)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "arch", "tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("tmp/ not cleaned up after failed delivery: %d leftover file(s)", len(entries))
+	}
+}
+
+// TestSend_ManyDeliveriesAreUnique: no delivery in a tight loop clobbers a
+// prior one. Before the collision guard a same-nanosecond mint silently
+// replaced an already-delivered message.
+func TestSend_ManyDeliveriesAreUnique(t *testing.T) {
+	root := t.TempDir()
+	const n = 200
+	ids := make(map[string]bool, n)
+	for i := 0; i < n; i++ {
+		id, err := Send(root, "arch", "mayor", fmt.Sprintf("msg %d", i), "body")
+		if err != nil {
+			t.Fatalf("send %d: %v", i, err)
+		}
+		if ids[id] {
+			t.Fatalf("send %d: duplicate msgID %q", i, id)
+		}
+		ids[id] = true
+	}
+	msgs, _, err := List(root, "arch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != n {
+		t.Errorf("delivered %d messages, mailbox holds %d — mail was dropped", n, len(msgs))
 	}
 }
