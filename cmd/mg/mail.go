@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/mail"
+	"github.com/drellem2/macguffin/internal/mgerr"
 	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -51,25 +52,33 @@ type (
 		Exists  bool   `json:"exists"`
 	}
 
-	// mailSendJSON is the single object emitted by `mg mail send --json`.
-	// mailbox_created is true when the recipient's mailbox did not exist
-	// before this delivery, so a scripted caller can catch a typo'd /
-	// unknown recipient (exit still 0 — first delivery is legitimate).
+	// mailSendJSON is the single object emitted by `mg mail send --json` and
+	// `mg mail reply --json`. mailbox_created is true when the recipient's
+	// mailbox did not exist before this delivery, so a scripted caller can
+	// catch a typo'd / unknown recipient (exit still 0 — first delivery is
+	// legitimate). in_reply_to is the id this message replies to, "" when it
+	// starts a thread; msg_id is the new message's id, unchanged.
 	mailSendJSON struct {
 		MsgID          string `json:"msg_id"`
 		From           string `json:"from"`
 		To             string `json:"to"`
 		MailboxCreated bool   `json:"mailbox_created"`
+		InReplyTo      string `json:"in_reply_to"`
 	}
 
 	// mailReadJSON is the single object emitted by `mg mail read --json`.
+	// in_reply_to and references carry the correlation headers, so a scripted
+	// consumer can reconstruct a thread without re-reading the message file.
+	// Both are empty for messages sent before threading existed.
 	mailReadJSON struct {
-		ID      string `json:"id"`
-		From    string `json:"from"`
-		Subject string `json:"subject"`
-		Date    string `json:"date"`
-		Read    bool   `json:"read"`
-		Body    string `json:"body"`
+		ID         string   `json:"id"`
+		From       string   `json:"from"`
+		Subject    string   `json:"subject"`
+		Date       string   `json:"date"`
+		Read       bool     `json:"read"`
+		Body       string   `json:"body"`
+		InReplyTo  string   `json:"in_reply_to"`
+		References []string `json:"references"`
 	}
 
 	// mailArchiveJSON is the single object emitted by `mg mail archive --json`.
@@ -88,13 +97,15 @@ func encodeJSON(v any) error {
 }
 
 var (
-	mailSendFrom     string
-	mailSendSubject  string
-	mailSendBody     string
-	mailListAll      bool
-	mailListArchived bool
-	mailReadForce    bool
-	mailJSON         bool
+	mailSendFrom      string
+	mailSendSubject   string
+	mailSendBody      string
+	mailSendInReplyTo string
+	mailListAll       bool
+	mailListArchived  bool
+	mailReadForce     bool
+	mailReplyForce    bool
+	mailJSON          bool
 )
 
 // canonicalAgent strips the harness prefixes pogo puts on agent names so
@@ -121,7 +132,14 @@ recipient is visible rather than silently swallowed.
 --from is free-text and intentionally unvalidated: a brand-new agent must be
 able to send its first message before it has a mailbox. Run 'mg mail list' with
 no arguments to see the existing mailboxes, which is the de-facto list of agent
-identities to draw a --from value from.`,
+identities to draw a --from value from. --from and --subject may not contain
+newlines or other control characters, which would inject arbitrary headers.
+
+Every delivered message carries a Message-Id equal to its MSG-ID. Pass
+--in-reply-to MSG-ID to mark this message as a reply: it writes In-Reply-To and
+seeds References. The id is not looked up — this is the explicit, stateless
+primitive. To reply to a message in your own mailbox and have the ancestry
+filled in for you, use 'mg mail reply' instead.`,
 	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		recipient := args[0]
@@ -139,7 +157,16 @@ identities to draw a --from value from.`,
 		// report first-delivery to a never-before-seen recipient.
 		existed := mail.MailboxExists(mr, recipient)
 
-		msgID, err := mail.Send(mr, recipient, mailSendFrom, mailSendSubject, mailSendBody)
+		// send takes an id, not a message: it cannot read the parent's own
+		// References (the parent may live in another agent's mailbox, or
+		// nowhere at all), so the chain it seeds is just the parent. 'mg mail
+		// reply' is the form that carries a full ancestry forward.
+		opts := mail.SendOpts{InReplyTo: mailSendInReplyTo}
+		if mailSendInReplyTo != "" {
+			opts.References = []string{mailSendInReplyTo}
+		}
+
+		msgID, err := mail.SendWithOpts(mr, recipient, mailSendFrom, mailSendSubject, mailSendBody, opts)
 		if err != nil {
 			return err
 		}
@@ -152,6 +179,7 @@ identities to draw a --from value from.`,
 				From:           mailSendFrom,
 				To:             recipient,
 				MailboxCreated: created,
+				InReplyTo:      mailSendInReplyTo,
 			})
 		}
 
@@ -323,17 +351,8 @@ read,body} instead of the human-formatted headers-and-body.`,
 			return err
 		}
 
-		// Reading is destructive to the owner's unread state (new/ -> cur/):
-		// a cross-box read silently drops the message from the owner's
-		// unread list (the mg-6ae0 incident). Refuse unless forced.
-		caller := os.Getenv("POGO_AGENT_NAME")
-		crossBox := caller != "" && canonicalAgent(caller) != canonicalAgent(agent)
-		if crossBox && !mailReadForce {
-			mail.Audit(mr, "read-denied", agent, msgID, map[string]string{"reason": "cross-box"})
-			return fmt.Errorf("refusing to read %s's mail as agent %q: reading marks the message read and hides it from %s's unread list. Re-run with --force if this cross-box read is intentional", agent, caller, agent)
-		}
-		if crossBox {
-			mail.Audit(mr, "read-forced", agent, msgID, nil)
+		if err := guardCrossBoxRead(mr, agent, msgID, mailReadForce); err != nil {
+			return err
 		}
 
 		msg, err := mail.Read(mr, agent, msgID)
@@ -343,18 +362,48 @@ read,body} instead of the human-formatted headers-and-body.`,
 
 		if mailJSON {
 			return encodeJSON(mailReadJSON{
-				ID:      msg.ID,
-				From:    msg.From,
-				Subject: msg.Subject,
-				Date:    msg.Date,
-				Read:    true,
-				Body:    msg.Body,
+				ID:         msg.ID,
+				From:       msg.From,
+				Subject:    msg.Subject,
+				Date:       msg.Date,
+				Read:       true,
+				Body:       msg.Body,
+				InReplyTo:  msg.InReplyTo,
+				References: jsonRefs(msg.References),
 			})
 		}
 
 		fmt.Printf("From: %s\nSubject: %s\nDate: %s\n\n%s\n", msg.From, msg.Subject, msg.Date, msg.Body)
 		return nil
 	},
+}
+
+// jsonRefs normalizes a nil References slice to an empty one so the --json
+// contract emits [] rather than null for an unthreaded message.
+func jsonRefs(refs []string) []string {
+	if refs == nil {
+		return []string{}
+	}
+	return refs
+}
+
+// guardCrossBoxRead refuses an operation that marks another agent's message
+// read unless forced. Marking read is destructive to the owner's unread state
+// (new/ -> cur/): a cross-box read silently drops the message from the owner's
+// unread list (the mg-6ae0 incident). Both 'mail read' and 'mail reply' perform
+// that transition, so both go through here.
+func guardCrossBoxRead(mr, agent, msgID string, force bool) error {
+	caller := os.Getenv("POGO_AGENT_NAME")
+	crossBox := caller != "" && canonicalAgent(caller) != canonicalAgent(agent)
+	if !crossBox {
+		return nil
+	}
+	if !force {
+		mail.Audit(mr, "read-denied", agent, msgID, map[string]string{"reason": "cross-box"})
+		return fmt.Errorf("refusing to read %s's mail as agent %q: reading marks the message read and hides it from %s's unread list. Re-run with --force if this cross-box read is intentional", agent, caller, agent)
+	}
+	mail.Audit(mr, "read-forced", agent, msgID, nil)
+	return nil
 }
 
 var mailArchiveCmd = &cobra.Command{
@@ -404,8 +453,124 @@ With --json the archived message is emitted as a single object
 	},
 }
 
+var mailReplyCmd = &cobra.Command{
+	Use:   "reply AGENT/MSG-ID",
+	Short: "Reply to a message, threading it to the original",
+	Long: `Reply to a message in AGENT's mailbox.
+
+The message may be addressed either way:
+  mg mail reply AGENT/MSG-ID    # single slash-joined argument
+  mg mail reply AGENT MSG-ID    # two arguments
+
+reply is a wrapper over 'mg mail send --in-reply-to'. It reads the original to
+fill in what you would otherwise retype: the recipient (the original's From),
+the subject ("Re: " + the original's, unless --subject overrides), In-Reply-To,
+and a References chain extending the original's. Nothing is inferred from
+history — the message you name is the only input.
+
+--from defaults to AGENT, the mailbox you are replying from. Only --body is
+required.
+
+Like 'mail read', reply marks the original read (new/ -> cur/), so replying out
+of another agent's mailbox needs --force. It does NOT archive the original;
+archive it yourself with 'mg mail archive' when you are done with it.`,
+	Args: usageArgs(cobra.RangeArgs(1, 2)),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		agent, msgID, err := parseAgentMsgID(args)
+		if err != nil {
+			return err
+		}
+		if mailSendBody == "" {
+			return mgerr.Usage("missing_required", "--body is required", "")
+		}
+
+		mr, err := mailRoot()
+		if err != nil {
+			return err
+		}
+
+		// Guard before Peek: a refused cross-box reply must not read the
+		// message at all, and the denial is audited either way.
+		if err := guardCrossBoxRead(mr, agent, msgID, mailReplyForce); err != nil {
+			return err
+		}
+
+		// Peek, not Read: inspect the original without marking it read, so a
+		// reply that fails to send leaves the unread state untouched.
+		orig, err := mail.Peek(mr, agent, msgID)
+		if err != nil {
+			return err
+		}
+		if orig.From == "" {
+			return mgerr.Usage("invalid_value",
+				fmt.Sprintf("cannot reply to %s/%s: it has no From header, so there is no one to reply to", agent, msgID),
+				"send to an explicit recipient with 'mg mail send RECIPIENT --in-reply-to "+msgID+"'")
+		}
+
+		from := mailSendFrom
+		if from == "" {
+			from = agent
+		}
+		subject := mailSendSubject
+		if subject == "" {
+			subject = replySubject(orig.Subject)
+		}
+
+		// Thread on the original's file name, not its Message-Id header:
+		// the two agree for messages this version wrote, and the file name is
+		// the only id a message delivered before Message-Id existed has.
+		opts := mail.SendOpts{
+			InReplyTo:  orig.ID,
+			References: append(append([]string{}, orig.References...), orig.ID),
+		}
+
+		recipient := orig.From
+		existed := mail.MailboxExists(mr, recipient)
+
+		newID, err := mail.SendWithOpts(mr, recipient, from, subject, mailSendBody, opts)
+		if err != nil {
+			return err
+		}
+
+		// The reply is delivered; now mark the original read. Ordering matters:
+		// a send that fails above must not consume the original's unread state.
+		if _, err := mail.Read(mr, agent, msgID); err != nil {
+			return fmt.Errorf("reply delivered as %s/new/%s, but marking %s/%s read failed: %w", recipient, newID, agent, msgID, err)
+		}
+
+		created := !existed
+
+		if mailJSON {
+			return encodeJSON(mailSendJSON{
+				MsgID:          newID,
+				From:           from,
+				To:             recipient,
+				MailboxCreated: created,
+				InReplyTo:      orig.ID,
+			})
+		}
+
+		note := ""
+		if created {
+			note = "  (new mailbox created)"
+		}
+		fmt.Printf("Replied: %s → %s/new/%s  (in-reply-to %s/%s)%s\n", from, recipient, newID, agent, orig.ID, note)
+		return nil
+	},
+}
+
+// replySubject prefixes "Re: " unless the subject already carries one, so a
+// long back-and-forth does not accumulate "Re: Re: Re: ". The check is
+// case-insensitive because a human-typed --subject may say "RE:".
+func replySubject(subject string) string {
+	if strings.HasPrefix(strings.ToLower(subject), "re:") {
+		return subject
+	}
+	return "Re: " + subject
+}
+
 // parseAgentMsgID resolves the shared AGENT/MSG-ID | AGENT MSG-ID argument form
-// used by mail read and mail archive.
+// used by mail read, mail archive and mail reply.
 func parseAgentMsgID(args []string) (agent, msgID string, err error) {
 	if len(args) == 1 {
 		parts := strings.SplitN(args[0], "/", 2)
@@ -421,7 +586,14 @@ func init() {
 	mailSendCmd.Flags().StringVar(&mailSendFrom, "from", "", "sender name (required)")
 	mailSendCmd.Flags().StringVar(&mailSendSubject, "subject", "", "message subject (required)")
 	mailSendCmd.Flags().StringVar(&mailSendBody, "body", "", "message body (required)")
+	mailSendCmd.Flags().StringVar(&mailSendInReplyTo, "in-reply-to", "", "MSG-ID this message replies to (sets In-Reply-To and seeds References)")
 	mailSendCmd.Flags().BoolVar(&mailJSON, "json", false, "emit a single JSON object instead of human-formatted output")
+
+	mailReplyCmd.Flags().StringVar(&mailSendFrom, "from", "", "sender name (defaults to AGENT, the mailbox replied from)")
+	mailReplyCmd.Flags().StringVar(&mailSendSubject, "subject", "", `subject (defaults to "Re: " + the original's)`)
+	mailReplyCmd.Flags().StringVar(&mailSendBody, "body", "", "message body (required)")
+	mailReplyCmd.Flags().BoolVar(&mailReplyForce, "force", false, "allow replying out of another agent's mailbox (marks the original read for its owner)")
+	mailReplyCmd.Flags().BoolVar(&mailJSON, "json", false, "emit a single JSON object instead of human-formatted output")
 
 	mailReadCmd.Flags().BoolVar(&mailReadForce, "force", false, "allow reading another agent's mailbox (marks the message read for its owner)")
 	mailReadCmd.Flags().BoolVar(&mailJSON, "json", false, "emit the message as a single JSON object instead of human-formatted output")
@@ -433,6 +605,7 @@ func init() {
 	mailListCmd.Flags().BoolVar(&mailJSON, "json", false, "emit one JSON object per line (NDJSON) instead of human-formatted output")
 
 	mailCmd.AddCommand(mailSendCmd)
+	mailCmd.AddCommand(mailReplyCmd)
 	mailCmd.AddCommand(mailListCmd)
 	mailCmd.AddCommand(mailReadCmd)
 	mailCmd.AddCommand(mailArchiveCmd)

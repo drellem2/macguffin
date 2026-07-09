@@ -29,6 +29,13 @@ var errCollision = errors.New("msgID collision")
 // and after this many consecutive collisions we fail loudly.
 const maxDeliveryAttempts = 5
 
+// maxReferences caps the number of ids carried in a References header. A
+// thread that ran for hundreds of turns would otherwise grow a header longer
+// than the messages themselves; keeping the most recent ids preserves the
+// nearby ancestry (which is what a reader threads on) and keeps a message file
+// cat-able. Older ids are dropped from the front.
+const maxReferences = 20
+
 // validComponent reports whether s is safe to path-join as a single mailbox or
 // message-ID path component. Every mail function joins the agent name and the
 // msgID straight onto the mail root, and filepath.Join resolves "..", so an
@@ -62,6 +69,64 @@ func checkMsgID(agent, msgID string) error {
 		return mgerr.Usage("invalid_value", fmt.Sprintf("invalid message id %q: must be a single path component with no separators or %q", msgID, ".."), "run 'mg mail list "+agent+"' to see valid message ids")
 	}
 	return nil
+}
+
+// checkHeaderValue validates a free-text value destined for a mail header.
+//
+// Send serializes headers by concatenating "Name: value\n" lines, so a value
+// containing a newline ends the header it was meant to fill and starts one the
+// caller never authorized — classic CR/LF header injection. Before correlation
+// headers existed the worst case was a forged From/Subject; now that
+// In-Reply-To and References determine which thread a message joins, an
+// injected In-Reply-To lets a sender splice its message into a conversation it
+// was never part of (thread hijacking). A newline in the value can also embed
+// the blank-line header/body separator and rewrite the body wholesale.
+//
+// Rather than escape or fold, we refuse: header values are short, agent-
+// authored strings with no legitimate need for control characters. Every C0
+// control and DEL is rejected — including tab, which RFC 5322 permits as
+// folding whitespace but which nothing here produces and which would let a
+// value smuggle indentation-sensitive structure into the file.
+//
+// The result is a usage error (exit 2): the caller passed a bad value, and no
+// message is written to disk.
+func checkHeaderValue(name, value string) error {
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return mgerr.Usage("invalid_header_value",
+				fmt.Sprintf("invalid %s header value %q: control characters (including CR and LF) are not allowed", name, value),
+				"remove the newline or control character; header values must be a single line")
+		}
+	}
+	return nil
+}
+
+// checkMsgIDHeader validates a value that names another message: In-Reply-To
+// and each id in References. These are stricter than free-text headers on two
+// counts. A msgID IS a maildir filename (Message-Id == msgID == file name, no
+// separate id space), so an id carrying "/" or ".." would become a traversal
+// path the moment any tool resolves a reference back to a file — the same class
+// checkMsgID guards on the read path. And References is a space-separated list,
+// so an id containing whitespace would silently split into two ids.
+func checkMsgIDHeader(name, value string) error {
+	if err := checkHeaderValue(name, value); err != nil {
+		return err
+	}
+	if !validComponent(value) || strings.ContainsAny(value, " \t") {
+		return mgerr.Usage("invalid_header_value",
+			fmt.Sprintf("invalid %s value %q: must be a message id — a single path component with no whitespace, separators or %q", name, value, ".."),
+			"pass a message id exactly as printed by 'mg mail list AGENT'")
+	}
+	return nil
+}
+
+// capReferences trims a References chain to its most recent maxReferences ids,
+// dropping the oldest. See maxReferences.
+func capReferences(refs []string) []string {
+	if len(refs) <= maxReferences {
+		return refs
+	}
+	return refs[len(refs)-maxReferences:]
 }
 
 // eventsRoot returns the workspace root owning the events log for a mail
@@ -102,6 +167,25 @@ type Message struct {
 	Date    string
 	Body    string
 	Read    bool
+
+	// MessageID is the Message-Id header as written by Send, which is by
+	// construction the same string as ID (the maildir file name). It is empty
+	// for messages delivered before Message-Id was stamped. Threading code
+	// should key off ID, not this field: ID is always populated and the two
+	// never disagree for messages that carry both.
+	MessageID string
+	// InReplyTo is the id of the message this one replies to (empty if none).
+	InReplyTo string
+	// References is the ancestry chain, oldest first, capped at maxReferences.
+	References []string
+}
+
+// SendOpts carries the optional correlation headers for a delivery. The zero
+// value stamps no In-Reply-To and no References, reproducing pre-threading
+// behavior exactly.
+type SendOpts struct {
+	InReplyTo  string
+	References []string
 }
 
 // Mailbox summarizes one agent mailbox under the mail root: the agent name and
@@ -171,30 +255,67 @@ func EnsureMaildir(mailRoot, agent string) error {
 	return nil
 }
 
-// Send delivers a message to the recipient's mailbox using Maildir-style
-// atomic delivery: write to tmp/, then link into new/. The returned msgID is
-// the id the message was actually delivered under, which is not necessarily
-// the first one minted — see deliverOnce.
+// Send delivers a message with no correlation headers. It is SendWithOpts with
+// a zero SendOpts, kept as the plain-delivery spelling most callers want.
 func Send(mailRoot, recipient, from, subject, body string) (string, error) {
+	return SendWithOpts(mailRoot, recipient, from, subject, body, SendOpts{})
+}
+
+// SendWithOpts delivers a message to the recipient's mailbox using
+// Maildir-style atomic delivery: write to tmp/, then link into new/. The
+// returned msgID is the id the message was actually delivered under, which is
+// not necessarily the first one minted — see deliverOnce.
+//
+// Every delivered message carries a Message-Id header equal to its msgID, and
+// opts adds In-Reply-To / References on top. That id is minted PER DELIVERY
+// (sender clock + pid, re-minted on collision within the recipient's new/), so
+// it is unique within one mailbox and NOT globally unique: two recipients of
+// the same logical message get different ids. Threading round-trips within a
+// mailbox, which is what reply and In-Reply-To need; do not build anything on
+// a global-uniqueness assumption.
+//
+// Header values are validated before anything touches the filesystem, so a
+// rejected value leaves no message, no tmp file, and no lazily-created mailbox
+// behind.
+func SendWithOpts(mailRoot, recipient, from, subject, body string, opts SendOpts) (string, error) {
 	// Checked before EnsureMaildir so a bad recipient surfaces as the usage
 	// error it is, rather than being re-wrapped below as an internal io_error.
 	if err := checkMailbox(recipient); err != nil {
 		return "", err
 	}
+	if err := checkHeaderValue("From", from); err != nil {
+		return "", err
+	}
+	if err := checkHeaderValue("Subject", subject); err != nil {
+		return "", err
+	}
+	if opts.InReplyTo != "" {
+		if err := checkMsgIDHeader("In-Reply-To", opts.InReplyTo); err != nil {
+			return "", err
+		}
+	}
+	for _, ref := range opts.References {
+		if err := checkMsgIDHeader("References", ref); err != nil {
+			return "", err
+		}
+	}
+
 	if err := EnsureMaildir(mailRoot, recipient); err != nil {
 		return "", mgerr.Wrap(mgerr.CatInternal, "io_error", fmt.Errorf("could not deliver message to %s: %s", recipient, fsErrText(err)), "")
 	}
 
-	content := fmt.Sprintf("From: %s\nSubject: %s\nDate: %s\n\n%s\n",
-		from, subject, time.Now().UTC().Format(time.RFC3339), body)
+	// One timestamp for the whole delivery: a re-mint must not shift the Date.
+	date := time.Now().UTC().Format(time.RFC3339)
 
 	// Deliver under a freshly minted msgID, re-minting on collision. Delivery
 	// never overwrites an existing message (see deliverOnce), so a collision
-	// costs a retry rather than silently dropping already-delivered mail.
+	// costs a retry rather than silently dropping already-delivered mail. The
+	// content is rebuilt per attempt because Message-Id carries the msgID, and
+	// a re-mint changes it.
 	var msgID string
 	for attempt := 1; ; attempt++ {
 		msgID = mintMsgID()
-		err := deliverOnce(mailRoot, recipient, msgID, content)
+		err := deliverOnce(mailRoot, recipient, msgID, buildContent(msgID, from, subject, date, body, opts))
 		if err == nil {
 			break
 		}
@@ -206,14 +327,42 @@ func Send(mailRoot, recipient, from, subject, body string) (string, error) {
 		}
 	}
 
-	event.Emit(eventsRoot(mailRoot), "mail.sent", map[string]string{
+	fields := map[string]string{
 		"msg_id": msgID,
 		"from":   from,
 		"to":     recipient,
-	})
+	}
+	if opts.InReplyTo != "" {
+		fields["in_reply_to"] = opts.InReplyTo
+	}
+	event.Emit(eventsRoot(mailRoot), "mail.sent", fields)
 	Audit(mailRoot, "send", recipient, msgID, map[string]string{"from": from})
 
 	return msgID, nil
+}
+
+// buildContent serializes one message file. Message-Id is stamped with the
+// msgID the message is being delivered under, so the header and the file name
+// agree by construction. In-Reply-To and References are omitted entirely when
+// unset, which is why a non-threaded message is byte-identical to what earlier
+// versions wrote apart from the Message-Id line.
+//
+// Every interpolated value has already passed checkHeaderValue, so no value can
+// terminate its own header line.
+func buildContent(msgID, from, subject, date, body string, opts SendOpts) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Message-Id: %s\n", msgID)
+	fmt.Fprintf(&b, "From: %s\n", from)
+	fmt.Fprintf(&b, "Subject: %s\n", subject)
+	fmt.Fprintf(&b, "Date: %s\n", date)
+	if opts.InReplyTo != "" {
+		fmt.Fprintf(&b, "In-Reply-To: %s\n", opts.InReplyTo)
+	}
+	if refs := capReferences(opts.References); len(refs) > 0 {
+		fmt.Fprintf(&b, "References: %s\n", strings.Join(refs, " "))
+	}
+	fmt.Fprintf(&b, "\n%s\n", body)
+	return b.String()
 }
 
 // mintMsgID generates a message ID from the wall clock and the sending pid.
@@ -474,7 +623,9 @@ func parseMessageFile(path, id string) (Message, error) {
 	}
 	msg.Body = strings.TrimSpace(parts[1])
 
-	// Parse headers
+	// Parse headers. sawHeader keys off From/Subject/Date only: those three
+	// predate the correlation headers, so a file carrying nothing but a
+	// Message-Id is as malformed now as it was before.
 	sawHeader := false
 	for _, line := range strings.Split(parts[0], "\n") {
 		if k, v, ok := strings.Cut(line, ": "); ok {
@@ -488,6 +639,12 @@ func parseMessageFile(path, id string) (Message, error) {
 			case "Date":
 				msg.Date = v
 				sawHeader = true
+			case "Message-Id":
+				msg.MessageID = v
+			case "In-Reply-To":
+				msg.InReplyTo = v
+			case "References":
+				msg.References = strings.Fields(v)
 			}
 		}
 	}
@@ -496,4 +653,28 @@ func parseMessageFile(path, id string) (Message, error) {
 	}
 
 	return msg, nil
+}
+
+// Peek returns a message by ID without moving it or marking it read, looking in
+// new/ then cur/ exactly where Read looks. It exists so a caller can inspect a
+// message (its From, Subject and References — everything Reply needs to build
+// the correlation headers) and only then commit to the destructive new/ -> cur/
+// transition. Peeking a message that was already read succeeds and reports
+// Read: true.
+func Peek(mailRoot, agent, msgID string) (*Message, error) {
+	if err := checkMsgID(agent, msgID); err != nil {
+		return nil, err
+	}
+	for _, sub := range []string{"new", "cur"} {
+		msg, err := parseMessageFile(filepath.Join(mailRoot, agent, sub, msgID), msgID)
+		if err != nil {
+			if errors.Is(err, ErrMalformed) {
+				return nil, mgerr.Wrap(mgerr.CatNotFound, "malformed_message", fmt.Errorf("message %q in %s's mailbox: %w", msgID, agent, err), "")
+			}
+			continue // absent from this subdir; try the next
+		}
+		msg.Read = sub == "cur"
+		return &msg, nil
+	}
+	return nil, mgerr.NotFound("no_such_message", fmt.Sprintf("message %q not found for %s", msgID, agent), "run 'mg mail list "+agent+" --all' to see valid message ids")
 }

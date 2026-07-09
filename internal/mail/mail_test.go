@@ -1049,3 +1049,230 @@ func TestSend_ManyDeliveriesAreUnique(t *testing.T) {
 		t.Errorf("delivered %d messages, mailbox holds %d — mail was dropped", n, len(msgs))
 	}
 }
+
+// --- correlation headers (Message-Id / In-Reply-To / References) -----------
+
+// TestSend_StampsMessageIDMatchingFilename: every delivered message carries a
+// Message-Id header, and it is the msgID — which is the maildir file name. The
+// file name IS the message's identity; there is no second id space.
+func TestSend_StampsMessageIDMatchingFilename(t *testing.T) {
+	root := t.TempDir()
+
+	msgID, err := Send(root, "arch", "mayor", "hello", "body")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(root, "arch", "new", msgID))
+	if err != nil {
+		t.Fatalf("delivered file not named by msgID: %v", err)
+	}
+	if want := "Message-Id: " + msgID + "\n"; !strings.Contains(string(data), want) {
+		t.Errorf("message file missing %q:\n%s", want, data)
+	}
+
+	// ...and it round-trips back out through the parser.
+	msg, err := Peek(root, "arch", msgID)
+	if err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if msg.MessageID != msgID {
+		t.Errorf("parsed MessageID = %q, want %q", msg.MessageID, msgID)
+	}
+	if msg.ID != msg.MessageID {
+		t.Errorf("ID %q and MessageID %q disagree — they are the same identity", msg.ID, msg.MessageID)
+	}
+	if msg.InReplyTo != "" || len(msg.References) != 0 {
+		t.Errorf("unthreaded message carries correlation headers: in-reply-to=%q refs=%v", msg.InReplyTo, msg.References)
+	}
+}
+
+// TestSendWithOpts_CorrelationHeadersRoundTrip: In-Reply-To and References are
+// written when set and parse back to the same values.
+func TestSendWithOpts_CorrelationHeadersRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	opts := SendOpts{InReplyTo: "parent.id.1", References: []string{"root.id.0", "parent.id.1"}}
+
+	msgID, err := SendWithOpts(root, "arch", "mayor", "re: hello", "body", opts)
+	if err != nil {
+		t.Fatalf("SendWithOpts: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(root, "arch", "new", msgID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// References is a single space-separated header line, oldest id first.
+	if want := "References: root.id.0 parent.id.1\n"; !strings.Contains(string(data), want) {
+		t.Errorf("missing %q:\n%s", want, data)
+	}
+
+	msg, err := Peek(root, "arch", msgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.InReplyTo != "parent.id.1" {
+		t.Errorf("InReplyTo = %q, want parent.id.1", msg.InReplyTo)
+	}
+	if got := strings.Join(msg.References, ","); got != "root.id.0,parent.id.1" {
+		t.Errorf("References = %v, want [root.id.0 parent.id.1]", msg.References)
+	}
+}
+
+// TestSendWithOpts_ReferencesCappedKeepingNewest: a long thread keeps only the
+// most recent maxReferences ids. The nearest ancestry — what a reader threads
+// on — survives; the oldest ids fall off the front.
+func TestSendWithOpts_ReferencesCappedKeepingNewest(t *testing.T) {
+	root := t.TempDir()
+
+	var refs []string
+	for i := 0; i < maxReferences+5; i++ {
+		refs = append(refs, fmt.Sprintf("id.%02d", i))
+	}
+
+	msgID, err := SendWithOpts(root, "arch", "mayor", "deep thread", "body", SendOpts{References: refs})
+	if err != nil {
+		t.Fatalf("SendWithOpts: %v", err)
+	}
+
+	msg, err := Peek(root, "arch", msgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.References) != maxReferences {
+		t.Fatalf("References length = %d, want cap of %d", len(msg.References), maxReferences)
+	}
+	if first, last := msg.References[0], msg.References[maxReferences-1]; first != "id.05" || last != "id.24" {
+		t.Errorf("cap dropped the wrong end: kept %s..%s, want id.05..id.24", first, last)
+	}
+}
+
+// TestSend_RejectsHeaderInjection is the regression test for the CR/LF header
+// injection: before the fix, a newline in --subject or --from ended the header
+// it filled and started an attacker-chosen one. With In-Reply-To routing mail
+// into threads, an injected In-Reply-To is thread hijacking.
+//
+// The assertion is twofold: the send is refused as a usage error (exit 2), and
+// NOTHING lands on disk — no message, no tmp file, not even the lazily created
+// mailbox.
+func TestSend_RejectsHeaderInjection(t *testing.T) {
+	inject := "pwned\nIn-Reply-To: attacker.id.1\nX-Evil: yes"
+
+	cases := []struct {
+		name          string
+		from, subject string
+		opts          SendOpts
+	}{
+		{name: "LF in subject", from: "mayor", subject: inject},
+		{name: "LF in from", from: inject, subject: "s"},
+		{name: "CR in subject", from: "mayor", subject: "a\rb"},
+		{name: "CRLF in subject", from: "mayor", subject: "a\r\nX-Evil: yes"},
+		{name: "NUL in from", from: "may\x00or", subject: "s"},
+		{name: "DEL in subject", from: "mayor", subject: "a\x7fb"},
+		{name: "tab in subject", from: "mayor", subject: "a\tb"},
+		{name: "LF in in-reply-to", from: "mayor", subject: "s", opts: SendOpts{InReplyTo: "a\nX-Evil: yes"}},
+		{name: "separator in in-reply-to", from: "mayor", subject: "s", opts: SendOpts{InReplyTo: "../../etc/passwd"}},
+		{name: "space in reference", from: "mayor", subject: "s", opts: SendOpts{References: []string{"a b"}}},
+		{name: "traversal in reference", from: "mayor", subject: "s", opts: SendOpts{References: []string{"ok.id.1", ".."}}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+
+			_, err := SendWithOpts(root, "arch", tc.from, tc.subject, "body", tc.opts)
+			if err == nil {
+				t.Fatal("Send accepted a header value carrying an injection")
+			}
+
+			var me *mgerr.Error
+			if !errors.As(err, &me) {
+				t.Fatalf("error is not a *mgerr.Error: %v", err)
+			}
+			if me.Category != mgerr.CatUsage {
+				t.Errorf("category = %v, want CatUsage (exit 2)", me.Category)
+			}
+			if me.Code != "invalid_header_value" {
+				t.Errorf("code = %q, want invalid_header_value", me.Code)
+			}
+
+			// A rejected send must leave no trace: the mailbox is created
+			// lazily by Send, so a refusal should not have created it at all.
+			if _, err := os.Stat(filepath.Join(root, "arch")); !os.IsNotExist(err) {
+				t.Errorf("rejected send created the mailbox (stat err = %v)", err)
+			}
+		})
+	}
+}
+
+// TestSend_AcceptsBodyNewlines: only HEADER values are line-constrained. A
+// multi-line body is ordinary mail and must keep working.
+func TestSend_AcceptsBodyNewlines(t *testing.T) {
+	root := t.TempDir()
+	body := "line one\nline two\n\nline four"
+
+	msgID, err := Send(root, "arch", "mayor", "multiline", body)
+	if err != nil {
+		t.Fatalf("Send rejected a multi-line body: %v", err)
+	}
+	msg, err := Peek(root, "arch", msgID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Body != body {
+		t.Errorf("Body = %q, want %q", msg.Body, body)
+	}
+}
+
+// TestPeek_DoesNotMarkRead: Peek is the non-destructive lookup Reply relies on
+// to inspect a message before committing to send. Unlike Read it leaves the
+// message in new/.
+func TestPeek_DoesNotMarkRead(t *testing.T) {
+	root := t.TempDir()
+	msgID, err := Send(root, "arch", "mayor", "s", "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg, err := Peek(root, "arch", msgID)
+	if err != nil {
+		t.Fatalf("Peek: %v", err)
+	}
+	if msg.Read {
+		t.Error("Peek reported an unread message as read")
+	}
+	if _, err := os.Stat(filepath.Join(root, "arch", "new", msgID)); err != nil {
+		t.Errorf("Peek moved the message out of new/: %v", err)
+	}
+
+	// After a real Read it is found in cur/ and reported read.
+	if _, err := Read(root, "arch", msgID); err != nil {
+		t.Fatal(err)
+	}
+	msg, err = Peek(root, "arch", msgID)
+	if err != nil {
+		t.Fatalf("Peek after Read: %v", err)
+	}
+	if !msg.Read {
+		t.Error("Peek reported a cur/ message as unread")
+	}
+}
+
+// TestPeek_RejectsTraversalAndMissing: Peek shares the read path's msgID
+// validation and reports an absent message as not_found.
+func TestPeek_RejectsTraversalAndMissing(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Send(root, "arch", "mayor", "s", "b"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Peek(root, "arch", "../../../etc/passwd"); err == nil {
+		t.Error("Peek accepted a traversing msgID")
+	}
+
+	_, err := Peek(root, "arch", "nope.id.1")
+	var me *mgerr.Error
+	if !errors.As(err, &me) || me.Category != mgerr.CatNotFound {
+		t.Errorf("Peek of a missing message: err = %v, want CatNotFound", err)
+	}
+}

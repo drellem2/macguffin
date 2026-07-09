@@ -127,6 +127,7 @@ var commandEffects = map[string]commandEffect{
 
 	"mg mail":         {mutates: false, idempotent: true}, // group command (help only)
 	"mg mail send":    {mutates: true, idempotent: false},
+	"mg mail reply":   {mutates: true, idempotent: false}, // delivers a new message, like send
 	"mg mail list":    {mutates: false, idempotent: true},
 	"mg mail read":    {mutates: true, idempotent: true}, // marks read; re-read is a no-op
 	"mg mail archive": {mutates: true, idempotent: true}, // archiving an archived msg is a no-op

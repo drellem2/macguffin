@@ -429,3 +429,315 @@ func exitCodeOf(err error) int {
 	}
 	return -1
 }
+
+// --- correlation headers: Message-Id / --in-reply-to / mail reply ----------
+
+// homeOf extracts HOME from a test env built by mailTestEnv.
+func homeOf(t *testing.T, env []string) string {
+	t.Helper()
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "HOME=") {
+			return strings.TrimPrefix(kv, "HOME=")
+		}
+	}
+	t.Fatal("no HOME in test env")
+	return ""
+}
+
+// mailboxDir is the maildir subdirectory for an agent under the test HOME.
+func mailboxDir(t *testing.T, env []string, agent, sub string) string {
+	t.Helper()
+	return filepath.Join(homeOf(t, env), ".macguffin", "mail", agent, sub)
+}
+
+// soleMsgID returns the id of the single unread message in agent's mailbox,
+// failing if there is not exactly one.
+func soleMsgID(t *testing.T, env []string, agent string) string {
+	t.Helper()
+	entries, err := os.ReadDir(mailboxDir(t, env, agent, "new"))
+	if err != nil {
+		t.Fatalf("reading %s's new/: %v", agent, err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("%s has %d unread messages, want exactly 1", agent, len(entries))
+	}
+	return entries[0].Name()
+}
+
+// msgFile reads the raw message file for agent/msgID out of new/ or cur/.
+func msgFile(t *testing.T, env []string, agent, msgID string) string {
+	t.Helper()
+	for _, sub := range []string{"new", "cur"} {
+		if data, err := os.ReadFile(filepath.Join(mailboxDir(t, env, agent, sub), msgID)); err == nil {
+			return string(data)
+		}
+	}
+	t.Fatalf("message %s/%s not found in new/ or cur/", agent, msgID)
+	return ""
+}
+
+// asAgent returns env with POGO_AGENT_NAME set, so cross-box guards see the
+// caller as that agent.
+func asAgent(env []string, agent string) []string {
+	return append(append([]string{}, env...), "POGO_AGENT_NAME="+agent)
+}
+
+// TestCLI_MailSendStampsMessageID: the Message-Id header on a delivered message
+// equals its MSG-ID, which is its file name.
+func TestCLI_MailSendStampsMessageID(t *testing.T) {
+	bin, env := mailInit(t)
+
+	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=s", "--body=b"); err != nil {
+		t.Fatalf("send failed: %v", err)
+	}
+
+	id := soleMsgID(t, env, "arch")
+	if want := "Message-Id: " + id + "\n"; !strings.Contains(msgFile(t, env, "arch", id), want) {
+		t.Errorf("message file missing %q:\n%s", want, msgFile(t, env, "arch", id))
+	}
+}
+
+// TestCLI_MailSendRejectsHeaderInjection is the CLI-level regression test for
+// the CR/LF injection. A newline in --subject or --from used to append
+// attacker-chosen headers (an In-Reply-To among them, i.e. thread hijacking).
+// It must now exit 2 (usage) with no message written and no mailbox created.
+func TestCLI_MailSendRejectsHeaderInjection(t *testing.T) {
+	injected := "pwned\nIn-Reply-To: attacker.id.1\nX-Evil: yes"
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"subject", []string{"send", "victim", "--from=mayor", "--subject=" + injected, "--body=b"}},
+		{"from", []string{"send", "victim", "--from=" + injected, "--subject=s", "--body=b"}},
+		{"in-reply-to", []string{"send", "victim", "--from=mayor", "--subject=s", "--body=b", "--in-reply-to=a\nX-Evil: yes"}},
+		{"in-reply-to traversal", []string{"send", "victim", "--from=mayor", "--subject=s", "--body=b", "--in-reply-to=../../../etc/passwd"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin, env := mailInit(t)
+
+			out, errOut, err := runMail(t, bin, env, tc.args...)
+			if err == nil {
+				t.Fatalf("send accepted an injected header value (stdout=%q)", out)
+			}
+			if got := exitCodeOf(err); got != 2 {
+				t.Errorf("exit = %d, want 2 (usage); stderr=%q", got, errOut)
+			}
+			if !strings.Contains(errOut, "invalid") {
+				t.Errorf("stderr does not explain the rejection: %q", errOut)
+			}
+
+			// Nothing may reach disk — not the message, not the lazily
+			// created mailbox.
+			if _, err := os.Stat(filepath.Join(homeOf(t, env), ".macguffin", "mail", "victim")); !os.IsNotExist(err) {
+				t.Errorf("rejected send created the recipient mailbox (stat err = %v)", err)
+			}
+		})
+	}
+}
+
+// TestCLI_MailSendInReplyTo: the explicit primitive stamps In-Reply-To and
+// seeds References, and --json still carries msg_id (plus the new in_reply_to).
+func TestCLI_MailSendInReplyTo(t *testing.T) {
+	bin, env := mailInit(t)
+
+	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=first", "--body=b"); err != nil {
+		t.Fatalf("seed send failed: %v", err)
+	}
+	parent := soleMsgID(t, env, "arch")
+
+	out, _, err := runMail(t, bin, env, "send", "mayor", "--from=arch", "--subject=answer", "--body=b2",
+		"--in-reply-to="+parent, "--json")
+	if err != nil {
+		t.Fatalf("send --in-reply-to failed: %v\n%s", err, out)
+	}
+
+	var got mailSendJSON
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("bad json %q: %v", out, err)
+	}
+	if got.MsgID == "" {
+		t.Error("--json dropped msg_id")
+	}
+	if got.InReplyTo != parent {
+		t.Errorf("in_reply_to = %q, want %q", got.InReplyTo, parent)
+	}
+
+	file := msgFile(t, env, "mayor", got.MsgID)
+	for _, want := range []string{
+		"In-Reply-To: " + parent + "\n",
+		"References: " + parent + "\n",
+	} {
+		if !strings.Contains(file, want) {
+			t.Errorf("message file missing %q:\n%s", want, file)
+		}
+	}
+}
+
+// TestCLI_MailReply: the ergonomic wrapper resolves recipient, subject and
+// correlation headers from the original, marks the original read, and leaves it
+// un-archived.
+func TestCLI_MailReply(t *testing.T) {
+	bin, env := mailInit(t)
+
+	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=Review needed", "--body=please review"); err != nil {
+		t.Fatalf("seed send failed: %v", err)
+	}
+	orig := soleMsgID(t, env, "arch")
+
+	out, _, err := runMail(t, bin, asAgent(env, "arch"), "reply", "arch/"+orig, "--body=on it", "--json")
+	if err != nil {
+		t.Fatalf("reply failed: %v\n%s", err, out)
+	}
+
+	var got mailSendJSON
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("bad json %q: %v", out, err)
+	}
+	if got.To != "mayor" {
+		t.Errorf("to = %q, want mayor (the original's From)", got.To)
+	}
+	if got.From != "arch" {
+		t.Errorf("from = %q, want arch (defaults to the replying mailbox)", got.From)
+	}
+	if got.InReplyTo != orig {
+		t.Errorf("in_reply_to = %q, want %q", got.InReplyTo, orig)
+	}
+
+	file := msgFile(t, env, "mayor", got.MsgID)
+	for _, want := range []string{
+		"From: arch\n",
+		"Subject: Re: Review needed\n",
+		"In-Reply-To: " + orig + "\n",
+		"References: " + orig + "\n",
+	} {
+		if !strings.Contains(file, want) {
+			t.Errorf("reply missing %q:\n%s", want, file)
+		}
+	}
+
+	// The original is marked read (new/ -> cur/) but NOT archived.
+	if _, err := os.Stat(filepath.Join(mailboxDir(t, env, "arch", "cur"), orig)); err != nil {
+		t.Errorf("reply did not mark the original read: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(mailboxDir(t, env, "arch", "new"), orig)); !os.IsNotExist(err) {
+		t.Errorf("original still in new/ after reply")
+	}
+	if entries, err := os.ReadDir(mailboxDir(t, env, "arch", "archive")); err == nil && len(entries) > 0 {
+		t.Errorf("reply auto-archived the original (%d file(s)); it must not", len(entries))
+	}
+}
+
+// TestCLI_MailReplyRejectsCrossBox: reply marks the original read for its
+// owner, exactly as 'mail read' does, so it inherits the same --force guard.
+func TestCLI_MailReplyRejectsCrossBox(t *testing.T) {
+	bin, env := mailInit(t)
+
+	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=s", "--body=b"); err != nil {
+		t.Fatalf("seed send failed: %v", err)
+	}
+	orig := soleMsgID(t, env, "arch")
+
+	_, errOut, err := runMail(t, bin, asAgent(env, "intruder"), "reply", "arch/"+orig, "--body=mine now")
+	if err == nil {
+		t.Fatal("cross-box reply succeeded; want refusal")
+	}
+	if !strings.Contains(errOut, "--force") {
+		t.Errorf("refusal does not mention --force: %q", errOut)
+	}
+	// Refused before touching the message: still unread.
+	if _, err := os.Stat(filepath.Join(mailboxDir(t, env, "arch", "new"), orig)); err != nil {
+		t.Errorf("refused reply still marked the original read: %v", err)
+	}
+
+	// With --force it goes through.
+	if _, _, err := runMail(t, bin, asAgent(env, "intruder"), "reply", "arch/"+orig, "--body=ok", "--force"); err != nil {
+		t.Fatalf("forced cross-box reply failed: %v", err)
+	}
+}
+
+// TestCLI_MailReplyThreadCapsReferences: a thread longer than the References
+// cap keeps only the most recent ids, so message files stay small. The parent
+// is always retained — that is what threading reads.
+func TestCLI_MailReplyThreadCapsReferences(t *testing.T) {
+	bin, env := mailInit(t)
+
+	// Open the thread, then ping-pong replies between arch and mayor. Each
+	// reply extends References by exactly one id (its parent).
+	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=thread", "--body=0"); err != nil {
+		t.Fatalf("seed send failed: %v", err)
+	}
+
+	const rounds = 25 // comfortably past the cap of 20
+	box, peer := "arch", "mayor"
+	var lastID, lastBox string
+	for i := 0; i < rounds; i++ {
+		parent := soleMsgID(t, env, box)
+		if _, _, err := runMail(t, bin, asAgent(env, box), "reply", box+"/"+parent, "--body=r"); err != nil {
+			t.Fatalf("round %d reply from %s failed: %v", i, box, err)
+		}
+		lastBox, lastID = peer, soleMsgID(t, env, peer)
+		box, peer = peer, box
+	}
+
+	file := msgFile(t, env, lastBox, lastID)
+	var refs []string
+	for _, line := range strings.Split(file, "\n") {
+		if v, ok := strings.CutPrefix(line, "References: "); ok {
+			refs = strings.Fields(v)
+		}
+	}
+	if len(refs) != 20 {
+		t.Fatalf("References carries %d ids, want the cap of 20:\n%s", len(refs), file)
+	}
+	// The newest reference is the message this one replies to.
+	if want := "In-Reply-To: " + refs[len(refs)-1] + "\n"; !strings.Contains(file, want) {
+		t.Errorf("newest reference is not the parent; missing %q:\n%s", want, file)
+	}
+}
+
+// TestCLI_MailReadJSONExposesCorrelation: `mail read --json` surfaces the
+// correlation headers so a scripted consumer can rebuild a thread. They are
+// empty/[] for an unthreaded message.
+func TestCLI_MailReadJSONExposesCorrelation(t *testing.T) {
+	bin, env := mailInit(t)
+
+	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=s", "--body=b"); err != nil {
+		t.Fatalf("seed send failed: %v", err)
+	}
+	orig := soleMsgID(t, env, "arch")
+
+	if _, _, err := runMail(t, bin, asAgent(env, "arch"), "reply", "arch/"+orig, "--body=r"); err != nil {
+		t.Fatalf("reply failed: %v", err)
+	}
+	replyID := soleMsgID(t, env, "mayor")
+
+	out, _, err := runMail(t, bin, asAgent(env, "mayor"), "read", "mayor/"+replyID, "--json")
+	if err != nil {
+		t.Fatalf("read --json failed: %v\n%s", err, out)
+	}
+	var got mailReadJSON
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("bad json %q: %v", out, err)
+	}
+	if got.InReplyTo != orig {
+		t.Errorf("in_reply_to = %q, want %q", got.InReplyTo, orig)
+	}
+	if len(got.References) != 1 || got.References[0] != orig {
+		t.Errorf("references = %v, want [%s]", got.References, orig)
+	}
+
+	// An unthreaded message reports empty correlation, and references is [] —
+	// never null — so consumers can index it without a nil check.
+	if _, _, err := runMail(t, bin, env, "send", "solo", "--from=mayor", "--subject=s", "--body=b"); err != nil {
+		t.Fatalf("send failed: %v", err)
+	}
+	soloID := soleMsgID(t, env, "solo")
+	out, _, err = runMail(t, bin, asAgent(env, "solo"), "read", "solo/"+soloID, "--json")
+	if err != nil {
+		t.Fatalf("read --json failed: %v", err)
+	}
+	if !strings.Contains(out, `"references":[]`) {
+		t.Errorf("unthreaded message should emit references:[], got %q", out)
+	}
+}
