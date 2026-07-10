@@ -2,7 +2,9 @@ package workitem
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/drellem2/macguffin/internal/event"
+	"github.com/drellem2/macguffin/internal/mgerr"
 )
 
 // Item represents a work item with YAML frontmatter fields.
@@ -84,35 +87,58 @@ func WithTags(tags []string) CreateOption {
 	}
 }
 
+// maxMintAttempts bounds the remint loop in Create. Each attempt draws a fresh
+// ID from a 65,536-value space, so even a store holding thousands of items
+// exhausts this only if the space is essentially full — at which point failing
+// loudly beats spinning.
+const maxMintAttempts = 64
+
+// nowFunc is the clock Create mints from. Overridden in tests to pin the
+// timestamp and thereby force an ID collision, which is otherwise a 1-in-65,536
+// event.
+var nowFunc = func() time.Time { return time.Now().UTC() }
+
 // GenerateID produces a short hash ID with the given prefix (e.g. "mg-a3f0").
 func GenerateID(prefix, title string, created time.Time) string {
+	return generateID(prefix, title, created, 0)
+}
+
+// generateID is GenerateID with a collision-breaking nonce mixed into the hash
+// input. The ID is a DETERMINISTIC HASH of (title, created), not a random draw:
+// re-deriving it from the same inputs returns the same ID forever, so a retry
+// loop that does not perturb the input never terminates. The nonce is that
+// perturbation. nonce==0 reproduces the historical ID exactly, so every ID ever
+// minted stays derivable.
+func generateID(prefix, title string, created time.Time, nonce int) string {
 	h := sha256.New()
 	h.Write([]byte(title))
 	h.Write([]byte(created.Format(time.RFC3339Nano)))
+	if nonce > 0 {
+		fmt.Fprintf(h, "\x00nonce=%d", nonce)
+	}
 	sum := h.Sum(nil)
 	return fmt.Sprintf("%s%x", prefix, sum[:2])
 }
 
 // Create writes a new work item file. Items with no dependencies go to
 // available/; items with unmet dependencies go to pending/.
+//
+// Minting is collision-safe in two independent layers, because the short ID
+// space is small enough that collisions are routine rather than theoretical:
+//
+//  1. The candidate ID is rejected if it already names an item ANYWHERE in the
+//     store — including archive/ and shelved/, which O_EXCL on one directory
+//     would never see. This stops a new item from being born as a silent alias
+//     of an old one.
+//  2. The file is created with O_EXCL. os.WriteFile truncates, so the previous
+//     implementation would silently DESTROY a live item in available/ or
+//     pending/ whose ID the new item happened to draw. O_EXCL also closes the
+//     TOCTOU window that a bare pre-existence check would leave open.
+//
+// On either rejection the ID is reminted with an incremented nonce.
 func Create(root, prefix, typ, title string, depends []string, opts ...CreateOption) (*Item, error) {
-	now := time.Now().UTC()
-	id := GenerateID(prefix, title, now)
-
+	now := nowFunc()
 	creator := currentUser()
-
-	item := &Item{
-		ID:      id,
-		Type:    typ,
-		Created: now,
-		Creator: creator,
-		Depends: depends,
-		Title:   title,
-	}
-
-	for _, opt := range opts {
-		opt(item)
-	}
 
 	// Items with dependencies start in pending/; others in available/
 	subdir := "available"
@@ -120,21 +146,69 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 		subdir = "pending"
 	}
 	dir := filepath.Join(root, "work", subdir)
-	path := filepath.Join(dir, id+".md")
 
-	content := Render(item)
+	for nonce := 0; nonce < maxMintAttempts; nonce++ {
+		id := generateID(prefix, title, now, nonce)
 
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		return nil, ioErr(fmt.Sprintf("could not create work item: %s", fsErrText(err)))
+		// Layer 1: whole-store uniqueness.
+		matches, err := Resolve(root, id)
+		if err != nil {
+			return nil, err
+		}
+		if len(matches) > 0 {
+			continue
+		}
+
+		item := &Item{
+			ID:      id,
+			Type:    typ,
+			Created: now,
+			Creator: creator,
+			Depends: depends,
+			Title:   title,
+		}
+		for _, opt := range opts {
+			opt(item)
+		}
+
+		// Layer 2: atomic, non-truncating create.
+		path := filepath.Join(dir, id+".md")
+		if err := writeNew(path, Render(item)); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				continue // lost a race; remint
+			}
+			return nil, ioErr(fmt.Sprintf("could not create work item: %s", fsErrText(err)))
+		}
+
+		event.Emit(root, "work.created", map[string]string{
+			"item_id":   id,
+			"to_status": subdir,
+			"actor":     actorFor(item),
+		})
+
+		return item, nil
 	}
 
-	event.Emit(root, "work.created", map[string]string{
-		"item_id":   id,
-		"to_status": subdir,
-		"actor":     actorFor(item),
-	})
+	return nil, &mgerr.Error{
+		Category: mgerr.CatInternal,
+		Code:     "id_exhausted",
+		Message:  fmt.Sprintf("could not mint an unused work item ID after %d attempts.", maxMintAttempts),
+		Hint:     "The short-ID space appears to be exhausted. Archive or prune old work items.",
+	}
+}
 
-	return item, nil
+// writeNew creates path exclusively — it never truncates an existing file.
+// The fs.ErrExist it returns on collision is what drives the remint loop.
+func writeNew(path, content string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // Render serialises an Item back to markdown with YAML frontmatter.
@@ -187,94 +261,24 @@ func Render(item *Item) string {
 		item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, depsLine, tagsLine, repoLine, assigneeLine, priorityLine, branchLine, budgetLine, body)
 }
 
-// FindPath returns the filesystem path and status directory for a work item by ID.
+// FindPath returns the filesystem path and status directory for a work item by
+// ID, erroring if the ID is ambiguous. See Resolve.
 func FindPath(root, id string) (path string, status string, err error) {
-	states := []string{"available", "claimed", "done", "pending", "shelved"}
-
-	for _, state := range states {
-		dir := filepath.Join(root, "work", state)
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			name := e.Name()
-			if strings.HasPrefix(name, id+".md") || strings.HasPrefix(name, id+".md.") {
-				return filepath.Join(dir, name), state, nil
-			}
-		}
+	m, err := ResolveUnique(root, id)
+	if err != nil {
+		return "", "", err
 	}
-
-	// Search archive partitions
-	archiveRoot := filepath.Join(root, "work", "archive")
-	partitions, err2 := os.ReadDir(archiveRoot)
-	if err2 == nil {
-		for _, p := range partitions {
-			if !p.IsDir() {
-				continue
-			}
-			entries, err := os.ReadDir(filepath.Join(archiveRoot, p.Name()))
-			if err != nil {
-				continue
-			}
-			for _, e := range entries {
-				name := e.Name()
-				if strings.HasPrefix(name, id+".md") {
-					return filepath.Join(archiveRoot, p.Name(), name), "archived", nil
-				}
-			}
-		}
-	}
-
-	return "", "", errNoSuchItem(id)
+	return m.Path, m.Status, nil
 }
 
-// Read loads a work item by ID, searching across available/, claimed/, done/, pending/, and archive/.
+// Read loads a work item by ID from anywhere in the store, erroring if the ID
+// is ambiguous. See Resolve.
 func Read(root, id string) (*Item, error) {
-	dirs := []string{
-		filepath.Join(root, "work", "available"),
-		filepath.Join(root, "work", "claimed"),
-		filepath.Join(root, "work", "done"),
-		filepath.Join(root, "work", "pending"),
-		filepath.Join(root, "work", "shelved"),
+	m, err := ResolveUnique(root, id)
+	if err != nil {
+		return nil, err
 	}
-
-	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			name := e.Name()
-			if strings.HasPrefix(name, id+".md") || strings.HasPrefix(name, id+".md.") {
-				path := filepath.Join(dir, name)
-				return readFile(path)
-			}
-		}
-	}
-
-	// Search archive partitions
-	archiveRoot := filepath.Join(root, "work", "archive")
-	partitions, err := os.ReadDir(archiveRoot)
-	if err == nil {
-		for _, p := range partitions {
-			if !p.IsDir() {
-				continue
-			}
-			entries, err := os.ReadDir(filepath.Join(archiveRoot, p.Name()))
-			if err != nil {
-				continue
-			}
-			for _, e := range entries {
-				name := e.Name()
-				if strings.HasPrefix(name, id+".md") {
-					return readFile(filepath.Join(archiveRoot, p.Name(), name))
-				}
-			}
-		}
-	}
-
-	return nil, errNoSuchItem(id)
+	return readFile(m.Path)
 }
 
 // List returns all work items in available/.

@@ -44,8 +44,8 @@ freely; never rename or repurpose an existing one.
 |-------------|-------|
 | `usage`     | `usage` (generic cobra flag/arg/unknown-command), `mutually_exclusive_flags`, `invalid_value`, `missing_required`, `invalid_header_value` (a mail header value carrying CR/LF or other control characters) |
 | `not_found` | `no_such_item`, `no_such_message`, `no_such_mailbox`, `malformed_message` (exists but unparseable; `retryable=false`) |
-| `conflict`  | `already_claimed`, `already_done`, `unmet_dependencies`, `not_claimed`, `not_done`, `not_shelved`, `item_shelved`, `item_archived`, `claim_race` (`retryable=true`) |
-| `internal`  | `internal` (catch-all), `io_error`, `encode_error` |
+| `conflict`  | `already_claimed`, `already_done`, `unmet_dependencies`, `not_claimed`, `not_done`, `not_shelved`, `item_shelved`, `item_archived`, `claim_race` (`retryable=true`), `ambiguous_id` (the short ID names more than one item; the message lists every candidate path) |
+| `internal`  | `internal` (catch-all), `io_error`, `encode_error`, `id_exhausted` (`mg new` could not mint an unused short ID) |
 
 ## 3. JSON error object (FROZEN, additive)
 

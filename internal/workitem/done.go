@@ -17,25 +17,15 @@ import (
 // After completing the item, any pending items whose dependencies are now
 // fully satisfied are auto-promoted to available.
 func Done(root, id string, resultJSON json.RawMessage) (*Item, []*Item, error) {
-	claimedDir := filepath.Join(root, "work", "claimed")
-
-	// Find the claimed file (has PID suffix: <id>.md.<pid>). A read failure
-	// (e.g. claimed/ missing) is treated the same as "not present" — the
-	// diagnosis below reports where the item actually is.
-	entries, _ := os.ReadDir(claimedDir)
-
-	var srcPath, srcName string
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), id+".md") {
-			srcName = e.Name()
-			srcPath = filepath.Join(claimedDir, srcName)
-			break
-		}
+	m, err := ResolveUnique(root, id)
+	if err != nil {
+		return nil, nil, err
 	}
-
-	if srcPath == "" {
+	if m.Status != "claimed" {
 		return nil, nil, explainDoneFailure(root, id)
 	}
+	srcPath := m.Path
+	srcName := filepath.Base(srcPath)
 
 	// Extract the claim-holder PID from the filename (<id>.md.<pid>) for the event.
 	claimPID := ""
@@ -82,44 +72,15 @@ func Done(root, id string, resultJSON json.RawMessage) (*Item, []*Item, error) {
 	return item, promoted, nil
 }
 
-// Status returns the lifecycle state of a work item: "available", "claimed", "done", or "archived".
+// Status returns the lifecycle state of a work item: "available", "claimed",
+// "done", "pending", "shelved", or "archived". It errors if the ID is
+// ambiguous. See Resolve.
 func Status(root, id string) (string, error) {
-	states := []string{"available", "claimed", "done", "pending", "shelved"}
-
-	for _, state := range states {
-		dir := filepath.Join(root, "work", state)
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			if strings.HasPrefix(e.Name(), id+".md") {
-				return state, nil
-			}
-		}
+	m, err := ResolveUnique(root, id)
+	if err != nil {
+		return "", err
 	}
-
-	// Check archive partitions
-	archiveRoot := filepath.Join(root, "work", "archive")
-	partitions, err := os.ReadDir(archiveRoot)
-	if err == nil {
-		for _, p := range partitions {
-			if !p.IsDir() {
-				continue
-			}
-			entries, err := os.ReadDir(filepath.Join(archiveRoot, p.Name()))
-			if err != nil {
-				continue
-			}
-			for _, e := range entries {
-				if strings.HasPrefix(e.Name(), id+".md") {
-					return "archived", nil
-				}
-			}
-		}
-	}
-
-	return "", errNoSuchItem(id)
+	return m.Status, nil
 }
 
 // ListByStatus returns all work items in the given status directory.

@@ -11,7 +11,15 @@ import (
 // Reopen atomically moves a work item from done/ back to claimed/.
 // The item must currently be in done/. Returns the reopened Item.
 func Reopen(root, id string) (*Item, error) {
-	src := filepath.Join(root, "work", "done", id+".md")
+	m, err := ResolveUnique(root, id)
+	if err != nil {
+		return nil, err
+	}
+	if m.Status != "done" {
+		return nil, explainReopenFailure(root, id)
+	}
+
+	src := m.Path
 	dst := filepath.Join(root, "work", "claimed", id+".md")
 
 	// rename(2) is atomic on local filesystems.

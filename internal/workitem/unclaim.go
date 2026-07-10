@@ -22,30 +22,17 @@ type UnclaimResult struct {
 // rather than the owning agent. Releasing a claim is therefore an explicit,
 // targeted operation: the caller must know the work item ID.
 func Unclaim(root, id string) (*UnclaimResult, error) {
-	claimedDir := filepath.Join(root, "work", "claimed")
-	availableDir := filepath.Join(root, "work", "available")
-
-	// A read failure (e.g. claimed/ missing) is treated the same as "not
-	// present" — the diagnosis below reports where the item actually is.
-	entries, _ := os.ReadDir(claimedDir)
-
-	var srcName string
-	for _, e := range entries {
-		name := e.Name()
-		if name == id+".md" || strings.HasPrefix(name, id+".md.") {
-			srcName = name
-			break
-		}
+	m, err := ResolveUnique(root, id)
+	if err != nil {
+		return nil, err
 	}
-
-	if srcName == "" {
+	if m.Status != "claimed" {
 		return nil, explainUnclaimFailure(root, id)
 	}
 
-	pid := parseClaimPID(srcName)
-
-	src := filepath.Join(claimedDir, srcName)
-	dst := filepath.Join(availableDir, id+".md")
+	src := m.Path
+	pid := parseClaimPID(filepath.Base(src))
+	dst := filepath.Join(root, "work", "available", id+".md")
 
 	if err := os.Rename(src, dst); err != nil {
 		return nil, ioErr(fmt.Sprintf("%s: could not release claim: %s", id, fsErrText(err)))

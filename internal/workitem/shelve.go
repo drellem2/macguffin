@@ -111,13 +111,17 @@ func ShelveByTag(root, tag string) ([]*Item, error) {
 // Unshelve restores a shelved work item. Items with unmet dependencies go
 // to pending/; otherwise they go to available/. Returns all unshelved items.
 func Unshelve(root, id string) ([]*Item, error) {
-	src := filepath.Join(root, "work", "shelved", id+".md")
+	m, err := ResolveUnique(root, id)
+	if err != nil {
+		return nil, err
+	}
+	if m.Status != "shelved" {
+		return nil, explainUnshelveFailure(root, id)
+	}
 
+	src := m.Path
 	item, err := readFile(src)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, explainUnshelveFailure(root, id)
-		}
 		return nil, err
 	}
 

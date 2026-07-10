@@ -14,6 +14,31 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ## [Unreleased]
 
+### Fixed
+
+- **Silent data loss on short-ID collision (mg-38b9).** `mg new` wrote work items
+  with `os.WriteFile`, which *truncates*. A new item whose 4-hex-digit ID collided
+  with a live item in `available/` or `pending/` destroyed that item, silently and
+  without a trace (~1 in 4096 per mint). Items are now created with
+  `O_CREATE|O_EXCL`, and a candidate ID that already names an item **anywhere** in
+  the store — including `archive/` and `shelved/`, which `O_EXCL` on one directory
+  never sees — is reminted before use. Because the ID is a deterministic hash of
+  (title, created) rather than a random draw, the remint mixes a nonce into the
+  hash input; a retry loop that did not would re-derive the same ID forever.
+
+### Changed
+
+- **Ambiguous short IDs now error instead of silently resolving to one item
+  (mg-38b9).** Seven commands (`show`, `edit`, `claim`, `done`, `unclaim`,
+  `reopen`, `shelve`/`unshelve`/`unarchive`) each walked the store independently
+  and took the first filesystem hit, so a duplicated ID resolved to whichever
+  directory was scanned first — and `mg show` could render one item's body under
+  another item's status. They now share one `workitem.Resolve`, which returns
+  *every* match. Two or more is a new `ambiguous_id` conflict error (exit 4)
+  listing each candidate path. Existing duplicate IDs are **not** renumbered:
+  the commit trailers, audit-log lines and roadmap links pointing at them stay
+  valid, and the ambiguity is reported at read time rather than papered over.
+
 ## [0.2.0] - 2026-07-10
 
 Minor release rolling up the 30 commits merged since v0.1.4 (this release-prep

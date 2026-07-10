@@ -38,12 +38,9 @@ var showCmd = &cobra.Command{
 			return err
 		}
 
-		item, err := workitem.Read(root, args[0])
-		if err != nil {
-			return err
-		}
-
-		status, err := workitem.Status(root, args[0])
+		// One resolve, not two: reading the body and the status separately
+		// let `show` render one item under another item's status.
+		item, status, err := workitem.ReadWithStatus(root, args[0])
 		if err != nil {
 			return err
 		}

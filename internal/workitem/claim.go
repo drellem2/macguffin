@@ -14,7 +14,15 @@ import (
 // If pid is 0, it defaults to the current process's PID.
 // Returns the claimed Item, or an error if the item doesn't exist or was already claimed.
 func Claim(root, id string, pid int) (*Item, error) {
-	src := filepath.Join(root, "work", "available", id+".md")
+	m, err := ResolveUnique(root, id)
+	if err != nil {
+		return nil, err
+	}
+	if m.Status != "available" {
+		return nil, explainClaimFailure(root, id)
+	}
+
+	src := m.Path
 	if pid == 0 {
 		pid = os.Getpid()
 	}

@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
 )
@@ -23,22 +22,14 @@ import (
 // claimed, the PID recorded on the claim filename (0 if absent/unparseable).
 // status is "" when the item does not exist in any directory.
 func statusWithPID(root, id string) (status string, pid int) {
-	status, err := Status(root, id)
+	m, err := ResolveUnique(root, id)
 	if err != nil {
 		return "", 0
 	}
-	if status == "claimed" {
-		claimedDir := filepath.Join(root, "work", "claimed")
-		if entries, err := os.ReadDir(claimedDir); err == nil {
-			for _, e := range entries {
-				name := e.Name()
-				if name == id+".md" || strings.HasPrefix(name, id+".md.") {
-					return status, parseClaimPID(name)
-				}
-			}
-		}
+	if m.Status == "claimed" {
+		return m.Status, parseClaimPID(filepath.Base(m.Path))
 	}
-	return status, 0
+	return m.Status, 0
 }
 
 // remediation returns the standard next-step hint for an item currently in the
