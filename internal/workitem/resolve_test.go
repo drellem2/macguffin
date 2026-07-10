@@ -1,6 +1,7 @@
 package workitem
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -291,42 +292,58 @@ func TestResolve_ClaimedPIDSuffixAndSidecars(t *testing.T) {
 	}
 }
 
+// captureShadowNotice redirects the resolver's stderr note into a buffer for
+// the duration of a test.
+func captureShadowNotice(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := shadowNotice
+	shadowNotice = &buf
+	t.Cleanup(func() { shadowNotice = prev })
+	return &buf
+}
+
 // TestAmbiguousID_IsLoudEverywhere is the anti-silent-wrong-answer test: every
-// command that resolves an ID must refuse rather than guess.
+// command that resolves an ID must refuse rather than guess between two
+// candidates of the SAME terminality. (Liveness breaks the tie when the
+// candidates differ — that is TestResolveUnique_LivePrecedence.)
 func TestAmbiguousID_IsLoudEverywhere(t *testing.T) {
 	id := "mg-c2af"
 
-	// Each case seeds a live copy plus an archived copy of the same ID, then
-	// runs the command that would previously have taken the first hit.
+	// Each case seeds the copy the command operates on plus a second copy of
+	// equal terminality, then runs the command that would previously have taken
+	// the first filesystem hit. Live cases are shadowed by another live copy;
+	// the terminal (done) case is shadowed by an archived one.
 	cases := []struct {
-		name string
-		live string // directory holding the live copy
-		file string
-		run  func(root string) error
+		name   string
+		dir    string // directory holding the copy the command operates on
+		file   string
+		shadow string // directory holding the equally-terminal twin
+		run    func(root string) error
 	}{
-		{"read", "available", id + ".md", func(root string) error { _, err := Read(root, id); return err }},
-		{"status", "available", id + ".md", func(root string) error { _, err := Status(root, id); return err }},
-		{"findpath", "available", id + ".md", func(root string) error { _, _, err := FindPath(root, id); return err }},
-		{"claim", "available", id + ".md", func(root string) error { _, err := Claim(root, id, 1); return err }},
-		{"shelve", "available", id + ".md", func(root string) error { _, err := Shelve(root, id); return err }},
-		{"edit", "available", id + ".md", func(root string) error {
+		{"read", "available", id + ".md", "pending", func(root string) error { _, err := Read(root, id); return err }},
+		{"status", "available", id + ".md", "pending", func(root string) error { _, err := Status(root, id); return err }},
+		{"findpath", "available", id + ".md", "pending", func(root string) error { _, _, err := FindPath(root, id); return err }},
+		{"claim", "available", id + ".md", "pending", func(root string) error { _, err := Claim(root, id, 1); return err }},
+		{"shelve", "available", id + ".md", "pending", func(root string) error { _, err := Shelve(root, id); return err }},
+		{"edit", "available", id + ".md", "pending", func(root string) error {
 			typ := "bug"
 			_, err := Update(root, id, UpdateField{Type: &typ})
 			return err
 		}},
-		{"unclaim", "claimed", id + ".md.991", func(root string) error { _, err := Unclaim(root, id); return err }},
-		{"done", "claimed", id + ".md.991", func(root string) error { _, _, err := Done(root, id, nil); return err }},
-		{"reopen", "done", id + ".md", func(root string) error { _, err := Reopen(root, id); return err }},
-		{"unshelve", "shelved", id + ".md", func(root string) error { _, err := Unshelve(root, id); return err }},
-		{"unarchive", "available", id + ".md", func(root string) error { _, err := Unarchive(root, id); return err }},
+		{"unclaim", "claimed", id + ".md.991", "pending", func(root string) error { _, err := Unclaim(root, id); return err }},
+		{"done", "claimed", id + ".md.991", "pending", func(root string) error { _, _, err := Done(root, id, nil); return err }},
+		{"reopen", "done", id + ".md", filepath.Join("archive", "2026-05"), func(root string) error { _, err := Reopen(root, id); return err }},
+		{"unshelve", "shelved", id + ".md", "pending", func(root string) error { _, err := Unshelve(root, id); return err }},
+		{"unarchive", "available", id + ".md", "pending", func(root string) error { _, err := Unarchive(root, id); return err }},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			setupDirs(t, root)
-			writeAt(t, root, tc.live, tc.file)
-			writeAt(t, root, filepath.Join("archive", "2026-05"), id+".md")
+			writeAt(t, root, tc.dir, tc.file)
+			writeAt(t, root, tc.shadow, id+".md")
 
 			err := tc.run(root)
 			if err == nil {
@@ -340,10 +357,184 @@ func TestAmbiguousID_IsLoudEverywhere(t *testing.T) {
 				t.Errorf("category = %v, want conflict", me.Category)
 			}
 			// The message must name both candidates, or it is not actionable.
-			for _, want := range []string{filepath.Join("work", "archive", "2026-05", id+".md"), filepath.Join("work", tc.live, tc.file)} {
+			for _, want := range []string{filepath.Join("work", tc.shadow, id+".md"), filepath.Join("work", tc.dir, tc.file)} {
 				if !strings.Contains(me.Message, want) {
 					t.Errorf("message does not name candidate %q:\n%s", want, me.Message)
 				}
+			}
+		})
+	}
+}
+
+// TestResolveUnique_LivePrecedence pins the architect's ruling on mg-4fa7: a
+// live work item and an archived record are not two equally plausible answers
+// to the same question. Exactly one live candidate wins — loudly.
+func TestResolveUnique_LivePrecedence(t *testing.T) {
+	id := "mg-4fa7"
+
+	for _, live := range []string{"available", "claimed", "pending", "shelved"} {
+		t.Run("live="+live, func(t *testing.T) {
+			root := t.TempDir()
+			setupDirs(t, root)
+			file := id + ".md"
+			if live == "claimed" {
+				file = id + ".md.991"
+			}
+			writeAt(t, root, live, file)
+			writeAt(t, root, filepath.Join("archive", "2026-04"), id+".md")
+			notice := captureShadowNotice(t)
+
+			m, err := ResolveUnique(root, id)
+			if err != nil {
+				t.Fatalf("ResolveUnique should prefer the live %s item: %v", live, err)
+			}
+			if m.Status != live {
+				t.Errorf("resolved to status %q, want %q", m.Status, live)
+			}
+			if want := filepath.Join(root, "work", live, file); m.Path != want {
+				t.Errorf("path = %q, want %q", m.Path, want)
+			}
+
+			// Resolve, but never silently: the note must name the archived
+			// twin's exact path so an auditor can go read it.
+			got := notice.String()
+			if wantPath := filepath.Join("work", "archive", "2026-04", id+".md"); !strings.Contains(got, wantPath) {
+				t.Errorf("shadow note does not name the archived path %q:\n%q", wantPath, got)
+			}
+			if !strings.Contains(got, id) || !strings.Contains(got, "archived") {
+				t.Errorf("shadow note should name the id and the shadowed status: %q", got)
+			}
+		})
+	}
+}
+
+// TestResolveUnique_DoneIsTerminalNotLive guards the terminality classification:
+// a done item is a historical record, so done-vs-archived is a real ambiguity.
+func TestResolveUnique_DoneIsTerminalNotLive(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+	id := "mg-c2af"
+	writeAt(t, root, "done", id+".md")
+	writeAt(t, root, filepath.Join("archive", "2026-05"), id+".md")
+	captureShadowNotice(t)
+
+	if _, err := ResolveUnique(root, id); err == nil {
+		t.Fatal("done + archived are both terminal — this must stay ambiguous")
+	} else if code := mgerrOf(t, err).Code; code != "ambiguous_id" {
+		t.Errorf("code = %q, want ambiguous_id", code)
+	}
+}
+
+// TestResolveUnique_TwoLiveIsAmbiguous: liveness breaks a live-vs-terminal tie,
+// never a live-vs-live one. (The O_EXCL mint means there are zero such cases
+// today and there will never be another; this is the backstop.)
+func TestResolveUnique_TwoLiveIsAmbiguous(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+	id := "mg-c2af"
+	writeAt(t, root, "available", id+".md")
+	writeAt(t, root, "shelved", id+".md")
+	notice := captureShadowNotice(t)
+
+	_, err := ResolveUnique(root, id)
+	if err == nil {
+		t.Fatal("two live candidates must not resolve")
+	}
+	me := mgerrOf(t, err)
+	if me.Code != "ambiguous_id" {
+		t.Fatalf("code = %q, want ambiguous_id", me.Code)
+	}
+	for _, want := range []string{
+		filepath.Join("work", "available", id+".md"),
+		filepath.Join("work", "shelved", id+".md"),
+	} {
+		if !strings.Contains(me.Message, want) {
+			t.Errorf("message does not name candidate %q:\n%s", want, me.Message)
+		}
+	}
+	if notice.String() != "" {
+		t.Errorf("an ambiguity must not also emit a shadow note: %q", notice)
+	}
+}
+
+// TestResolveUnique_ZeroLiveTwoArchived is the eleven-collision case: no live
+// candidate, so there is nothing to prefer. Error, naming both paths.
+func TestResolveUnique_ZeroLiveTwoArchived(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+	id := "mg-c2af"
+	writeAt(t, root, filepath.Join("archive", "2026-05"), id+".md")
+	writeAt(t, root, filepath.Join("archive", "2026-07"), id+".md")
+	notice := captureShadowNotice(t)
+
+	_, err := ResolveUnique(root, id)
+	if err == nil {
+		t.Fatal("two archived candidates must not resolve")
+	}
+	me := mgerrOf(t, err)
+	if me.Code != "ambiguous_id" {
+		t.Fatalf("code = %q, want ambiguous_id", me.Code)
+	}
+	for _, want := range []string{
+		filepath.Join("work", "archive", "2026-05", id+".md"),
+		filepath.Join("work", "archive", "2026-07", id+".md"),
+	} {
+		if !strings.Contains(me.Message, want) {
+			t.Errorf("message does not name candidate %q:\n%s", want, me.Message)
+		}
+	}
+	if notice.String() != "" {
+		t.Errorf("an ambiguity must not also emit a shadow note: %q", notice)
+	}
+}
+
+// TestResolveUnique_SingleCandidateIsSilent: the note is a shadow warning, not
+// a resolve trace. The overwhelmingly common path must stay quiet.
+func TestResolveUnique_SingleCandidateIsSilent(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+	id := "mg-c2af"
+	writeAt(t, root, "available", id+".md")
+	notice := captureShadowNotice(t)
+
+	if _, err := ResolveUnique(root, id); err != nil {
+		t.Fatalf("ResolveUnique: %v", err)
+	}
+	if notice.String() != "" {
+		t.Errorf("unshadowed resolve emitted stderr noise: %q", notice)
+	}
+}
+
+// TestResolveUnique_ShadowedResolveWorksEverywhere is the acceptance test in
+// library form: the commands that mg-4fa7 needs must go through, not error.
+func TestResolveUnique_ShadowedResolveWorksEverywhere(t *testing.T) {
+	id := "mg-4fa7"
+	cases := []struct {
+		name string
+		dir  string
+		file string
+		run  func(root string) error
+	}{
+		{"read", "available", id + ".md", func(root string) error { _, err := Read(root, id); return err }},
+		{"status", "available", id + ".md", func(root string) error { _, err := Status(root, id); return err }},
+		{"claim", "available", id + ".md", func(root string) error { _, err := Claim(root, id, 1); return err }},
+		{"done", "claimed", id + ".md.991", func(root string) error { _, _, err := Done(root, id, nil); return err }},
+		{"unclaim", "claimed", id + ".md.991", func(root string) error { _, err := Unclaim(root, id); return err }},
+		{"unshelve", "shelved", id + ".md", func(root string) error { _, err := Unshelve(root, id); return err }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			setupDirs(t, root)
+			writeAt(t, root, tc.dir, tc.file)
+			writeAt(t, root, filepath.Join("archive", "2026-04"), id+".md")
+			notice := captureShadowNotice(t)
+
+			if err := tc.run(root); err != nil {
+				t.Fatalf("%s on a live item shadowed by an archived twin: %v", tc.name, err)
+			}
+			if !strings.Contains(notice.String(), filepath.Join("archive", "2026-04", id+".md")) {
+				t.Errorf("%s resolved the shadow silently: %q", tc.name, notice)
 			}
 		})
 	}
@@ -381,9 +572,21 @@ func TestReadWithStatus_SingleResolve(t *testing.T) {
 		t.Errorf("got (%s, %s), want (%s, available)", item.ID, status, created.ID)
 	}
 
-	// Ambiguity is caught here too, so `show` can never render one item's body
-	// under another item's status.
+	// An archived twin does not make the id ambiguous — the live item wins,
+	// with a note on stderr.
 	writeAt(t, root, filepath.Join("archive", "2026-05"), created.ID+".md")
+	notice := captureShadowNotice(t)
+	item, status, err = ReadWithStatus(root, created.ID)
+	if err != nil || status != "available" {
+		t.Fatalf("shadowed by an archived twin: got (%v, %q), want the live item", err, status)
+	}
+	if notice.String() == "" {
+		t.Error("ReadWithStatus resolved a shadowed id silently")
+	}
+
+	// A second LIVE copy is a real ambiguity, and is caught here too, so `show`
+	// can never render one item's body under another item's status.
+	writeAt(t, root, "pending", created.ID+".md")
 	if _, _, err := ReadWithStatus(root, created.ID); err == nil {
 		t.Fatal("ReadWithStatus should error on an ambiguous id")
 	}

@@ -2,6 +2,7 @@ package workitem
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,11 +21,36 @@ import (
 //
 // Resolve returns EVERY match, which is what makes "error on ambiguity"
 // expressible at all. ResolveUnique is the resolver every caller should use.
+//
+// Ambiguity, though, is only ambiguity among candidates of the same
+// TERMINALITY. A live work item and a historical record are not two equally
+// plausible answers to "what is mg-4fa7": one is work, one is an archive entry.
+// Refusing to answer there stopped `mg show`/`mg claim` on five live items
+// whose IDs happened to shadow an archived twin. So ResolveUnique prefers the
+// single live candidate — and says so on stderr, because the bug this file was
+// written to fix was silence, not shadowing.
 
 // activeStates are the non-archive lifecycle directories under work/, in the
 // order they are scanned. The order is only observable in the candidate list of
 // an ambiguity error — a healthy store has exactly one match.
 var activeStates = []string{"available", "claimed", "done", "pending", "shelved"}
+
+// liveStates are the statuses of a work item that is still part of the
+// workflow: something an agent can still claim, finish, or unshelve. "done" and
+// "archived" are terminal — historical records, not work. Precedence between
+// live and terminal is what makes a shadowed ID answerable at all.
+var liveStates = map[string]bool{
+	"available": true,
+	"claimed":   true,
+	"pending":   true,
+	"shelved":   true,
+}
+
+// shadowNotice is where ResolveUnique reports a shadowed twin. It is STDERR and
+// must stay STDERR: `mg show --json` and `mg list --json` put a machine-readable
+// contract on stdout, and pogo parses it. A note on stdout corrupts them.
+// Tests swap this out.
+var shadowNotice io.Writer = os.Stderr
 
 // Match is one filesystem hit for a work-item ID.
 type Match struct {
@@ -33,6 +59,10 @@ type Match struct {
 	Status    string // available | claimed | done | pending | shelved | archived
 	Partition string // archive partition (e.g. "2026-07"); empty unless Status=="archived"
 }
+
+// Live reports whether the match is a live work item rather than a terminal
+// record (done or archived).
+func (m Match) Live() bool { return liveStates[m.Status] }
 
 // matchesID reports whether a directory entry names the work item id. Claimed
 // items carry a PID suffix (<id>.md.<pid>), so both forms count. Sidecars
@@ -103,9 +133,19 @@ func Resolve(root, id string) ([]Match, error) {
 	return matches, nil
 }
 
-// ResolveUnique resolves an ID to exactly one item. It returns a not_found
-// error when nothing matches and an ambiguous_id conflict, naming every
-// candidate, when more than one does. It never guesses.
+// ResolveUnique resolves an ID to exactly one item. It never guesses between
+// candidates that are equally plausible answers — but liveness breaks the tie:
+//
+//	0 candidates                  -> not_found
+//	1 candidate                   -> it
+//	exactly 1 LIVE candidate      -> that one, plus a stderr note naming the
+//	                                 terminal twin(s) it shadows
+//	2+ live candidates            -> ambiguous_id, naming every candidate
+//	0 live and 2+ terminal ones   -> ambiguous_id, naming every candidate
+//
+// The stderr note is the point: an auditor chasing an ID out of an old commit
+// trailer gets the live item AND the exact path of the archived record, which
+// is strictly more than either the old silent wrong answer or a bare error.
 func ResolveUnique(root, id string) (Match, error) {
 	matches, err := Resolve(root, id)
 	if err != nil {
@@ -116,9 +156,55 @@ func ResolveUnique(root, id string) (Match, error) {
 		return Match{}, errNoSuchItem(id)
 	case 1:
 		return matches[0], nil
-	default:
+	}
+
+	var live []Match
+	for _, m := range matches {
+		if m.Live() {
+			live = append(live, m)
+		}
+	}
+	if len(live) != 1 {
+		// Two live items are a genuine ambiguity; so are two archived ones.
+		// Both cases hand the operator every candidate and refuse to pick.
 		return Match{}, errAmbiguousID(root, id, matches)
 	}
+
+	warnShadowed(root, id, live[0], matches)
+	return live[0], nil
+}
+
+// warnShadowed prints one stderr line per terminal record that shares the
+// resolved ID. Resolve, but never silently.
+func warnShadowed(root, id string, chosen Match, matches []Match) {
+	if shadowNotice == nil {
+		return
+	}
+	for _, m := range matches {
+		if m.Path == chosen.Path {
+			continue
+		}
+		fmt.Fprintf(shadowNotice, "note: %s also names %s item at %s\n",
+			id, articled(m.Status), relPath(root, m.Path))
+	}
+}
+
+// articled renders a status with its indefinite article ("an archived", "a done").
+func articled(status string) string {
+	if strings.ContainsRune("aeiou", rune(status[0])) {
+		return "an " + status
+	}
+	return "a " + status
+}
+
+// relPath renders a store path relative to the store root, falling back to the
+// absolute path. Operators navigate by the store-relative form.
+func relPath(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return path
+	}
+	return rel
 }
 
 // ReadWithStatus loads an item and its lifecycle status from a SINGLE resolve.
@@ -145,11 +231,7 @@ func errAmbiguousID(root, id string, matches []Match) *mgerr.Error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s: ambiguous — %d work items share this ID:", id, len(matches))
 	for _, m := range matches {
-		rel, err := filepath.Rel(root, m.Path)
-		if err != nil {
-			rel = m.Path
-		}
-		fmt.Fprintf(&b, "\n  %s (%s)", rel, m.Status)
+		fmt.Fprintf(&b, "\n  %s (%s)", relPath(root, m.Path), m.Status)
 	}
 	return mgerr.Conflict("ambiguous_id", b.String(),
 		"Short IDs are 4 hex digits and can collide. Inspect the files above directly; mg will not guess between them.")

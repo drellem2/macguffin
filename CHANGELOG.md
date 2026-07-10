@@ -39,6 +39,17 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
   the commit trailers, audit-log lines and roadmap links pointing at them stay
   valid, and the ambiguity is reported at read time rather than papered over.
 
+- **A short ID shared by one live item and an archived record now resolves to
+  the live item, loudly (mg-fb07).** Ambiguity is only ambiguity among
+  candidates of the same *terminality*: a live work item
+  (`available`/`claimed`/`pending`/`shelved`) and a historical record
+  (`done`/`archived`) are not two equally plausible answers to "what is
+  `mg-4fa7`". Exactly one live candidate wins and mg prints a note to **stderr**
+  naming the shadowed record's exact path — strictly more information than
+  either the pre-mg-38b9 silent wrong answer or a bare error. Two live
+  candidates, or two terminal ones, remain an `ambiguous_id` error. The note
+  goes to stderr precisely so it never corrupts the `--json` contract on stdout.
+
 ## [0.2.0] - 2026-07-10
 
 Minor release rolling up the 30 commits merged since v0.1.4 (this release-prep
