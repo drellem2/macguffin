@@ -299,6 +299,12 @@ internal/
   spend/         # Token-spend harvester, store, and aggregation
 ```
 
+## Utilities
+
+Standalone tools built on `mg`. Open a PR to add yours — one bullet per utility.
+
+- [mg-roadmap](https://github.com/drellem2/mg-roadmap) — aggregates `mg` work items into a product-line → initiative → item roadmap, with token budget vs. actual spend per line.
+
 ## License
 
 Licensed under the GNU General Public License v3.0 — see [LICENSE](LICENSE).
