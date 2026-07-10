@@ -42,18 +42,35 @@ const maxReferences = 20
 // unchecked msgID of "../../etc/passwd" reads outside the mailbox entirely.
 // A component must be non-empty, must not be a directory-traversal token, and
 // must contain no separator (either flavour, so a Windows-style "..\\" cannot
-// slip through a unix build's checks) or NUL.
+// slip through a unix build's checks).
+//
+// Control characters are rejected for a second, non-path reason: a component
+// is not only a file name, it is also a FIELD VALUE in the newline-delimited
+// mail audit log. Audit writes "ts=... op=... box=<mailbox> msg=<msgID> ...",
+// so a mailbox name carrying a newline terminates the record it was meant to
+// fill and forges an entire audit line after it — an attacker-chosen ts, op,
+// pid and caller. That is the same injection class checkHeaderValue refuses
+// for header values, one layer down, and it is refused the same way: every C0
+// control (NUL, CR and LF among them) and DEL is invalid in a component.
 func validComponent(s string) bool {
 	if s == "" || s == "." || s == ".." {
 		return false
 	}
-	return !strings.ContainsAny(s, `/\`+"\x00")
+	if strings.ContainsAny(s, `/\`) {
+		return false
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // checkMailbox validates an agent/mailbox name before it is path-joined.
 func checkMailbox(agent string) error {
 	if !validComponent(agent) {
-		return mgerr.Usage("invalid_value", fmt.Sprintf("invalid mailbox name %q: must be a single path component with no separators or %q", agent, ".."), "")
+		return mgerr.Usage("invalid_value", fmt.Sprintf("invalid mailbox name %q: must be a single path component with no separators, control characters or %q", agent, ".."), "")
 	}
 	return nil
 }
@@ -66,7 +83,7 @@ func checkMsgID(agent, msgID string) error {
 		return err
 	}
 	if !validComponent(msgID) {
-		return mgerr.Usage("invalid_value", fmt.Sprintf("invalid message id %q: must be a single path component with no separators or %q", msgID, ".."), "run 'mg mail list "+agent+"' to see valid message ids")
+		return mgerr.Usage("invalid_value", fmt.Sprintf("invalid message id %q: must be a single path component with no separators, control characters or %q", msgID, ".."), "run 'mg mail list "+agent+"' to see valid message ids")
 	}
 	return nil
 }

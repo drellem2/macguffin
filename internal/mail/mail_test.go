@@ -875,6 +875,117 @@ func TestList_RejectsTraversalMailbox(t *testing.T) {
 	}
 }
 
+// controlCharTokens are mailbox / msgID values that are legal unix path
+// components but illegal audit-log field values: the audit record is
+// newline-delimited "key=value" text, so a newline in a component forges a
+// record. CR, NUL and DEL ride along on the same rule.
+var controlCharTokens = []string{
+	"box\nts=2020-01-01T00:00:00Z op=send box=mayor msg=forged pid=1 caller=root",
+	"box\r\nop=forged",
+	"box\rmayor",
+	"box\x00mayor",
+	"box\x7fmayor",
+	"box\tmayor",
+	"\nleading",
+	"trailing\n",
+}
+
+// TestSend_RejectsControlCharsInMailbox is the regression for the audit-log
+// forgery: Audit interpolates the mailbox name into "... box=<mailbox> ...",
+// one line per record, so a newline-bearing recipient used to append a second,
+// fully attacker-controlled record — arbitrary ts, op, msg, pid and caller.
+// The name must be refused as a usage error BEFORE anything is written, so the
+// audit log is never created at all.
+func TestSend_RejectsControlCharsInMailbox(t *testing.T) {
+	for _, tok := range controlCharTokens {
+		t.Run(fmt.Sprintf("%q", tok), func(t *testing.T) {
+			workRoot, root := eventTestRoots(t)
+
+			if _, err := Send(root, tok, "attacker", "s", "b"); err == nil {
+				t.Fatalf("Send(recipient=%q) succeeded, want rejection", tok)
+			} else {
+				assertUsageError(t, err, tok)
+			}
+
+			// The forged record must never reach disk: no audit write means no
+			// audit file, since Audit creates it lazily on first append.
+			if data, err := os.ReadFile(AuditLogPath(root)); err == nil {
+				t.Errorf("rejected send wrote the audit log: %q", data)
+			} else if !os.IsNotExist(err) {
+				t.Errorf("stat audit log: %v", err)
+			}
+
+			// Nor may the rejection have created the mailbox it named.
+			if entries, err := os.ReadDir(root); err == nil && len(entries) > 0 {
+				t.Errorf("rejected send created %d entries under the mail root", len(entries))
+			}
+			if _, err := os.Stat(filepath.Join(workRoot, "log")); !os.IsNotExist(err) {
+				t.Errorf("rejected send created the log directory")
+			}
+		})
+	}
+}
+
+// TestControlCharsRejectedOnEveryComponentPath: the mailbox name reaches Audit
+// from the read and archive paths too, and a msgID is interpolated into the
+// same record as msg=<msgID>. Every entry point that path-joins a component
+// must apply the same rule.
+func TestControlCharsRejectedOnEveryComponentPath(t *testing.T) {
+	for _, tok := range controlCharTokens {
+		t.Run(fmt.Sprintf("%q", tok), func(t *testing.T) {
+			root := t.TempDir()
+			if err := EnsureMaildir(root, "arch"); err != nil {
+				t.Fatal(err)
+			}
+
+			// As a mailbox name.
+			if err := EnsureMaildir(root, tok); err == nil {
+				t.Errorf("EnsureMaildir(agent=%q) succeeded, want rejection", tok)
+			} else {
+				assertUsageError(t, err, tok)
+			}
+			if _, err := Read(root, tok, "someid"); err == nil {
+				t.Errorf("Read(agent=%q) succeeded, want rejection", tok)
+			}
+			if _, _, err := List(root, tok); err == nil {
+				t.Errorf("List(agent=%q) succeeded, want rejection", tok)
+			}
+			if MailboxExists(root, tok) {
+				t.Errorf("MailboxExists(%q) reported true", tok)
+			}
+
+			// As a msgID.
+			if _, err := Read(root, "arch", tok); err == nil {
+				t.Errorf("Read(msgID=%q) succeeded, want rejection", tok)
+			} else {
+				assertUsageError(t, err, tok)
+			}
+			if _, err := Archive(root, "arch", tok); err == nil {
+				t.Errorf("Archive(msgID=%q) succeeded, want rejection", tok)
+			} else {
+				assertUsageError(t, err, tok)
+			}
+			if _, err := Peek(root, "arch", tok); err == nil {
+				t.Errorf("Peek(msgID=%q) succeeded, want rejection", tok)
+			} else {
+				assertUsageError(t, err, tok)
+			}
+		})
+	}
+}
+
+// TestSend_AcceptsOrdinaryMailboxNames guards the tightened rule from
+// overreach: agent names are ASCII-ish identifiers, and the ones macguffin
+// actually mints (mayor, human, mg-21a6, pm-pogo) must keep working.
+func TestSend_AcceptsOrdinaryMailboxNames(t *testing.T) {
+	for _, name := range []string{"mayor", "human", "mg-21a6", "pm-pogo", "a.b_c", "café"} {
+		root := t.TempDir()
+		if _, err := Send(root, name, "mayor", "s", "b"); err != nil {
+			t.Errorf("Send(recipient=%q) rejected an ordinary mailbox name: %v", name, err)
+		}
+	}
+}
+
 // assertUsageError checks the rejection is a typed usage (exit 2) error rather
 // than a bare fs error, so the CLI renders it as caller misuse.
 func assertUsageError(t *testing.T, err error, tok string) {
