@@ -38,6 +38,11 @@ func Schedule(root string) ([]*Item, error) {
 			if err := os.Rename(path, dst); err != nil {
 				return nil, fmt.Errorf("promoting %s: %w", item.ID, err)
 			}
+			// Pending items normally have no sidecar, but keep the invariant
+			// total: a .result.json must never be left behind a moved .md.
+			if err := moveResultSidecar(filepath.Dir(path), filepath.Dir(dst), item.ID); err != nil {
+				return nil, fmt.Errorf("promoting sidecar for %s: %w", item.ID, err)
+			}
 			promoted = append(promoted, item)
 		}
 	}

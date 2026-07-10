@@ -30,6 +30,11 @@ func Reopen(root, id string) (*Item, error) {
 		return nil, ioErr(fmt.Sprintf("%s: could not be reopened: %s", id, fsErrText(err)))
 	}
 
+	// The result sidecar must follow the .md, or it is orphaned in done/.
+	if err := moveResultSidecar(filepath.Dir(src), filepath.Dir(dst), id); err != nil {
+		return nil, ioErr(fmt.Sprintf("%s: reopened, but result sidecar could not follow: %s", id, fsErrText(err)))
+	}
+
 	item, err := readFile(dst)
 	if err != nil {
 		return nil, err

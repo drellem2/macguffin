@@ -32,6 +32,11 @@ func Shelve(root, id string) ([]*Item, error) {
 		return nil, ioErr(fmt.Sprintf("%s: could not be shelved: %s", id, fsErrText(err)))
 	}
 
+	// The result sidecar must follow the .md into shelved/.
+	if err := moveResultSidecar(filepath.Dir(path), filepath.Dir(dst), id); err != nil {
+		return nil, ioErr(fmt.Sprintf("%s: shelved, but result sidecar could not follow: %s", id, fsErrText(err)))
+	}
+
 	item, err := readFile(dst)
 	if err != nil {
 		return nil, err
@@ -139,6 +144,11 @@ func Unshelve(root, id string) ([]*Item, error) {
 	dst := filepath.Join(root, "work", subdir, id+".md")
 	if err := os.Rename(src, dst); err != nil {
 		return nil, ioErr(fmt.Sprintf("%s: could not be unshelved: %s", id, fsErrText(err)))
+	}
+
+	// The result sidecar must follow the .md out of shelved/.
+	if err := moveResultSidecar(filepath.Dir(src), filepath.Dir(dst), id); err != nil {
+		return nil, ioErr(fmt.Sprintf("%s: unshelved, but result sidecar could not follow: %s", id, fsErrText(err)))
 	}
 
 	event.Emit(root, "work.unshelve", map[string]string{

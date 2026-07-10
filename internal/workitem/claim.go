@@ -38,6 +38,12 @@ func Claim(root, id string, pid int) (*Item, error) {
 		return nil, ioErr(fmt.Sprintf("%s: could not be claimed: %s", id, fsErrText(err)))
 	}
 
+	// A sidecar may sit in available/ (e.g. after an unarchive); it must follow
+	// the .md into claimed/ rather than be orphaned behind it.
+	if err := moveResultSidecar(filepath.Dir(src), filepath.Dir(dst), id); err != nil {
+		return nil, ioErr(fmt.Sprintf("%s: claimed, but result sidecar could not follow: %s", id, fsErrText(err)))
+	}
+
 	item, err := readFile(dst)
 	if err != nil {
 		return nil, err

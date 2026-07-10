@@ -25,14 +25,10 @@ func Unarchive(root, id string) (*Item, error) {
 		return nil, ioErr(fmt.Sprintf("%s: could not be unarchived: %s", id, fsErrText(err)))
 	}
 
-	// Move result sidecar if it exists. src points at archive/<partition>/<id>.md
-	archiveDir := filepath.Dir(src)
-	sidecarSrc := filepath.Join(archiveDir, id+".result.json")
-	if _, err := os.Stat(sidecarSrc); err == nil {
-		sidecarDst := filepath.Join(root, "work", "available", id+".result.json")
-		if err := os.Rename(sidecarSrc, sidecarDst); err != nil {
-			return nil, ioErr(fmt.Sprintf("%s: could not be unarchived (result file): %s", id, fsErrText(err)))
-		}
+	// Move result sidecar if it exists, so it travels with the .md. src points
+	// at archive/<partition>/<id>.md; dst is available/<id>.md.
+	if err := moveResultSidecar(filepath.Dir(src), filepath.Dir(dst), id); err != nil {
+		return nil, ioErr(fmt.Sprintf("%s: could not be unarchived (result file): %s", id, fsErrText(err)))
 	}
 
 	item, err := readFile(dst)

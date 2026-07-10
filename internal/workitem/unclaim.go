@@ -38,6 +38,11 @@ func Unclaim(root, id string) (*UnclaimResult, error) {
 		return nil, ioErr(fmt.Sprintf("%s: could not release claim: %s", id, fsErrText(err)))
 	}
 
+	// The result sidecar must follow the .md, or it is orphaned in claimed/.
+	if err := moveResultSidecar(filepath.Dir(src), filepath.Dir(dst), id); err != nil {
+		return nil, ioErr(fmt.Sprintf("%s: claim released, but result sidecar could not follow: %s", id, fsErrText(err)))
+	}
+
 	kvs := map[string]string{
 		"item_id":     id,
 		"from_status": "claimed",

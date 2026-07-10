@@ -127,6 +127,9 @@ func Update(root, id string, fields UpdateField) (*Item, error) {
 				if err := os.Rename(itemPath, dst); err != nil {
 					return nil, ioErr(fmt.Sprintf("%s: saved, but could not be moved to pending: %s", id, fsErrText(err)))
 				}
+				if err := moveResultSidecar(filepath.Dir(itemPath), filepath.Dir(dst), id); err != nil {
+					return nil, ioErr(fmt.Sprintf("%s: moved to pending, but result sidecar could not follow: %s", id, fsErrText(err)))
+				}
 			}
 		} else if status == "pending" {
 			// Check if all deps are now met → move to available/
@@ -138,6 +141,9 @@ func Update(root, id string, fields UpdateField) (*Item, error) {
 				dst := filepath.Join(root, "work", "available", filepath.Base(itemPath))
 				if err := os.Rename(itemPath, dst); err != nil {
 					return nil, ioErr(fmt.Sprintf("%s: saved, but could not be promoted to available: %s", id, fsErrText(err)))
+				}
+				if err := moveResultSidecar(filepath.Dir(itemPath), filepath.Dir(dst), id); err != nil {
+					return nil, ioErr(fmt.Sprintf("%s: promoted to available, but result sidecar could not follow: %s", id, fsErrText(err)))
 				}
 			}
 		}

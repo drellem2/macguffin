@@ -44,6 +44,20 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Fixed
 
+- **Status transitions orphaned the `.result.json` sidecar (mg-ab67).** The result
+  sidecar written by `mg done` is a companion to a work item's `.md` and must
+  travel with it across every status change. But only `archive`/`unarchive` moved
+  it; `claim`, `unclaim`, `reopen`, `shelve`, `unshelve`, and the dependency-driven
+  `edit`/`schedule` promotions renamed the `.md` alone, stranding the sidecar in the
+  old status directory. A sidecar left in `available/` next to no `.md` asserts a
+  completion for an item that has since moved on — a lie in the audit trail (e.g.
+  a `reopen` orphaned it in `done/`; an `unarchive`-then-`claim` chain stranded it
+  in `available/`). All transitions now route through a single `moveResultSidecar`
+  helper that moves `<id>.result.json` alongside the `.md` (a no-op when the item
+  never had a result), so the class cannot recur; `archive`/`unarchive` were
+  refactored onto the same helper. Nothing else on disk moves and `events.jsonl`
+  is untouched.
+
 - **Silent data loss on short-ID collision (mg-38b9).** `mg new` wrote work items
   with `os.WriteFile`, which *truncates*. A new item whose 4-hex-digit ID collided
   with a live item in `available/` or `pending/` destroyed that item, silently and

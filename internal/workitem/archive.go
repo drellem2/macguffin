@@ -59,14 +59,10 @@ func Archive(root string, maxAge time.Duration) ([]*Item, error) {
 			return nil, fmt.Errorf("archiving %s: %w", item.ID, err)
 		}
 
-		// Move result sidecar if it exists
+		// Move result sidecar if it exists, so it travels with the .md.
 		id := strings.TrimSuffix(e.Name(), ".md")
-		sidecarSrc := filepath.Join(doneDir, id+".result.json")
-		if _, err := os.Stat(sidecarSrc); err == nil {
-			sidecarDst := filepath.Join(archiveDir, id+".result.json")
-			if err := os.Rename(sidecarSrc, sidecarDst); err != nil {
-				return nil, fmt.Errorf("archiving sidecar for %s: %w", id, err)
-			}
+		if err := moveResultSidecar(doneDir, archiveDir, id); err != nil {
+			return nil, fmt.Errorf("archiving sidecar for %s: %w", id, err)
 		}
 
 		event.Emit(root, "work.archive", map[string]string{
