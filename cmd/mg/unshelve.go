@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/drellem2/macguffin/internal/workitem"
-	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -16,7 +15,7 @@ dependents that are also shelved. Items with unmet dependencies are
 placed in pending/; others go to available/.`,
 	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root, err := workspace.DefaultRoot()
+		root, err := resolveRoot()
 		if err != nil {
 			return err
 		}

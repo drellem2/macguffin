@@ -9,12 +9,11 @@ import (
 
 	"github.com/drellem2/macguffin/internal/mail"
 	"github.com/drellem2/macguffin/internal/mgerr"
-	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
 func mailRoot() (string, error) {
-	root, err := workspace.DefaultRoot()
+	root, err := resolveRoot()
 	if err != nil {
 		return "", err
 	}

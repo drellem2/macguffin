@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/workitem"
-	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -44,7 +43,7 @@ cannot be assigned ahead of time; the assignee is the durable owner who
 decides whether to dispatch the work, hold it, or close it.`,
 	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root, err := workspace.DefaultRoot()
+		root, err := resolveRoot()
 		if err != nil {
 			return err
 		}

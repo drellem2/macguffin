@@ -9,7 +9,7 @@ var snapshotCmd = &cobra.Command{
 	Use:   "snapshot",
 	Short: "Create a git snapshot of current state",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root, err := workspace.DefaultRoot()
+		root, err := resolveRoot()
 		if err != nil {
 			return err
 		}

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/drellem2/macguffin/internal/flow"
-	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -55,7 +54,7 @@ Examples:
   mg flow --age-distribution
   mg flow --repo=/path/to/repo --group-by tag:ux --age-distribution`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root, err := workspace.DefaultRoot()
+		root, err := resolveRoot()
 		if err != nil {
 			return err
 		}

@@ -66,7 +66,7 @@ optional internal hyphens, and must end in a hyphen.`,
 
 		deps := normSlice(newDepends)
 
-		root, err := workspace.DefaultRoot()
+		root, err := resolveRoot()
 		if err != nil {
 			return err
 		}

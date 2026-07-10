@@ -23,7 +23,7 @@ instead of being forwarded.`,
 			return cmd.Help()
 		}
 
-		root, err := workspace.DefaultRoot()
+		root, err := resolveRoot()
 		if err != nil {
 			return err
 		}

@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/drellem2/macguffin/internal/workitem"
-	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -16,7 +15,7 @@ available/. The item must currently be in the archive. Any result.json
 sidecar from the prior done state is moved alongside the work item.`,
 	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root, err := workspace.DefaultRoot()
+		root, err := resolveRoot()
 		if err != nil {
 			return err
 		}

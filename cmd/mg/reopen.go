@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/drellem2/macguffin/internal/workitem"
-	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -13,7 +12,7 @@ var reopenCmd = &cobra.Command{
 	Short: "Move a done work item back to claimed",
 	Args:  usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root, err := workspace.DefaultRoot()
+		root, err := resolveRoot()
 		if err != nil {
 			return err
 		}

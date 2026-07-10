@@ -14,6 +14,19 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ## [Unreleased]
 
+### Added
+
+- **Workspace isolation: `--root` flag and `MG_ROOT` env var (mg-4fa7).** The
+  store is now resolved as `--root` > `$MG_ROOT` > `$HOME/.macguffin`. Previously
+  the root was unconditionally `$HOME/.macguffin`, and the only way to point `mg`
+  at a scratch store was to override `$HOME` — which relocates every other tool's
+  config too. Because `mg` never walks up from `$PWD`, `cd` gave *zero* isolation:
+  a smoke script that ran `mg init/new/claim/done` inside a scratch directory hit
+  the **real** store, and `mg list --json | head -1` handed it a live work item,
+  which it then marked done. `mg event` and `mg log` pass their arguments through
+  verbatim and so bind only `$MG_ROOT`, not `--root`. See "Workspace root" in the
+  README.
+
 ### Fixed
 
 - **Silent data loss on short-ID collision (mg-38b9).** `mg new` wrote work items

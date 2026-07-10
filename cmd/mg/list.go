@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/drellem2/macguffin/internal/workitem"
-	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -141,7 +140,7 @@ Examples:
   mg list --tag=urgent          # filter by tag
   mg list --assignee=human      # only items assigned to current user`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root, err := workspace.DefaultRoot()
+		root, err := resolveRoot()
 		if err != nil {
 			return err
 		}

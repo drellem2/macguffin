@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/drellem2/macguffin/internal/workitem"
-	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -27,7 +26,7 @@ var doneCmd = &cobra.Command{
 			resultJSON = raw
 		}
 
-		root, err := workspace.DefaultRoot()
+		root, err := resolveRoot()
 		if err != nil {
 			return err
 		}

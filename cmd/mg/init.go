@@ -12,10 +12,14 @@ var (
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Initialize ~/.macguffin directory tree",
-	Long:  "Initialize ~/.macguffin directory tree. Use --git to enable git snapshots. Use --prefix to set a custom work item ID prefix.",
+	Short: "Initialize the macguffin directory tree",
+	Long: `Initialize the macguffin directory tree.
+
+The workspace is resolved as --root > $MG_ROOT > $HOME/.macguffin; the working
+directory is never consulted. Use --git to enable git snapshots. Use --prefix to
+set a custom work item ID prefix.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root, err := workspace.DefaultRoot()
+		root, err := resolveRoot()
 		if err != nil {
 			return err
 		}

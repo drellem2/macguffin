@@ -176,6 +176,39 @@ machine-parseable, and diffable. Claiming is a single `rename(2)` syscall:
 if two processes race, exactly one wins. The loser gets `ENOENT`. No locks,
 no retries, no database.
 
+### Workspace root
+
+Every `mg` command reads and writes exactly one store. It is resolved in this
+order, highest precedence first:
+
+| Precedence | Source | Example |
+|---|---|---|
+| 1 | `--root` flag | `mg --root=/tmp/scratch new "item"` |
+| 2 | `MG_ROOT` environment variable | `MG_ROOT=/tmp/scratch mg new "item"` |
+| 3 | default | `$HOME/.macguffin` |
+
+`MG_ROOT` is the only environment variable `mg` consults for this. An empty or
+unset `MG_ROOT` falls through to the default. Relative paths are resolved to
+absolute once, when the command starts.
+
+**`cd` does not isolate `mg`.** The working directory is never consulted; `mg`
+does not walk up from `$PWD` looking for a workspace the way `git` finds `.git`.
+Anything that must run `mg`'s mutating verbs against a throwaway store — a test,
+a smoke script, an agent — has to say so explicitly:
+
+```sh
+export MG_ROOT=$(mktemp -d)
+mg init
+mg new "safe to clobber"   # never touches ~/.macguffin
+```
+
+Without this, `mg claim` and `mg done` operate on the shared store, and an `mg
+list --json | head -1` picks a live work item belonging to someone else.
+
+Two commands pass their arguments through verbatim (`mg event append`, `mg log`)
+and so do not bind `--root`; use `MG_ROOT` to redirect those. `mg event append`
+rejects `--root` outright rather than record it as event data.
+
 ## Concepts
 
 ### Assignee

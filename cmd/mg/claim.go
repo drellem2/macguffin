@@ -6,7 +6,6 @@ import (
 	"strconv"
 
 	"github.com/drellem2/macguffin/internal/workitem"
-	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -17,7 +16,7 @@ var claimCmd = &cobra.Command{
 	Short: "Atomically claim a work item by ID",
 	Args:  usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root, err := workspace.DefaultRoot()
+		root, err := resolveRoot()
 		if err != nil {
 			return err
 		}

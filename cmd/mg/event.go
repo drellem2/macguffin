@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/event"
-	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -37,7 +36,16 @@ Example:
 			return cmd.Help()
 		}
 
-		root, err := workspace.DefaultRoot()
+		// DisableFlagParsing also means cobra never binds the persistent --root
+		// flag here: `--root=/tmp/x` would be parsed below as an ordinary
+		// --key=value pair and appended, as a junk "root" field, to the DEFAULT
+		// store. Refuse rather than write to a store the caller believes it
+		// redirected away from (mg-4fa7).
+		if err := rejectRootFlag(args, cmd.UseLine()); err != nil {
+			return err
+		}
+
+		root, err := resolveRoot()
 		if err != nil {
 			return err
 		}
@@ -84,7 +92,7 @@ Examples:
   mg event list --tail=10
   mg event list --since=2026-01-01T00:00:00Z`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root, err := workspace.DefaultRoot()
+		root, err := resolveRoot()
 		if err != nil {
 			return err
 		}

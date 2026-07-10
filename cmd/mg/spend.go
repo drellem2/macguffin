@@ -11,7 +11,6 @@ import (
 
 	"github.com/drellem2/macguffin/internal/mgerr"
 	"github.com/drellem2/macguffin/internal/spend"
-	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -53,7 +52,7 @@ Examples:
   mg spend --json                     # machine-readable output
   mg spend --rebuild                  # rescan all transcripts`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root, err := workspace.DefaultRoot()
+		root, err := resolveRoot()
 		if err != nil {
 			return err
 		}

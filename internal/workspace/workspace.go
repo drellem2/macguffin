@@ -8,7 +8,44 @@ import (
 	"strings"
 )
 
-// DefaultRoot returns the default macguffin root directory (~/.macguffin).
+// EnvRoot names the environment variable that relocates the macguffin
+// workspace. It is the ONLY env var mg reads for this purpose; MACGUFFIN_ROOT
+// is deliberately not honoured, so there is exactly one documented lever.
+const EnvRoot = "MG_ROOT"
+
+// Root resolves the macguffin workspace root, in strict precedence order:
+//
+//	override (the --root flag)  >  $MG_ROOT  >  $HOME/.macguffin
+//
+// An empty override or an empty/unset $MG_ROOT falls through to the next level.
+// The result is always absolute, so a later chdir cannot move the store out
+// from under a running command.
+//
+// mg does NOT resolve its workspace by walking up from the working directory:
+// `cd` gives no isolation at all. Anything that needs to run mg against a
+// scratch store — tests, smoke scripts, agents — must set $MG_ROOT or pass
+// --root. Nothing else works.
+func Root(override string) (string, error) {
+	if override != "" {
+		return absRoot(override)
+	}
+	if env := os.Getenv(EnvRoot); env != "" {
+		return absRoot(env)
+	}
+	return DefaultRoot()
+}
+
+func absRoot(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolving workspace root %q: %w", path, err)
+	}
+	return abs, nil
+}
+
+// DefaultRoot returns the default macguffin root directory (~/.macguffin),
+// ignoring any override. Callers that must honour --root and $MG_ROOT — which
+// is every command — want Root() instead.
 func DefaultRoot() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -18,12 +55,12 @@ func DefaultRoot() (string, error) {
 }
 
 // Init creates the canonical macguffin directory tree.
-// If root is empty, DefaultRoot() is used.
+// If root is empty, Root("") is used.
 // Init is idempotent — safe to call on an existing tree.
 func Init(root string) error {
 	if root == "" {
 		var err error
-		root, err = DefaultRoot()
+		root, err = Root("")
 		if err != nil {
 			return err
 		}

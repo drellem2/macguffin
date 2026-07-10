@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/drellem2/macguffin/internal/workitem"
-	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -15,7 +14,7 @@ var archiveCmd = &cobra.Command{
 	Use:   "archive",
 	Short: "Archive done items older than N days",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		root, err := workspace.DefaultRoot()
+		root, err := resolveRoot()
 		if err != nil {
 			return err
 		}
