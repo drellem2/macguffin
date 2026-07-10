@@ -16,6 +16,21 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Added
 
+- **`@partition` disambiguator for archived twins (mg-0d0c).** When two archived
+  records share a short ID across different month partitions, both are terminal,
+  so the live-vs-archived tiebreak (mg-fb07) cannot fire and the bare ID is
+  ambiguous with no way to ask for the one you want. A partition qualifier is the
+  escape hatch: `mg show mg-4fa7@2026-04` resolves the twin stored in partition
+  `2026-04`, and `@2026-07` the other. It is a predicate on the match set the
+  resolver already computes — the input is split on `@` and, when a partition is
+  named, matches are filtered to it before the uniqueness check — so nothing on
+  disk moves and `events.jsonl` is untouched. A qualifier naming a partition with
+  no twin errors (`no_such_partition`, exit 3) rather than silently returning the
+  wrong record, and the bare-ID ambiguity error now names the `@partition` form
+  so the escape hatch is discoverable at the moment it is needed. Bare
+  `mg show mg-4fa7` still errors on ambiguity — the qualifier is how you
+  disambiguate.
+
 - **Workspace isolation: `--root` flag and `MG_ROOT` env var (mg-4fa7).** The
   store is now resolved as `--root` > `$MG_ROOT` > `$HOME/.macguffin`. Previously
   the root was unconditionally `$HOME/.macguffin`, and the only way to point `mg`

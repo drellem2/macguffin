@@ -104,7 +104,7 @@ mg log                 # view snapshot history
 |---------|-------------|
 | `mg init [--git]` | Create the `~/.macguffin` directory tree. `--git` enables snapshot tracking. |
 | `mg new` | Create a new work item (Markdown + YAML frontmatter). |
-| `mg show <id> [--json]` | Display a work item by ID. `--json` emits the full item as one JSON object (adds `creator`, `body`, `budget`, `spent` to the `list --json` field set). |
+| `mg show <id> [--json]` | Display a work item by ID. `--json` emits the full item as one JSON object (adds `creator`, `body`, `budget`, `spent` to the `list --json` field set). When two archived twins share a short ID across partitions, disambiguate with `mg show <id>@<partition>` (e.g. `mg show mg-4fa7@2026-04`). |
 | `mg list [--json]` | List work items. `--json` emits NDJSON (one JSON object per line) for scripts and dashboards. |
 | `mg claim ID` | Atomically claim a work item by ID. |
 | `mg done ID` | Mark a claimed work item as done. |

@@ -30,7 +30,13 @@ type showJSONItem struct {
 var showCmd = &cobra.Command{
 	Use:   "show ID",
 	Short: "Show a work item by ID",
-	Args:  usageArgs(cobra.ExactArgs(1)),
+	Long: `Show a work item by ID.
+
+When two archived twins share a short ID across different month partitions the
+bare ID is ambiguous. Disambiguate with an @partition qualifier:
+
+  mg show mg-4fa7@2026-04   # the twin archived in partition 2026-04`,
+	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := resolveRoot()
 		if err != nil {

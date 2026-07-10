@@ -173,14 +173,50 @@ func Resolve(root, id string) ([]Match, error) {
 // The stderr note is the point: an auditor chasing an ID out of an old commit
 // trailer gets the live item AND the exact path of the archived record, which
 // is strictly more than either the old silent wrong answer or a bare error.
+//
+// # Partition qualifier
+//
+// When two archived twins of one ID live in different month partitions, both
+// are terminal, so liveness cannot break the tie — the bare ID is unresolvable
+// on purpose. The escape hatch is a partition qualifier: "mg-4fa7@2026-04"
+// resolves the id "mg-4fa7" but keeps only the match stored in partition
+// "2026-04" before the uniqueness check runs. It is a PREDICATE on the match
+// set Resolve already returns, not a second walk: split the input on '@', and
+// when a partition is named, filter matches to it, then apply the ordinary
+// count-based rules above to what survives. A qualifier that names a partition
+// holding no twin is not_found (errNoSuchPartition) — never a silent wrong
+// answer — and an empty qualifier ("mg-4fa7@") is a usage error. Only archived
+// records carry a partition, so a live item is never selectable by qualifier.
 func ResolveUnique(root, id string) (Match, error) {
-	matches, err := Resolve(root, id)
+	bareID, partition, qualified := strings.Cut(id, "@")
+	if qualified && partition == "" {
+		return Match{}, errEmptyPartition(id)
+	}
+
+	matches, err := Resolve(root, bareID)
 	if err != nil {
 		return Match{}, err
 	}
+
+	if qualified {
+		var filtered []Match
+		for _, m := range matches {
+			if m.Partition == partition {
+				filtered = append(filtered, m)
+			}
+		}
+		if len(filtered) == 0 {
+			if len(matches) == 0 {
+				return Match{}, errNoSuchItem(bareID)
+			}
+			return Match{}, errNoSuchPartition(bareID, partition, matches)
+		}
+		matches = filtered
+	}
+
 	switch len(matches) {
 	case 0:
-		return Match{}, errNoSuchItem(id)
+		return Match{}, errNoSuchItem(bareID)
 	case 1:
 		return matches[0], nil
 	}
@@ -194,10 +230,10 @@ func ResolveUnique(root, id string) (Match, error) {
 	if len(live) != 1 {
 		// Two live items are a genuine ambiguity; so are two archived ones.
 		// Both cases hand the operator every candidate and refuse to pick.
-		return Match{}, errAmbiguousID(root, id, matches)
+		return Match{}, errAmbiguousID(root, bareID, matches)
 	}
 
-	warnShadowed(root, id, live[0], matches)
+	warnShadowed(root, bareID, live[0], matches)
 	return live[0], nil
 }
 
@@ -257,9 +293,55 @@ func ReadWithStatus(root, id string) (*Item, string, error) {
 func errAmbiguousID(root, id string, matches []Match) *mgerr.Error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s: ambiguous — %d work items share this ID:", id, len(matches))
+	var firstPart string
 	for _, m := range matches {
 		fmt.Fprintf(&b, "\n  %s (%s)", relPath(root, m.Path), m.Status)
+		if firstPart == "" && m.Partition != "" {
+			firstPart = m.Partition
+		}
 	}
-	return mgerr.Conflict("ambiguous_id", b.String(),
-		"Short IDs are 4 hex digits and can collide. Inspect the files above directly; mg will not guess between them.")
+	hint := "Short IDs are 4 hex digits and can collide. Inspect the files above directly; mg will not guess between them."
+	// When the collision is between archived twins in different partitions,
+	// name the escape hatch at the moment it is needed: a partition qualifier
+	// picks one twin. (mg-0d0c: @partition is discoverable from the error.)
+	if firstPart != "" {
+		hint = fmt.Sprintf("%s Disambiguate an archived twin by its partition, e.g. %s@%s.", hint, id, firstPart)
+	}
+	return mgerr.Conflict("ambiguous_id", b.String(), hint)
+}
+
+// errEmptyPartition rejects a qualifier with nothing after the '@'
+// ("mg-4fa7@"). It is a usage error (exit 2): the caller asked to filter by a
+// partition but named none. Reported rather than silently treated as the bare
+// id so a shell-truncated qualifier does not resolve to a surprising item.
+func errEmptyPartition(id string) *mgerr.Error {
+	return mgerr.Usage("empty_partition",
+		fmt.Sprintf("%s: empty partition after '@'.", id),
+		"Name a partition, e.g. mg-4fa7@2026-04, or drop the '@' to resolve the bare id.")
+}
+
+// errNoSuchPartition reports that a partition-qualified lookup named a partition
+// that holds no twin of the id — even though the id exists elsewhere. It is
+// not_found (exit 3): the qualified entity does not exist. It lists the
+// partitions where the id IS archived so the operator can fix the qualifier,
+// and it is deliberately distinct from errNoSuchItem so "<id>@2099-99" (a real
+// id, wrong partition) is never confused with a wholly unknown id — and, above
+// all, never silently returns the wrong twin.
+func errNoSuchPartition(id, partition string, matches []Match) *mgerr.Error {
+	var parts []string
+	seen := map[string]bool{}
+	for _, m := range matches {
+		if m.Partition != "" && !seen[m.Partition] {
+			seen[m.Partition] = true
+			parts = append(parts, m.Partition)
+		}
+	}
+	msg := fmt.Sprintf("%s@%s: no work item %s in archive partition %s.", id, partition, id, partition)
+	var hint string
+	if len(parts) > 0 {
+		hint = fmt.Sprintf("%s is archived in: %s. Qualify with one of those partitions.", id, strings.Join(parts, ", "))
+	} else {
+		hint = fmt.Sprintf("%s has no archived twin to qualify; drop the @%s.", id, partition)
+	}
+	return mgerr.NotFound("no_such_partition", msg, hint)
 }

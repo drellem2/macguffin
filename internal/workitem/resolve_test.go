@@ -674,6 +674,164 @@ func TestResolve_UnknownIDIsNotFound(t *testing.T) {
 	}
 }
 
+// TestResolveUnique_PartitionQualifier is the mg-0d0c acceptance test in library
+// form and its own positive control. Two archived twins of one id live in
+// different partitions; both are terminal, so liveness cannot break the tie and
+// the bare id is unresolvable (that is correct). The @partition qualifier is the
+// escape hatch: it must select the twin in the named partition — and prove it
+// can FAIL, so a wrong partition errors rather than silently returning a twin.
+func TestResolveUnique_PartitionQualifier(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+	id := "mg-4fa7"
+	writeAt(t, root, filepath.Join("archive", "2026-04"), id+".md")
+	writeAt(t, root, filepath.Join("archive", "2026-07"), id+".md")
+
+	// Bare id: ambiguous. The qualifier is the ONLY way to disambiguate.
+	if _, err := ResolveUnique(root, id); err == nil {
+		t.Fatal("bare id with two archived twins must stay ambiguous")
+	} else if code := mgerrOf(t, err).Code; code != "ambiguous_id" {
+		t.Fatalf("bare id: code = %q, want ambiguous_id", code)
+	}
+
+	// Each qualifier resolves to its OWN twin — not the same one twice.
+	for _, part := range []string{"2026-04", "2026-07"} {
+		m, err := ResolveUnique(root, id+"@"+part)
+		if err != nil {
+			t.Fatalf("%s@%s: %v", id, part, err)
+		}
+		if m.Status != "archived" || m.Partition != part {
+			t.Errorf("%s@%s resolved to (%q, partition=%q), want (archived, %q)", id, part, m.Status, m.Partition, part)
+		}
+		if want := filepath.Join(root, "work", "archive", part, id+".md"); m.Path != want {
+			t.Errorf("%s@%s path = %q, want %q", id, part, m.Path, want)
+		}
+	}
+
+	// The two qualifiers must reach DISTINCT files, or the disambiguator is a
+	// no-op that returns whatever the resolver found first.
+	a, _ := ResolveUnique(root, id+"@2026-04")
+	b, _ := ResolveUnique(root, id+"@2026-07")
+	if a.Path == b.Path {
+		t.Fatalf("both qualifiers resolved to the same file %q — @partition did not disambiguate", a.Path)
+	}
+
+	// The control CAN fail: a partition with no twin must error (not_found),
+	// naming the partitions where the id actually lives — never a wrong twin.
+	_, err := ResolveUnique(root, id+"@2099-99")
+	if err == nil {
+		t.Fatal("a partition with no such twin must error, not silently return a twin")
+	}
+	me := mgerrOf(t, err)
+	if me.Code != "no_such_partition" {
+		t.Errorf("wrong-partition code = %q, want no_such_partition", me.Code)
+	}
+	if me.Category != mgerr.CatNotFound {
+		t.Errorf("wrong-partition category = %v, want not_found", me.Category)
+	}
+	for _, part := range []string{"2026-04", "2026-07"} {
+		if !strings.Contains(me.Hint, part) {
+			t.Errorf("no_such_partition hint should list available partition %q: %q", part, me.Hint)
+		}
+	}
+}
+
+// TestResolveUnique_PartitionQualifierRegressions covers the qualifier on the
+// ordinary (non-duplicated) store: it must not break the common case, and a
+// bare id with no duplicate must still resolve.
+func TestResolveUnique_PartitionQualifierRegressions(t *testing.T) {
+	t.Run("qualifier on a non-duplicated archived id", func(t *testing.T) {
+		root := t.TempDir()
+		setupDirs(t, root)
+		id := "mg-65af"
+		writeAt(t, root, filepath.Join("archive", "2026-05"), id+".md")
+
+		m, err := ResolveUnique(root, id+"@2026-05")
+		if err != nil {
+			t.Fatalf("@partition on a lone archived twin: %v", err)
+		}
+		if m.Partition != "2026-05" {
+			t.Errorf("partition = %q, want 2026-05", m.Partition)
+		}
+		// Bare id (no duplicate) still resolves, unqualified.
+		if _, err := ResolveUnique(root, id); err != nil {
+			t.Errorf("bare non-duplicated id: %v", err)
+		}
+	})
+
+	t.Run("qualifier naming the wrong partition of a lone id", func(t *testing.T) {
+		root := t.TempDir()
+		setupDirs(t, root)
+		id := "mg-65af"
+		writeAt(t, root, filepath.Join("archive", "2026-05"), id+".md")
+
+		if _, err := ResolveUnique(root, id+"@2026-06"); err == nil {
+			t.Fatal("wrong partition must error even when the id is not duplicated")
+		} else if code := mgerrOf(t, err).Code; code != "no_such_partition" {
+			t.Errorf("code = %q, want no_such_partition", code)
+		}
+	})
+
+	t.Run("qualifier on a wholly unknown id is not_found", func(t *testing.T) {
+		root := t.TempDir()
+		setupDirs(t, root)
+		if _, err := ResolveUnique(root, "mg-dead@2026-05"); err == nil {
+			t.Fatal("unknown id with a qualifier must error")
+		} else if code := mgerrOf(t, err).Code; code != "no_such_item" {
+			t.Errorf("code = %q, want no_such_item", code)
+		}
+	})
+
+	t.Run("empty partition after @ is a usage error", func(t *testing.T) {
+		root := t.TempDir()
+		setupDirs(t, root)
+		id := "mg-65af"
+		writeAt(t, root, filepath.Join("archive", "2026-05"), id+".md")
+
+		_, err := ResolveUnique(root, id+"@")
+		if err == nil {
+			t.Fatal("an empty qualifier must not silently resolve")
+		}
+		me := mgerrOf(t, err)
+		if me.Code != "empty_partition" {
+			t.Errorf("code = %q, want empty_partition", me.Code)
+		}
+		if me.Category != mgerr.CatUsage {
+			t.Errorf("category = %v, want usage", me.Category)
+		}
+	})
+
+	t.Run("a live id with no @ is unaffected", func(t *testing.T) {
+		root := t.TempDir()
+		setupDirs(t, root)
+		id := "mg-65af"
+		writeAt(t, root, "available", id+".md")
+		if m, err := ResolveUnique(root, id); err != nil || m.Status != "available" {
+			t.Errorf("bare live id regressed: (%+v, %v)", m, err)
+		}
+	})
+}
+
+// TestAmbiguousID_NamesPartitionEscapeHatch pins the acceptance requirement that
+// the bare-id ambiguity error advertises the @partition form, so an auditor who
+// hits exit-4 learns the escape hatch at the exact moment it is needed.
+func TestAmbiguousID_NamesPartitionEscapeHatch(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+	id := "mg-c2af"
+	writeAt(t, root, filepath.Join("archive", "2026-04"), id+".md")
+	writeAt(t, root, filepath.Join("archive", "2026-07"), id+".md")
+
+	_, err := ResolveUnique(root, id)
+	if err == nil {
+		t.Fatal("two archived twins must be ambiguous")
+	}
+	me := mgerrOf(t, err)
+	if !strings.Contains(me.Hint, "@") || !strings.Contains(me.Hint, id) {
+		t.Errorf("ambiguity hint should name the %s@<partition> escape hatch: %q", id, me.Hint)
+	}
+}
+
 func TestReadWithStatus_SingleResolve(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
