@@ -183,6 +183,51 @@ func TestCreate_RemintsAroundArchivedAndShelvedIDs(t *testing.T) {
 	}
 }
 
+// TestCreate_RemintsAroundLooseArchivedID is the mg-c3f9 hole-closing test, and
+// its own positive control. It strands a minted item LOOSE in work/archive/
+// (no partition) — the exact shape a9c0 swept out of the real store by hand —
+// and asserts Create refuses to re-mint that ID. Against the pre-fix reader,
+// which skipped every non-directory under archive/, this loose twin was
+// invisible: the collision check passed and the new item was born a silent
+// alias. This test FAILS there and passes only once Resolve is total.
+func TestCreate_RemintsAroundLooseArchivedID(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+	pinClock(t, fixedTime())
+
+	const title = "stranded loose in archive"
+	id := GenerateID("mg-", title, fixedTime())
+
+	// Strand a record loose directly under archive/ — NOT inside a partition.
+	archiveRoot := filepath.Join(root, "work", "archive")
+	if err := os.MkdirAll(archiveRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(archiveRoot, id+".md"), []byte("---\nid: "+id+"\n---\n\n# old loose\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	item, err := Create(root, "mg-", "task", title, nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if item.ID == id {
+		t.Fatalf("new item was minted as a silent alias of the loose archived item %q — the reader is not total", id)
+	}
+	if matches, _ := Resolve(root, item.ID); len(matches) != 1 {
+		t.Fatalf("new id %q resolves to %d matches, want 1", item.ID, len(matches))
+	}
+
+	// The stranded record itself is now resolvable, as archived.
+	m, err := ResolveUnique(root, id)
+	if err != nil {
+		t.Fatalf("ResolveUnique(stranded loose id): %v", err)
+	}
+	if m.Status != "archived" || m.Partition != "" {
+		t.Errorf("stranded record resolved as (%q, partition=%q), want (archived, empty)", m.Status, m.Partition)
+	}
+}
+
 // TestCreate_RetryIsBounded is the anti-infinite-loop test.
 //
 // GenerateID is a deterministic hash, not a random draw: a remint loop that
@@ -272,6 +317,80 @@ func TestResolve_FindsEveryMatch(t *testing.T) {
 		if m.Status != "archived" {
 			t.Errorf("status = %q, want archived", m.Status)
 		}
+	}
+}
+
+// TestResolve_LooseArchivedFile is the mg-c3f9 fix: an archived record sitting
+// LOOSE directly under work/archive/ (not in a month partition) must resolve,
+// as archived with an empty partition. The pre-fix reader skipped every
+// non-directory under archive/, so a loose twin was invisible — and a new mint
+// drawing its ID slipped past Create's whole-store collision check.
+func TestResolve_LooseArchivedFile(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	id := "mg-c2af"
+	writeAt(t, root, "archive", id+".md") // loose, no partition
+
+	matches, err := Resolve(root, id)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("Resolve found %d matches, want 1: %+v", len(matches), matches)
+	}
+	m := matches[0]
+	if m.Status != "archived" {
+		t.Errorf("status = %q, want archived", m.Status)
+	}
+	if m.Partition != "" {
+		t.Errorf("partition = %q, want empty for a loose archived record", m.Partition)
+	}
+	if want := filepath.Join(root, "work", "archive", id+".md"); m.Path != want {
+		t.Errorf("path = %q, want %q", m.Path, want)
+	}
+
+	// A single loose archived record is answerable, not ambiguous.
+	if got, err := ResolveUnique(root, id); err != nil || got.Status != "archived" {
+		t.Errorf("ResolveUnique(loose archived) = (%+v, %v)", got, err)
+	}
+}
+
+// TestResolve_LooseArchiveStrictMatch pins the strictness of the loose-archive
+// scan: only "<id>.md" counts. A total scan must not ingest editor backups,
+// result sidecars, or stray PID-suffixed files sitting loose under archive/ as
+// phantom twins — that would manufacture ambiguity errors out of noise.
+func TestResolve_LooseArchiveStrictMatch(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	archiveRoot := filepath.Join(root, "work", "archive")
+	if err := os.MkdirAll(archiveRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id := "mg-c2af"
+	// The one true record, buried in noise that all names the same id.
+	for _, name := range []string{
+		id + ".md",          // the only match
+		id + ".md.bak",      // editor backup
+		id + ".md~",         // editor backup
+		id + ".result.json", // result sidecar
+		id + ".md.991",      // PID-suffixed form — legal in claimed/, not archive/
+	} {
+		if err := os.WriteFile(filepath.Join(archiveRoot, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	matches, err := Resolve(root, id)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("loose-archive scan matched %d entries, want exactly 1 (<id>.md): %+v", len(matches), matches)
+	}
+	if want := filepath.Join(archiveRoot, id+".md"); matches[0].Path != want {
+		t.Errorf("matched the wrong loose entry: %q, want %q", matches[0].Path, want)
 	}
 }
 

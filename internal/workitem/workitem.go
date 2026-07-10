@@ -127,9 +127,11 @@ func generateID(prefix, title string, created time.Time, nonce int) string {
 // space is small enough that collisions are routine rather than theoretical:
 //
 //  1. The candidate ID is rejected if it already names an item ANYWHERE in the
-//     store — including archive/ and shelved/, which O_EXCL on one directory
-//     would never see. This stops a new item from being born as a silent alias
-//     of an old one.
+//     store — every active directory, every archive partition, AND loose
+//     records directly under archive/, none of which O_EXCL on one directory
+//     would see. Resolve is total over the store precisely so this claim holds:
+//     a gap there would let a new item be born a silent alias of a twin the
+//     resolver could not see.
 //  2. The file is created with O_EXCL. os.WriteFile truncates, so the previous
 //     implementation would silently DESTROY a live item in available/ or
 //     pending/ whose ID the new item happened to draw. O_EXCL also closes the

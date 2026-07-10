@@ -71,9 +71,24 @@ func matchesID(name, id string) bool {
 	return name == id+".md" || strings.HasPrefix(name, id+".md.")
 }
 
+// matchesArchivedID reports whether a loose entry sitting directly under
+// work/archive/ names the given archived item. Archived records never carry the
+// claimed/ PID suffix (<id>.md.<pid>), so the match is STRICT — only "<id>.md"
+// counts. That strictness is the point of scanning loose files at all: it keeps
+// a total scan from ingesting editor backups (<id>.md.bak, <id>.md~) or result
+// sidecars (<id>.result.json) as phantom archive twins.
+func matchesArchivedID(name, id string) bool {
+	return name == id+".md"
+}
+
 // Resolve returns every file in the store that names the given ID, across the
-// active lifecycle directories and every archive partition. A healthy store
-// yields 0 or 1 matches; 2+ means the short ID is ambiguous.
+// active lifecycle directories, every archive partition, AND loose archived
+// records sitting directly under work/archive/. A healthy store yields 0 or 1
+// matches; 2+ means the short ID is ambiguous.
+//
+// It is TOTAL over the store on purpose: Create mints through Resolve, so a
+// record the resolver cannot see is a record a new mint cannot collide with —
+// which is exactly how an item gets born a silent alias of a twin. See Create.
 //
 // Unreadable directories are skipped rather than failing the resolve: a missing
 // work/shelved/ must not make a live item unresolvable.
@@ -101,29 +116,41 @@ func Resolve(root, id string) ([]Match, error) {
 		}
 	}
 
-	// Archive partitions (archive/YYYY-MM/), scanned in ascending name order.
-	// NOTE: archived items sitting loose in work/archive/ rather than in a
-	// partition are invisible here, exactly as they were to the seven walks
-	// this function replaced. That is mg-a9c0, tracked separately; when it is
-	// fixed, this loop is the only place that needs to change.
+	// Archive records live either in a month partition (archive/YYYY-MM/) or
+	// loose directly under work/archive/. Both are scanned so Resolve stays total
+	// over the store: a loose file — left by a future partition scheme, an
+	// interrupted archive, or a restored backup — must be visible, or the next
+	// mint that draws its ID slips past Create's collision check and is born a
+	// silent alias the ambiguity guard can never surface (Resolve can't see the
+	// twin). Partition entries keep the claimed/ PID-suffix tolerance of
+	// matchesID; loose entries match strictly (see matchesArchivedID). ReadDir
+	// returns names in ascending order, so partitions resolve oldest-first.
 	archiveRoot := filepath.Join(root, "work", "archive")
-	if partitions, err := os.ReadDir(archiveRoot); err == nil {
-		for _, p := range partitions {
-			if !p.IsDir() {
+	if entries, err := os.ReadDir(archiveRoot); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				// A loose archived record: no partition, strict name match.
+				if matchesArchivedID(e.Name(), id) {
+					matches = append(matches, Match{
+						ID:     id,
+						Path:   filepath.Join(archiveRoot, e.Name()),
+						Status: "archived",
+					})
+				}
 				continue
 			}
-			dir := filepath.Join(archiveRoot, p.Name())
-			entries, err := os.ReadDir(dir)
+			dir := filepath.Join(archiveRoot, e.Name())
+			partEntries, err := os.ReadDir(dir)
 			if err != nil {
 				continue
 			}
-			for _, e := range entries {
-				if matchesID(e.Name(), id) {
+			for _, pe := range partEntries {
+				if matchesID(pe.Name(), id) {
 					matches = append(matches, Match{
 						ID:        id,
-						Path:      filepath.Join(dir, e.Name()),
+						Path:      filepath.Join(dir, pe.Name()),
 						Status:    "archived",
-						Partition: p.Name(),
+						Partition: e.Name(),
 					})
 				}
 			}
