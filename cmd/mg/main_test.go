@@ -1787,12 +1787,13 @@ func TestCLI_MailReadCrossBoxGuard(t *testing.T) {
 		t.Errorf("audit log missing read-forced entry, got:\n%s", got)
 	}
 
-	// Reading your own box is allowed, including the pogo alias forms:
-	// POGO_AGENT_NAME may be the bare id ("6ae0") or process name
-	// ("cat-mg-6ae0") while the mailbox is "mg-6ae0".
+	// Reading your own box is allowed under every alias spelling. The live
+	// mailbox is the bare id ("77aa"); both POGO_AGENT_NAME and the recipient
+	// argument may be the bare id, the work-item alias ("mg-77aa"), or the
+	// process name ("cat-mg-77aa"), and all canonicalize to the same box.
 	for _, alias := range []string{"mg-77aa", "77aa", "cat-mg-77aa"} {
-		id := sendTo("mg-77aa")
-		cmd = exec.Command(bin, "mail", "read", "mg-77aa", id)
+		id := sendTo("77aa")
+		cmd = exec.Command(bin, "mail", "read", alias, id)
 		cmd.Env = append(env, "POGO_AGENT_NAME="+alias)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Errorf("own-box read as %q should succeed: %v\n%s", alias, err, out)

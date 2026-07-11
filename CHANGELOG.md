@@ -14,6 +14,25 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ## [Unreleased]
 
+### Fixed
+
+- **Canonical mailbox addressing closes the `mg-<id>` silent-drop (mg-8bde).**
+  `mg mail send` and `mg mail list` (and `read`/`archive`/`reply`) now
+  canonicalize the recipient/mailbox argument the same way the cross-box read
+  guard already did — stripping the harness prefixes `mg-` and `cat-` — so the
+  work-item alias `mg-<id>`, the process name `cat-mg-<id>`, and the bare live
+  id `<id>` all resolve to the **same** mailbox. Previously, templates that
+  told agents to mail `mg-<id>` minted a stray mailbox nobody read: the intended
+  recipient (bare `<id>`) never saw the message, and a watcher polling
+  `mg mail list mg-<id>` got `No mailbox yet` (exit 0) and waited forever —
+  silent mail loss on the gh-issue workflow (same class as the mg-6ae0 /
+  mg-f73e drops). Crew mailboxes (`mayor`, `architect`, …) carry no prefix and
+  are unaffected. A new **`mg mail migrate`** (with `--dry-run`) rescues any
+  pre-existing stray `mg-<id>` mailbox: it merges its unread, read and archived
+  mail into the canonical `<id>` box, preserving read state, then removes the
+  emptied stray directory. The merge is non-destructive (a msgID that already
+  exists in the target keeps its content under a fresh id) and idempotent.
+
 ### Added
 
 - **`@partition` disambiguator for archived twins (mg-0d0c).** When two archived

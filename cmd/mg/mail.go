@@ -104,6 +104,7 @@ var (
 	mailListArchived  bool
 	mailReadForce     bool
 	mailReplyForce    bool
+	mailMigrateDryRun bool
 	mailJSON          bool
 )
 
@@ -141,7 +142,10 @@ primitive. To reply to a message in your own mailbox and have the ancestry
 filled in for you, use 'mg mail reply' instead.`,
 	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		recipient := args[0]
+		// Canonicalize so a caller addressing the work-item alias "mg-<id>"
+		// and one addressing the bare live mailbox "<id>" land in the SAME
+		// mailbox, instead of the alias minting a stray box nobody reads.
+		recipient := canonicalAgent(args[0])
 
 		if mailSendFrom == "" || mailSendSubject == "" || mailSendBody == "" {
 			return fmt.Errorf("--from, --subject, and --body are required")
@@ -224,7 +228,10 @@ prints is the token 'mg mail read'/'mg mail archive' accept.`,
 			return runMailboxList(mr)
 		}
 
-		agent := args[0]
+		// Canonicalize so listing the alias "mg-<id>" reports the same
+		// mailbox a "<id>" send lands in — otherwise a watcher polling the
+		// alias sees "No mailbox yet" forever while mail piles up in "<id>".
+		agent := canonicalAgent(args[0])
 
 		if mailListArchived && mailListAll {
 			return fmt.Errorf("--archived and --all are mutually exclusive")
@@ -523,7 +530,9 @@ archive it yourself with 'mg mail archive' when you are done with it.`,
 			References: append(append([]string{}, orig.References...), orig.ID),
 		}
 
-		recipient := orig.From
+		// The reply recipient is the original's From, which may itself be an
+		// "mg-<id>" alias; canonicalize it so the reply lands in the live box.
+		recipient := canonicalAgent(orig.From)
 		existed := mail.MailboxExists(mr, recipient)
 
 		newID, err := mail.SendWithOpts(mr, recipient, from, subject, mailSendBody, opts)
@@ -558,6 +567,65 @@ archive it yourself with 'mg mail archive' when you are done with it.`,
 	},
 }
 
+var mailMigrateCmd = &cobra.Command{
+	Use:   "migrate",
+	Short: "Merge stray prefixed mailboxes (mg-<id>) into their canonical (<id>) mailbox",
+	Long: `Merge stray prefixed mailboxes into their canonical mailbox.
+
+'mg mail send'/'list' now canonicalize the recipient, so an alias like
+"mg-<id>" and the bare live mailbox "<id>" resolve to the same box. Mailboxes
+delivered under a prefixed alias BEFORE that fix are left stranded: the alias
+name is no longer addressable, so their delivered mail would be unreachable.
+
+This one-shot, idempotent command finds every mailbox whose name carries a
+harness prefix ("mg-", "cat-") and moves its messages — unread, read and
+archived — into the canonical bare-id mailbox, preserving read state, then
+removes the emptied stray directory. Crew mailboxes (mayor, architect, ...)
+have no prefix and are left untouched.
+
+Run with --dry-run first to see what would move without touching the store.`,
+	Args: usageArgs(cobra.NoArgs),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		mr, err := mailRoot()
+		if err != nil {
+			return err
+		}
+
+		boxes, err := mail.ListMailboxes(mr)
+		if err != nil {
+			return err
+		}
+
+		migrated := 0
+		for _, b := range boxes {
+			canon := canonicalAgent(b.Name)
+			// Skip boxes that are already canonical, and the degenerate case
+			// where stripping the prefix leaves nothing addressable.
+			if canon == b.Name || canon == "" {
+				continue
+			}
+
+			if mailMigrateDryRun {
+				fmt.Printf("would merge %s → %s (%d unread)\n", b.Name, canon, b.Unread)
+				migrated++
+				continue
+			}
+
+			res, err := mail.MergeMailbox(mr, b.Name, canon)
+			if err != nil {
+				return fmt.Errorf("merging %s into %s: %w", b.Name, canon, err)
+			}
+			fmt.Printf("merged %s → %s (%d message(s) moved)\n", res.From, res.To, res.Moved)
+			migrated++
+		}
+
+		if migrated == 0 {
+			fmt.Println("No stray mailboxes to migrate.")
+		}
+		return nil
+	},
+}
+
 // replySubject prefixes "Re: " unless the subject already carries one, so a
 // long back-and-forth does not accumulate "Re: Re: Re: ". The check is
 // case-insensitive because a human-typed --subject may say "RE:".
@@ -569,16 +637,17 @@ func replySubject(subject string) string {
 }
 
 // parseAgentMsgID resolves the shared AGENT/MSG-ID | AGENT MSG-ID argument form
-// used by mail read, mail archive and mail reply.
+// used by mail read, mail archive and mail reply. The AGENT is canonicalized so
+// the alias "mg-<id>" resolves to the same mailbox as the bare "<id>".
 func parseAgentMsgID(args []string) (agent, msgID string, err error) {
 	if len(args) == 1 {
 		parts := strings.SplitN(args[0], "/", 2)
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 			return "", "", fmt.Errorf("expected AGENT/MSG-ID format, got %q", args[0])
 		}
-		return parts[0], parts[1], nil
+		return canonicalAgent(parts[0]), parts[1], nil
 	}
-	return args[0], args[1], nil
+	return canonicalAgent(args[0]), args[1], nil
 }
 
 func init() {
@@ -603,9 +672,12 @@ func init() {
 	mailListCmd.Flags().BoolVar(&mailListArchived, "archived", false, "list archived messages instead of the active mailbox")
 	mailListCmd.Flags().BoolVar(&mailJSON, "json", false, "emit one JSON object per line (NDJSON) instead of human-formatted output")
 
+	mailMigrateCmd.Flags().BoolVar(&mailMigrateDryRun, "dry-run", false, "report which stray mailboxes would be merged without moving any mail")
+
 	mailCmd.AddCommand(mailSendCmd)
 	mailCmd.AddCommand(mailReplyCmd)
 	mailCmd.AddCommand(mailListCmd)
 	mailCmd.AddCommand(mailReadCmd)
 	mailCmd.AddCommand(mailArchiveCmd)
+	mailCmd.AddCommand(mailMigrateCmd)
 }

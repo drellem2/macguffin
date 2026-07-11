@@ -1387,3 +1387,151 @@ func TestPeek_RejectsTraversalAndMissing(t *testing.T) {
 		t.Errorf("Peek of a missing message: err = %v, want CatNotFound", err)
 	}
 }
+
+// TestMergeMailbox_RescuesStrayMailbox: a stray "mg-<id>" mailbox with unread,
+// read, and archived messages is merged into the canonical "<id>" mailbox,
+// read state is preserved, and the emptied stray directory is removed.
+func TestMergeMailbox_RescuesStrayMailbox(t *testing.T) {
+	root := t.TempDir()
+
+	// A message already living in the canonical box (must survive the merge).
+	if _, err := Send(root, "8bde", "mayor", "pre-existing", "keep me"); err != nil {
+		t.Fatalf("seed canonical box: %v", err)
+	}
+
+	// Stray box: one unread (new/), one read (cur/), one archived.
+	strayUnread, err := Send(root, "mg-8bde", "reviewer", "unread one", "u")
+	if err != nil {
+		t.Fatalf("seed stray unread: %v", err)
+	}
+	strayRead, err := Send(root, "mg-8bde", "reviewer", "read one", "r")
+	if err != nil {
+		t.Fatalf("seed stray read: %v", err)
+	}
+	if _, err := Read(root, "mg-8bde", strayRead); err != nil {
+		t.Fatalf("mark stray read: %v", err)
+	}
+	strayArch, err := Send(root, "mg-8bde", "reviewer", "arch one", "a")
+	if err != nil {
+		t.Fatalf("seed stray archived: %v", err)
+	}
+	if _, err := Archive(root, "mg-8bde", strayArch); err != nil {
+		t.Fatalf("archive stray: %v", err)
+	}
+
+	res, err := MergeMailbox(root, "mg-8bde", "8bde")
+	if err != nil {
+		t.Fatalf("MergeMailbox: %v", err)
+	}
+	if res.Moved != 3 {
+		t.Errorf("Moved = %d, want 3", res.Moved)
+	}
+
+	// Stray directory is gone.
+	if _, err := os.Stat(filepath.Join(root, "mg-8bde")); !os.IsNotExist(err) {
+		t.Errorf("stray mailbox should be removed, stat err = %v", err)
+	}
+
+	// Unread count in canonical box: pre-existing + strayUnread = 2.
+	unread, _, err := List(root, "8bde")
+	if err != nil {
+		t.Fatalf("List canonical: %v", err)
+	}
+	if len(unread) != 2 {
+		t.Errorf("canonical unread = %d, want 2", len(unread))
+	}
+
+	// The rescued read message is in cur/ (read state preserved).
+	all, _, err := ListAll(root, "8bde")
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if len(all) != 3 { // 2 unread + 1 read
+		t.Errorf("canonical new+cur = %d, want 3", len(all))
+	}
+	if _, err := os.Stat(filepath.Join(root, "8bde", "cur", strayRead)); err != nil {
+		t.Errorf("rescued read message should be in canonical cur/: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "8bde", "new", strayUnread)); err != nil {
+		t.Errorf("rescued unread message should be in canonical new/: %v", err)
+	}
+
+	// The archived message is in archive/.
+	arch, _, err := ListArchived(root, "8bde")
+	if err != nil {
+		t.Fatalf("ListArchived: %v", err)
+	}
+	if len(arch) != 1 {
+		t.Errorf("canonical archived = %d, want 1", len(arch))
+	}
+}
+
+// TestMergeMailbox_AbsentSourceIsNoOp: merging a stray mailbox that does not
+// exist is a no-op, so the migration is idempotent (safe to run repeatedly).
+func TestMergeMailbox_AbsentSourceIsNoOp(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Send(root, "8bde", "mayor", "s", "b"); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := MergeMailbox(root, "mg-8bde", "8bde")
+	if err != nil {
+		t.Fatalf("MergeMailbox on absent source: %v", err)
+	}
+	if res.Moved != 0 {
+		t.Errorf("Moved = %d, want 0", res.Moved)
+	}
+	// Canonical box untouched.
+	unread, _, err := List(root, "8bde")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unread) != 1 {
+		t.Errorf("canonical unread = %d, want 1", len(unread))
+	}
+}
+
+// TestMergeMailbox_CollisionDoesNotOverwrite: if a message id already exists in
+// the destination subdir, the moved file is kept under a fresh id instead of
+// clobbering the delivered message.
+func TestMergeMailbox_CollisionDoesNotOverwrite(t *testing.T) {
+	root := t.TempDir()
+	if err := EnsureMaildir(root, "8bde"); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureMaildir(root, "mg-8bde"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same file name in both new/ dirs, different content.
+	const id = "1234.5.6"
+	if err := os.WriteFile(filepath.Join(root, "8bde", "new", id),
+		[]byte("From: a\nSubject: canon\nDate: 2026-01-01T00:00:00Z\n\ncanonical body\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "mg-8bde", "new", id),
+		[]byte("From: b\nSubject: stray\nDate: 2026-01-02T00:00:00Z\n\nstray body\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := MergeMailbox(root, "mg-8bde", "8bde"); err != nil {
+		t.Fatalf("MergeMailbox: %v", err)
+	}
+
+	// Both messages survive: two files in canonical new/.
+	entries, err := os.ReadDir(filepath.Join(root, "8bde", "new"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("canonical new/ has %d files, want 2 (no overwrite)", len(entries))
+	}
+	// The original canonical message keeps its content.
+	data, err := os.ReadFile(filepath.Join(root, "8bde", "new", id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "canonical body") {
+		t.Errorf("collision overwrote the canonical message: %s", data)
+	}
+}

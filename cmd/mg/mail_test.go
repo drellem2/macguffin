@@ -741,3 +741,147 @@ func TestCLI_MailReadJSONExposesCorrelation(t *testing.T) {
 		t.Errorf("unthreaded message should emit references:[], got %q", out)
 	}
 }
+
+// TestCLI_MailCanonicalRecipient: sending to the work-item alias "mg-<id>" and
+// to the bare live mailbox "<id>" must land in the SAME mailbox — the whole
+// point of mg-8bde. Before the fix, "mg-<id>" minted a stray mailbox nobody
+// read, silently dropping mail on the gh-issue workflow.
+func TestCLI_MailCanonicalRecipient(t *testing.T) {
+	bin, env := mailInit(t)
+
+	if _, _, err := runMail(t, bin, env, "send", "mg-8bde", "--from=mayor", "--subject=viaAlias", "--body=b1"); err != nil {
+		t.Fatalf("send to alias failed: %v", err)
+	}
+	if _, _, err := runMail(t, bin, env, "send", "8bde", "--from=mayor", "--subject=viaBare", "--body=b2"); err != nil {
+		t.Fatalf("send to bare id failed: %v", err)
+	}
+
+	// Exactly one mailbox on disk — the bare "8bde" — holding both messages.
+	if _, err := os.Stat(filepath.Join(homeOf(t, env), ".macguffin", "mail", "mg-8bde")); !os.IsNotExist(err) {
+		t.Errorf("no stray 'mg-8bde' mailbox should exist, stat err = %v", err)
+	}
+	entries, err := os.ReadDir(mailboxDir(t, env, "8bde", "new"))
+	if err != nil {
+		t.Fatalf("reading 8bde new/: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("bare '8bde' mailbox should hold both messages, has %d", len(entries))
+	}
+
+	// Listing via either spelling reports the same two messages.
+	for _, spelling := range []string{"mg-8bde", "8bde"} {
+		out, _, err := runMail(t, bin, env, "list", spelling)
+		if err != nil {
+			t.Fatalf("list %s failed: %v\n%s", spelling, err, out)
+		}
+		if strings.Contains(out, "No mailbox for") {
+			t.Errorf("list %s reported no mailbox, but mail was delivered: %s", spelling, out)
+		}
+		if !strings.Contains(out, "viaAlias") || !strings.Contains(out, "viaBare") {
+			t.Errorf("list %s should show both messages, got: %s", spelling, out)
+		}
+	}
+}
+
+// TestCLI_MailCanonicalReadArchive: a message delivered to "<id>" is readable
+// and archivable when addressed via the "mg-<id>" alias, and vice versa.
+func TestCLI_MailCanonicalReadArchive(t *testing.T) {
+	bin, env := mailInit(t)
+
+	if _, _, err := runMail(t, bin, env, "send", "8bde", "--from=mayor", "--subject=s", "--body=b"); err != nil {
+		t.Fatalf("send failed: %v", err)
+	}
+	id := soleMsgID(t, env, "8bde")
+
+	// Read it addressing the alias; --force since caller != recipient.
+	if _, _, err := runMail(t, bin, env, "read", "mg-8bde/"+id, "--force"); err != nil {
+		t.Fatalf("read via alias failed: %v", err)
+	}
+	// It is now marked read in the bare mailbox's cur/.
+	if _, err := os.Stat(filepath.Join(mailboxDir(t, env, "8bde", "cur"), id)); err != nil {
+		t.Errorf("read via alias should mark the bare mailbox message read: %v", err)
+	}
+
+	// Archive it addressing the alias.
+	if _, _, err := runMail(t, bin, env, "archive", "mg-8bde/"+id); err != nil {
+		t.Fatalf("archive via alias failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(mailboxDir(t, env, "8bde", "archive"), id)); err != nil {
+		t.Errorf("archive via alias should move the bare mailbox message to archive/: %v", err)
+	}
+}
+
+// TestCLI_MailMigrate: the migrate command merges a pre-existing stray
+// "mg-<id>" mailbox into the canonical "<id>" mailbox without losing mail, and
+// leaves prefix-free crew mailboxes untouched.
+func TestCLI_MailMigrate(t *testing.T) {
+	bin, env := mailInit(t)
+
+	// Fabricate a stray mailbox on disk the way the pre-fix code would have:
+	// write a message straight into mail/mg-8bde/new/.
+	strayNew := filepath.Join(homeOf(t, env), ".macguffin", "mail", "mg-8bde", "new")
+	if err := os.MkdirAll(strayNew, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const strayID = "111.2.3"
+	if err := os.WriteFile(filepath.Join(strayNew, strayID),
+		[]byte("From: reviewer\nSubject: stranded\nDate: 2026-01-01T00:00:00Z\n\nrescue me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A crew mailbox with no prefix — must be left alone.
+	if _, _, err := runMail(t, bin, env, "send", "mayor", "--from=arch", "--subject=s", "--body=b"); err != nil {
+		t.Fatalf("seed mayor: %v", err)
+	}
+
+	// Dry-run reports the merge but moves nothing.
+	out, _, err := runMail(t, bin, env, "migrate", "--dry-run")
+	if err != nil {
+		t.Fatalf("migrate --dry-run failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "would merge mg-8bde") {
+		t.Errorf("dry-run should report the stray merge, got: %s", out)
+	}
+	if _, err := os.Stat(filepath.Join(strayNew, strayID)); err != nil {
+		t.Errorf("dry-run must not move any mail: %v", err)
+	}
+
+	// Real run merges it.
+	out, _, err = runMail(t, bin, env, "migrate")
+	if err != nil {
+		t.Fatalf("migrate failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "merged mg-8bde") {
+		t.Errorf("migrate should report the merge, got: %s", out)
+	}
+
+	// Stray gone, message rescued into canonical mailbox.
+	if _, err := os.Stat(filepath.Join(homeOf(t, env), ".macguffin", "mail", "mg-8bde")); !os.IsNotExist(err) {
+		t.Errorf("stray mailbox should be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(mailboxDir(t, env, "8bde", "new"), strayID)); err != nil {
+		t.Errorf("stranded message should be rescued into 8bde/new/: %v", err)
+	}
+	out, _, _ = runMail(t, bin, env, "list", "8bde")
+	if !strings.Contains(out, "stranded") {
+		t.Errorf("rescued message should show in 8bde's list, got: %s", out)
+	}
+
+	// Crew mailbox untouched, and a second migrate is a clean no-op.
+	if !mailboxExistsOnDisk(t, env, "mayor") {
+		t.Error("crew mailbox 'mayor' should be untouched by migrate")
+	}
+	out, _, err = runMail(t, bin, env, "migrate")
+	if err != nil {
+		t.Fatalf("second migrate failed: %v", err)
+	}
+	if !strings.Contains(out, "No stray mailboxes") {
+		t.Errorf("second migrate should be a no-op, got: %s", out)
+	}
+}
+
+// mailboxExistsOnDisk reports whether mail/<agent> is a directory.
+func mailboxExistsOnDisk(t *testing.T, env []string, agent string) bool {
+	t.Helper()
+	info, err := os.Stat(filepath.Join(homeOf(t, env), ".macguffin", "mail", agent))
+	return err == nil && info.IsDir()
+}

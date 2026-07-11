@@ -131,6 +131,7 @@ var commandEffects = map[string]commandEffect{
 	"mg mail list":    {mutates: false, idempotent: true},
 	"mg mail read":    {mutates: true, idempotent: true}, // marks read; re-read is a no-op
 	"mg mail archive": {mutates: true, idempotent: true}, // archiving an archived msg is a no-op
+	"mg mail migrate": {mutates: true, idempotent: true}, // merges stray mailboxes; re-run finds none
 }
 
 // effectFor returns the side-effect classification for a command path. Unknown

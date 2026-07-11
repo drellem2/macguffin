@@ -620,6 +620,108 @@ func Archive(mailRoot, agent, msgID string) (*Message, error) {
 	return &msg, nil
 }
 
+// MergeResult reports the outcome of merging one mailbox into another.
+type MergeResult struct {
+	From  string // source (stray) mailbox name
+	To    string // destination (canonical) mailbox name
+	Moved int    // message files relocated across new/, cur/, archive/
+}
+
+// MergeMailbox relocates every message from the `from` mailbox into the `to`
+// mailbox, preserving read state (new/ -> new/, cur/ -> cur/, archive/ ->
+// archive/), then removes the emptied `from` directory. It underpins the
+// stray-mailbox migration: a message mis-delivered to a prefixed alias like
+// "mg-<id>" is rescued into the canonical "<id>" mailbox rather than orphaned
+// once the recipient-resolution fix makes the stray name unaddressable.
+//
+// The move is non-destructive: if a message id already exists in the target
+// subdir (vanishingly rare — ids are clock+pid derived) the moved file keeps
+// its content under a fresh suffixed id, so no delivered mail is overwritten.
+// A `from` mailbox that does not exist is a no-op (Moved 0, nil error), which
+// makes the migration idempotent. Only new/, cur/ and archive/ are rescued;
+// a stray tmp/ holds only abandoned partial deliveries and is discarded with
+// the rest of the emptied mailbox.
+func MergeMailbox(mailRoot, from, to string) (MergeResult, error) {
+	res := MergeResult{From: from, To: to}
+	if err := checkMailbox(from); err != nil {
+		return res, err
+	}
+	if err := checkMailbox(to); err != nil {
+		return res, err
+	}
+	if from == to {
+		return res, nil
+	}
+
+	fromBox := filepath.Join(mailRoot, from)
+	if info, err := os.Stat(fromBox); err != nil || !info.IsDir() {
+		// Nothing to migrate: an absent stray mailbox is a no-op.
+		return res, nil
+	}
+
+	for _, sub := range []string{"new", "cur", "archive"} {
+		srcDir := filepath.Join(fromBox, sub)
+		entries, err := os.ReadDir(srcDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return res, fmt.Errorf("reading %s/%s: %w", from, sub, err)
+		}
+		if len(entries) == 0 {
+			continue
+		}
+
+		dstDir := filepath.Join(mailRoot, to, sub)
+		if err := os.MkdirAll(dstDir, 0o755); err != nil {
+			return res, fmt.Errorf("creating %s/%s: %w", to, sub, err)
+		}
+
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			srcPath := filepath.Join(srcDir, e.Name())
+			dstPath := uniqueDest(dstDir, e.Name())
+			if err := os.Rename(srcPath, dstPath); err != nil {
+				return res, fmt.Errorf("moving %s/%s/%s: %w", from, sub, e.Name(), err)
+			}
+			res.Moved++
+			Audit(mailRoot, "migrate", to, filepath.Base(dstPath),
+				map[string]string{"from_box": from, "dir": sub})
+		}
+	}
+
+	// The messages are rescued; drop the emptied stray mailbox (including any
+	// abandoned tmp/ files) so it no longer clutters the mailbox enumeration.
+	if err := os.RemoveAll(fromBox); err != nil {
+		return res, fmt.Errorf("removing emptied mailbox %s: %w", from, err)
+	}
+
+	event.Emit(eventsRoot(mailRoot), "mail.migrated", map[string]string{
+		"from":  from,
+		"to":    to,
+		"moved": fmt.Sprintf("%d", res.Moved),
+	})
+	return res, nil
+}
+
+// uniqueDest returns a path in dir for name, appending a ".dupN" suffix if a
+// file already occupies name so a merge never overwrites delivered mail. The
+// suffixed name stays a single valid path component (no separators added).
+func uniqueDest(dir, name string) string {
+	dest := filepath.Join(dir, name)
+	if _, err := os.Stat(dest); os.IsNotExist(err) {
+		return dest
+	}
+	for i := 1; ; i++ {
+		cand := filepath.Join(dir, fmt.Sprintf("%s.dup%d", name, i))
+		if _, err := os.Stat(cand); os.IsNotExist(err) {
+			return cand
+		}
+	}
+}
+
 // parseMessageFile reads and parses a Maildir message file. A file that
 // exists but lacks the blank-line header/body separator or carries none of
 // the known headers (truncated or corrupted in transfer) yields an error
