@@ -22,6 +22,7 @@ var (
 	newTags     []string
 	newTitle    string
 	newBody     string
+	newBodyFile string
 	newRepo     string
 	newNoRepo   bool
 	newBudget   int
@@ -38,6 +39,13 @@ var newCmd = &cobra.Command{
 	Aliases: []string{"create"},
 	Short:   "Create a new work item",
 	Long: `Create a new work item.
+
+The body comes from --body (inline) or --body-file (read from a file, "-" for
+stdin); the two are mutually exclusive. Prefer --body-file for any body whose
+exact text matters: the shell expands backticks, $VAR and $(cmd) inside
+--body="..." before mg ever runs, so those terms land in the item silently
+gone. --body-file reads the file's bytes verbatim, with no shell in the path,
+and errors rather than filing an empty body if the file cannot be read.
 
 The --assignee flag names the agent that owns triage and routing for the
 item, not the agent that runs the work. Substantive work is performed by
@@ -116,8 +124,12 @@ optional internal hyphens, and must end in a hyphen.`,
 		if tags := normSlice(newTags); len(tags) > 0 {
 			opts = append(opts, workitem.WithTags(tags))
 		}
-		if newBody != "" {
-			opts = append(opts, workitem.WithBody(newBody))
+		body, _, err := bodyFromFlags(cmd, newBody, newBodyFile)
+		if err != nil {
+			return err
+		}
+		if body != "" {
+			opts = append(opts, workitem.WithBody(body))
 		}
 		if cmd.Flags().Changed("budget") {
 			if newBudget < 0 {
@@ -153,6 +165,7 @@ func init() {
 	stringSliceVarWithAlias(newCmd.Flags(), &newTags, "tags", "tag", "tags (comma-separated or repeated)")
 	newCmd.Flags().StringVar(&newTitle, "title", "", "work item title (alternative to positional args)")
 	newCmd.Flags().StringVar(&newBody, "body", "", "work item body (markdown)")
+	newCmd.Flags().StringVar(&newBodyFile, "body-file", "", "read the body verbatim from a file (\"-\" for stdin); mutually exclusive with --body")
 	newCmd.Flags().StringVar(&newRepo, "repo", "", "repo path (defaults to current git toplevel for interactive use; auto-detection is skipped under pogo automation, where POGO_PID is set — pass --repo=PATH explicitly there; --repo=\"\" or --no-repo leaves it empty)")
 	newCmd.Flags().BoolVar(&newNoRepo, "no-repo", false, "do not auto-detect or set a repo (use for non-coding work items)")
 	newCmd.Flags().IntVar(&newBudget, "budget", 0, "estimated token budget (integer; omit or 0 to leave unset)")

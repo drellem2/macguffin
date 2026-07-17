@@ -16,6 +16,29 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Added
 
+- **`--body-file <path>` on `mg mail send`, `mg new` and `mg edit` (mg-7850).**
+  Reads the body bytes straight from a file — no shell, no expansion — with `-`
+  for stdin. Mutually exclusive with `--body` (exit 2); a path that cannot be
+  read is an error, never a silently empty body.
+
+  This fixes an *incentive gradient*, not a bug in any one command. The shell
+  expands `` `backticks` ``, `$VAR` and `$(cmd)` inside `--body="..."` **before
+  mg is executed**, so mg receives an already-mangled string, stores it, and
+  reports success — four separate incidents lost dollar figures, a command name,
+  and the identifiers naming a mechanism, every one silent and every one exit 0,
+  precisely because the content worth sending exactly is the content that
+  contains metacharacters. mg cannot detect this after the fact: a shell-eaten
+  body and a body someone typed that way are byte-identical at the only point mg
+  can observe, so no check here could reliably fail. What was wrong was that the
+  safe path (`--body="$(cat file)"`) cost more keystrokes *and* more knowledge
+  than the dangerous one, so under load every caller reached for the hazard —
+  including callers who had read the warning in the same session. `--body-file
+  ./msg.md` is safe *and* short: it makes careful cheaper than careless rather
+  than asking anyone to be vigilant.
+
+  `--body` is untouched and **not** deprecated — it remains correct for the many
+  bodies that carry no metacharacters.
+
 - **`mg archive <id>` archives exactly one item; `--dry-run` previews the sweep
   (mg-322f).** The targeted form is what the mayor prompt has always documented
   for work items the refinery never merged, and there was previously no way to

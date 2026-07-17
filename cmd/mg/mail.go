@@ -99,6 +99,7 @@ var (
 	mailSendFrom      string
 	mailSendSubject   string
 	mailSendBody      string
+	mailSendBodyFile  string
 	mailSendInReplyTo string
 	mailListAll       bool
 	mailListArchived  bool
@@ -122,6 +123,19 @@ var mailSendCmd = &cobra.Command{
 	Use:   "send AGENT",
 	Short: "Send a message to an agent",
 	Long: `Send a message to an agent's mailbox.
+
+The body comes from --body (inline) or --body-file (read from a file, "-" for
+stdin); the two are mutually exclusive and one is required.
+
+Prefer --body-file for any body you care about arriving exactly. The shell
+expands backticks, $VAR and $(cmd) inside --body="..." before mg ever runs, so
+those terms are silently gone from the delivered message and mg still reports
+Delivered — mg receives the mangled string and cannot tell it from one you
+typed. --body-file reads the file's bytes verbatim, with no shell in the path:
+
+  mg mail send mayor --from=me --subject=s --body-file ./msg.md
+
+A --body-file that cannot be read is an error, never an empty body.
 
 The recipient's mailbox is created lazily on first delivery, so sending to a
 brand-new agent always succeeds (exit 0). When the recipient's mailbox did not
@@ -147,8 +161,15 @@ filled in for you, use 'mg mail reply' instead.`,
 		// mailbox, instead of the alias minting a stray box nobody reads.
 		recipient := canonicalAgent(args[0])
 
-		if mailSendFrom == "" || mailSendSubject == "" || mailSendBody == "" {
-			return fmt.Errorf("--from, --subject, and --body are required")
+		body, _, err := bodyFromFlags(cmd, mailSendBody, mailSendBodyFile)
+		if err != nil {
+			return err
+		}
+
+		// An empty body is refused whichever flag supplied it, so an empty
+		// --body-file cannot deliver nothing and report Delivered.
+		if mailSendFrom == "" || mailSendSubject == "" || body == "" {
+			return fmt.Errorf("--from, --subject, and a body (--body or --body-file) are required")
 		}
 
 		mr, err := mailRoot()
@@ -169,7 +190,7 @@ filled in for you, use 'mg mail reply' instead.`,
 			opts.References = []string{mailSendInReplyTo}
 		}
 
-		msgID, err := mail.SendWithOpts(mr, recipient, mailSendFrom, mailSendSubject, mailSendBody, opts)
+		msgID, err := mail.SendWithOpts(mr, recipient, mailSendFrom, mailSendSubject, body, opts)
 		if err != nil {
 			return err
 		}
@@ -684,7 +705,8 @@ func parseAgentMsgID(args []string) (agent, msgID string, err error) {
 func init() {
 	mailSendCmd.Flags().StringVar(&mailSendFrom, "from", "", "sender name (required)")
 	mailSendCmd.Flags().StringVar(&mailSendSubject, "subject", "", "message subject (required)")
-	mailSendCmd.Flags().StringVar(&mailSendBody, "body", "", "message body (required)")
+	mailSendCmd.Flags().StringVar(&mailSendBody, "body", "", "message body (required unless --body-file)")
+	mailSendCmd.Flags().StringVar(&mailSendBodyFile, "body-file", "", "read the message body verbatim from a file (\"-\" for stdin); mutually exclusive with --body")
 	mailSendCmd.Flags().StringVar(&mailSendInReplyTo, "in-reply-to", "", "MSG-ID this message replies to (sets In-Reply-To and seeds References)")
 	mailSendCmd.Flags().BoolVar(&mailJSON, "json", false, "emit a single JSON object instead of human-formatted output")
 

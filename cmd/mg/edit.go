@@ -12,6 +12,7 @@ import (
 var (
 	editTitle      string
 	editBody       string
+	editBodyFile   string
 	editType       string
 	editRepo       string
 	editDepends    []string
@@ -32,6 +33,14 @@ var editCmd = &cobra.Command{
 	Long: `Update fields on an existing work item.
 
 Use --title, --body, --type, --repo, --assignee, --priority to replace fields directly.
+
+The replacement body comes from --body (inline) or --body-file (read from a
+file, "-" for stdin); the two are mutually exclusive. Prefer --body-file for any
+body whose exact text matters: the shell expands backticks, $VAR and $(cmd)
+inside --body="..." before mg ever runs, so those terms are silently gone from
+the stored body. --body-file reads the file's bytes verbatim, with no shell in
+the path, and errors rather than storing an empty body if the file cannot be
+read. Like --body="", a --body-file naming an empty file clears the body.
 Use --depends to replace all dependencies, or --add-depends / --rm-depends for incremental changes.
 Use --tags to replace all tags, or --add-tags / --rm-tags for incremental changes.
 
@@ -55,8 +64,12 @@ decides whether to dispatch the work, hold it, or close it.`,
 			fields.Title = &editTitle
 			changed = true
 		}
-		if cmd.Flags().Changed("body") {
-			fields.Body = &editBody
+		body, bodySet, err := bodyFromFlags(cmd, editBody, editBodyFile)
+		if err != nil {
+			return err
+		}
+		if bodySet {
+			fields.Body = &body
 			changed = true
 		}
 		if cmd.Flags().Changed("type") {
@@ -129,6 +142,7 @@ decides whether to dispatch the work, hold it, or close it.`,
 func init() {
 	editCmd.Flags().StringVar(&editTitle, "title", "", "new title")
 	editCmd.Flags().StringVar(&editBody, "body", "", "new body (markdown)")
+	editCmd.Flags().StringVar(&editBodyFile, "body-file", "", "read the new body verbatim from a file (\"-\" for stdin); mutually exclusive with --body")
 	editCmd.Flags().StringVar(&editType, "type", "", "new type")
 	editCmd.Flags().StringVar(&editRepo, "repo", "", "new repo path")
 	stringSliceVarWithAlias(editCmd.Flags(), &editDepends, "depends", "depend", "replace all dependencies (comma-separated or repeated)")
