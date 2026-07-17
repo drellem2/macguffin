@@ -14,7 +14,36 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ## [Unreleased]
 
+### Added
+
+- **`mg archive <id>` archives exactly one item; `--dry-run` previews the sweep
+  (mg-322f).** The targeted form is what the mayor prompt has always documented
+  for work items the refinery never merged, and there was previously no way to
+  do it: the only working form was the age sweep, which is unfiltered. The two
+  forms are deliberately exclusive — an `ID` together with `--days` is a usage
+  error rather than a guess between archiving one item and archiving all of
+  `done/`. `ArchiveItem` resolves a single path by ID and moves that path or
+  nothing; it shares none of the sweep's selection logic and has no fallback
+  into it, so a bad ID can only ever be an error, never a wider archive.
+
 ### Fixed
+
+- **`mg archive <id>` silently ignored the ID and exited 0 (mg-322f).** The
+  command declared no `Args` validator, so cobra's default arity accepted the
+  positional ID, and its `RunE` never read it: the ID was accepted, ignored, and
+  the command reported a cheerful `No items to archive.` with exit 0. Every
+  caller following the documented instruction believed it had archived one item
+  and had archived nothing, so items accumulated in `done/` indefinitely with no
+  signal. This composed with the second half — `mg archive --days=0`, the only
+  form that worked, archives **every** done item — into silent state loss: the
+  gh-issue playbook parks a triage ticket in `done` as its gate's state carrier,
+  and routine cleanup would take it. The loss was invisible and looked clean:
+  the ticket dropped out of `mg list --tag=gh-issue`, so the playbook's dedup
+  rule matched no ticket for the next `[gh]` mail, concluded "new issue", and
+  confidently re-triaged and re-acked an external reporter. Archiving stays
+  blind to `stage:` — it is a playbook convention living in body prose, not an
+  mg field — so the guard is structural instead: the targeted form cannot reach
+  the sweep, and archives the named item or errors.
 
 - **Canonical mailbox addressing closes the `mg-<id>` silent-drop (mg-8bde).**
   `mg mail send` and `mg mail list` (and `read`/`archive`/`reply`) now

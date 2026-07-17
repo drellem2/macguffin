@@ -178,6 +178,30 @@ func explainReopenFailure(root, id string) *mgerr.Error {
 	}
 }
 
+// explainArchiveFailure produces a user-facing error when 'archive ID' could
+// not act because the item is not in done/. Archiving is a mutation, so every
+// non-done status must be a loud refusal: the caller asked for one specific
+// item and must never be left believing an archive happened when it did not.
+func explainArchiveFailure(root, id string) *mgerr.Error {
+	status, _ := statusWithPID(root, id)
+	switch status {
+	case "":
+		return errNoSuchItem(id)
+	case "available":
+		return mgerr.Conflict("not_done", fmt.Sprintf("%s: not done — it is available, so there is nothing to archive.", id), remediation("available", id))
+	case "claimed":
+		return mgerr.Conflict("not_done", fmt.Sprintf("%s: not done — it is claimed (in progress).", id), remediation("claimed", id))
+	case "pending":
+		return mgerr.Conflict("not_done", fmt.Sprintf("%s: not done — it is pending on dependencies.", id), remediation("pending", id))
+	case "shelved":
+		return mgerr.Conflict("item_shelved", fmt.Sprintf("%s: is shelved, not done.", id), remediation("shelved", id))
+	case "archived":
+		return mgerr.Conflict("already_archived", fmt.Sprintf("%s: already archived.", id), remediation("archived", id))
+	default:
+		return mgerr.Conflict("claim_race", fmt.Sprintf("%s: could not be archived; it may have just changed. Run 'mg show %s' to check.", id, id), "").WithRetryable(true)
+	}
+}
+
 // explainUnshelveFailure produces a user-facing error when 'unshelve' could not
 // find the item in shelved/.
 func explainUnshelveFailure(root, id string) *mgerr.Error {

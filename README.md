@@ -109,7 +109,7 @@ mg log                 # view snapshot history
 | `mg claim ID` | Atomically claim a work item by ID. |
 | `mg done ID` | Mark a claimed work item as done. |
 | `mg edit ID [flags]` | Update fields on an existing work item. |
-| `mg archive` | Archive done items older than N days. |
+| `mg archive [ID]` | With an `ID`, archive exactly that one done item and nothing else — the form to use for items the refinery never merged (investigations, evaluations). With no `ID`, sweep `done/` and archive every item older than `--days` (default 7; `--days=0` takes **all** done items). The two forms are exclusive: passing both an `ID` and `--days` is an error, never a silent choice between archiving one item and archiving every item. `--dry-run` previews without moving anything. A targeted archive that cannot act (unknown ID, item not done) exits non-zero and says why. |
 | `mg unarchive ID` | Restore an archived work item back to `available/`. |
 | `mg unclaim ID` | Release a claim, returning the work item to `available/`. |
 | `mg schedule` | Promote pending items whose dependencies are met. |
