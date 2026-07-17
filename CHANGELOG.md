@@ -35,6 +35,28 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Added
 
+- **`mg mail read` prints a body length header, making a `head -N`'d read a
+  visible drop instead of a silent one (mg-8a44).** The header block now carries
+  a fourth line beside From/Subject/Date:
+
+      Body: 47 lines / 3165 bytes
+
+  Agents pipe mail through `head -N` to protect a finite context window, and a
+  body longer than N was dropped with no marker, no exit code and no signal of
+  any kind — the reader saw a clean, complete-looking message and acted on a
+  partial instruction. Observed 2026-07-17: a three-part ruling (reasoning, an
+  assignment, an exit condition) was cut at byte ~2226 of 3395; the recipient
+  got the reasoning and never learned an assignment existed. The body was intact
+  on disk, so this was purely the read path. It was caught only because the cut
+  landed mid-sentence — one line earlier it would have broken at a paragraph
+  boundary and read as whole. The counts describe the **body alone**, not the
+  message file: the headers and the blank separator are already visible to the
+  reader, and a byte count that quietly included them would not match the body
+  it labels. The line sits **above** the body deliberately — a footer is cut by
+  the same `head` it would warn about, so it vanishes exactly when needed.
+  Nothing else changes: same body, same read/unread transition, and `--json`
+  (which never truncates) is untouched.
+
 - **`@partition` disambiguator for archived twins (mg-0d0c).** When two archived
   records share a short ID across different month partitions, both are terminal,
   so the live-vs-archived tiebreak (mg-fb07) cannot fire and the bare ID is

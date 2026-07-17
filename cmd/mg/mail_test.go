@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -884,4 +885,180 @@ func mailboxExistsOnDisk(t *testing.T, env []string, agent string) bool {
 	t.Helper()
 	info, err := os.Stat(filepath.Join(homeOf(t, env), ".macguffin", "mail", agent))
 	return err == nil && info.IsDir()
+}
+
+// splitReadOutput splits `mg mail read` output into its header block and the
+// body beneath, at the blank line that separates them. Tests measure the body
+// they get back rather than restating the body they sent: a length header that
+// merely echoes a constant the test also hard-codes proves nothing about the
+// bytes on the wire.
+func splitReadOutput(t *testing.T, out string) (header, body string) {
+	t.Helper()
+	h, b, ok := strings.Cut(out, "\n\n")
+	if !ok {
+		t.Fatalf("read output has no header/body separator:\n%s", out)
+	}
+	return h, b
+}
+
+// TestCLI_MailReadLengthHeaderMatchesBody: the Body: header's line and byte
+// counts describe the body actually printed beneath it. The counts are checked
+// against the emitted body, not against the sent one, so a header that lies
+// (off-by-one lines, byte count including the headers) fails here.
+func TestCLI_MailReadLengthHeaderMatchesBody(t *testing.T) {
+	bin, env := mailInit(t)
+
+	// A body with the shapes that break naive counting: blank lines, a line
+	// with no trailing newline at the end, and multi-byte runes (the header
+	// promises bytes, not characters — a reader budgets bytes).
+	sent := "first line\n\nthird after a blank\n\nfinal — no trailing newline"
+	if _, _, err := runMail(t, bin, env, "send", "mayor", "--from=pm-pogo", "--subject=ruling", "--body="+sent); err != nil {
+		t.Fatalf("seed send failed: %v", err)
+	}
+	id := soleMsgID(t, env, "mayor")
+
+	out, _, err := runMail(t, bin, asAgent(env, "mayor"), "read", "mayor/"+id)
+	if err != nil {
+		t.Fatalf("read failed: %v\n%s", err, out)
+	}
+
+	header, body := splitReadOutput(t, out)
+
+	// Measure what was actually printed. Printf terminates the body with a
+	// newline, so strip exactly that one to get the body itself.
+	gotBody := strings.TrimSuffix(body, "\n")
+	wantLines := strings.Count(gotBody, "\n") + 1
+	wantBytes := len(gotBody)
+
+	want := fmt.Sprintf("Body: %d lines / %d bytes", wantLines, wantBytes)
+	if !strings.Contains(header, want) {
+		t.Errorf("header does not describe the body it printed:\nwant %q\nheader:\n%s", want, header)
+	}
+
+	// And the counts must be the real ones, not merely self-consistent with a
+	// body the CLI mangled on the way out.
+	if gotBody != sent {
+		t.Fatalf("body round-trip changed:\n sent %q\n got  %q", sent, gotBody)
+	}
+	if wantBytes != len(sent) {
+		t.Errorf("byte count %d, want %d (len of the sent body)", wantBytes, len(sent))
+	}
+	if wantLines != 5 {
+		t.Errorf("line count %d, want 5", wantLines)
+	}
+}
+
+// TestCLI_MailReadLengthHeaderSurvivesHead: the whole point of the header's
+// position. A reader piping through `head -N` still sees the full length, so a
+// body cut at N is a visible drop rather than a silent one. This is the
+// mg-8a44 near-miss: a 3-part ruling cut mid-way, the recipient never learning
+// an assignment existed. A footer would be cut by the same head.
+func TestCLI_MailReadLengthHeaderSurvivesHead(t *testing.T) {
+	bin, env := mailInit(t)
+
+	// Long enough that any plausible head -N cuts it.
+	var sb strings.Builder
+	for i := 0; i < 80; i++ {
+		fmt.Fprintf(&sb, "line %d of the ruling\n", i)
+	}
+	sb.WriteString("ASSIGNMENT: the part a head -N drops")
+	if _, _, err := runMail(t, bin, env, "send", "mayor", "--from=pm-pogo", "--subject=ruling", "--body="+sb.String()); err != nil {
+		t.Fatalf("seed send failed: %v", err)
+	}
+	id := soleMsgID(t, env, "mayor")
+
+	out, _, err := runMail(t, bin, asAgent(env, "mayor"), "read", "mayor/"+id)
+	if err != nil {
+		t.Fatalf("read failed: %v\n%s", err, out)
+	}
+
+	const n = 5
+	headed := strings.SplitN(out, "\n", n+1)
+	if len(headed) <= n {
+		t.Fatalf("read output is only %d lines; nothing for head -%d to cut", len(headed), n)
+	}
+	headed = headed[:n] // exactly what `mg mail read <id> | head -5` shows
+
+	var lengthLine string
+	for _, line := range headed {
+		if strings.HasPrefix(line, "Body: ") {
+			lengthLine = line
+		}
+	}
+	if lengthLine == "" {
+		t.Fatalf("head -%d dropped the length header — it must sit above the body:\n%s", n, strings.Join(headed, "\n"))
+	}
+
+	// The signal is only worth anything if it contradicts the truncated view:
+	// the header must report more lines than head -N left behind.
+	var claimed int
+	if _, err := fmt.Sscanf(lengthLine, "Body: %d lines /", &claimed); err != nil {
+		t.Fatalf("length header %q not parseable: %v", lengthLine, err)
+	}
+	if claimed != 81 {
+		t.Errorf("header claims %d lines, want 81", claimed)
+	}
+	if claimed <= n {
+		t.Errorf("header claims %d lines but head -%d showed %d — no drop is visible", claimed, n, n)
+	}
+
+	// The dropped payload really was dropped: the header is the only trace.
+	if strings.Contains(strings.Join(headed, "\n"), "ASSIGNMENT") {
+		t.Fatal("head -5 did not actually truncate the body; the test proves nothing")
+	}
+}
+
+// TestCLI_MailReadLengthHeaderEmptyBody: an empty body reports 0 lines, not 1.
+// The header must not invent a line it did not print. 'mail send' refuses an
+// empty --body, so the message is staged on disk: a whitespace-only body, which
+// the parser trims to "", is the shape that reaches the printer.
+func TestCLI_MailReadLengthHeaderEmptyBody(t *testing.T) {
+	bin, env := mailInit(t)
+
+	// Seed a normal message to create the mailbox, then stage the body-less one
+	// beside it in new/.
+	if _, _, err := runMail(t, bin, env, "send", "mayor", "--from=pm-pogo", "--subject=seed", "--body=seed"); err != nil {
+		t.Fatalf("seed send failed: %v", err)
+	}
+	id := "1784266331800113000.1.1"
+	staged := filepath.Join(mailboxDir(t, env, "mayor", "new"), id)
+	if err := os.WriteFile(staged, []byte("From: pm-pogo\nSubject: subject-only\nDate: d\n\n   \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, err := runMail(t, bin, asAgent(env, "mayor"), "read", "mayor/"+id)
+	if err != nil {
+		t.Fatalf("read failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Body: 0 lines / 0 bytes") {
+		t.Errorf("empty body should report 0 lines / 0 bytes:\n%s", out)
+	}
+}
+
+// TestBodyMetrics covers the counting rule directly, including the shapes the
+// end-to-end tests cannot easily stage.
+func TestBodyMetrics(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		body      string
+		wantLines int
+		wantBytes int
+	}{
+		{"empty", "", 0, 0},
+		{"single line", "hello", 1, 5},
+		{"two lines", "a\nb", 2, 3},
+		{"interior blank line", "a\n\nb", 3, 4},
+		{"multi-byte runes counted as bytes", "é—", 1, 5},
+		// Bodies are stored trimmed, so a trailing newline should not reach
+		// bodyMetrics; if one ever does, it must not conjure an extra line.
+		{"trailing newline", "a\n", 2, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lines, bytes := bodyMetrics(tc.body)
+			if lines != tc.wantLines || bytes != tc.wantBytes {
+				t.Errorf("bodyMetrics(%q) = %d lines / %d bytes, want %d / %d",
+					tc.body, lines, bytes, tc.wantLines, tc.wantBytes)
+			}
+		})
+	}
 }

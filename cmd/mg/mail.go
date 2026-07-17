@@ -343,6 +343,15 @@ MSG-ID is exactly the token printed by 'mg mail list AGENT' (the part after
 another agent's mailbox is refused unless --force, because it marks the message
 read and hides it from that agent's unread list.
 
+The header block carries the body's length beside From/Subject/Date:
+
+  Body: 47 lines / 3165 bytes
+
+The counts cover the body alone, not the headers above it. They sit at the top
+so that a reader piping through 'head -N' — as agents do, to protect a finite
+context window — can see that the body runs past their view. A body cut at N is
+then a visible drop rather than a silent one.
+
 With --json the message is emitted as a single object {id,from,subject,date,
 read,body} instead of the human-formatted headers-and-body.`,
 	Args: usageArgs(cobra.RangeArgs(1, 2)),
@@ -379,9 +388,31 @@ read,body} instead of the human-formatted headers-and-body.`,
 			})
 		}
 
-		fmt.Printf("From: %s\nSubject: %s\nDate: %s\n\n%s\n", msg.From, msg.Subject, msg.Date, msg.Body)
+		lines, bytes := bodyMetrics(msg.Body)
+		fmt.Printf("From: %s\nSubject: %s\nDate: %s\nBody: %d lines / %d bytes\n\n%s\n",
+			msg.From, msg.Subject, msg.Date, lines, bytes, msg.Body)
 		return nil
 	},
+}
+
+// bodyMetrics measures the body exactly as 'mail read' prints it, so a reader
+// who pipes the output through 'head -N' can compare N against the line count
+// and see that their view stopped short. It belongs in the header block, above
+// the body: a footer is cut by the same 'head' it would warn about, so it
+// disappears precisely when it is needed (mg-8a44).
+//
+// The counts describe the body alone, not the file on disk: the header lines
+// and the blank separator are what the reader can already see, and a byte count
+// that silently included them would not match the body it labels.
+//
+// Body is stored trimmed, so it never ends in a newline and Printf supplies the
+// final one; every line is therefore newline-terminated on the wire and the
+// line count is separator count + 1. An empty body prints no line at all.
+func bodyMetrics(body string) (lines, bytes int) {
+	if body == "" {
+		return 0, 0
+	}
+	return strings.Count(body, "\n") + 1, len(body)
 }
 
 // jsonRefs normalizes a nil References slice to an empty one so the --json
