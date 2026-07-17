@@ -26,7 +26,35 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
   nothing; it shares none of the sweep's selection logic and has no fallback
   into it, so a bad ID can only ever be an error, never a wider archive.
 
+- **`mg unarchive --status=<s>` names the status to restore to (mg-a532).** It
+  is both the way past the refusal below when the store cannot say what an item
+  was, and the way to deliberately redirect an item somewhere other than where
+  it came from. Valid targets: `available`, `done`, `pending`, `shelved`.
+  `claimed` is rejected on purpose — a claim carries an owning PID, and
+  unarchive would have to invent one; restore to `available` and run `mg claim`
+  to get a real claim instead of a forged one.
+
 ### Fixed
+
+- **`mg unarchive` restored to `available` instead of the prior status
+  (mg-a532).** The archive→unarchive round-trip was not state-preserving, and
+  the state it silently invented was the one that puts an item back in the
+  dispatch loop's view: an accidentally-archived `done` item came back looking
+  like fresh work. This bit a real `gh-issue` gate carrier that was `done` and
+  holding a gate open for a human decision — restored as `available` and tagged
+  `gh-issue`, it was primed to be re-triaged and re-ack a reporter a human had
+  already acked. The gate survived only because the operator knew to re-set the
+  status by hand. Unarchive now recovers the prior status from the event log's
+  `work.archive` record and restores it faithfully.
+
+  Where the log cannot say — it was rotated away, or the file was moved into
+  `archive/` by hand — unarchive **refuses** (`conflict` / `unknown_prior_status`,
+  exit 4), names the item, and tells the caller to pass `--status`. It does not
+  guess, and it does not infer from tags, dates, or content: a
+  wrong-but-plausible restore is worse than a refusal, because unarchive is run
+  by someone mid-recovery who will not audit the result. A refusal moves
+  nothing, so the item stays recoverable. The refusal is conditional — a normal
+  round-trip still restores without any flag.
 
 - **`mg archive <id>` silently ignored the ID and exited 0 (mg-322f).** The
   command declared no `Args` validator, so cobra's default arity accepted the

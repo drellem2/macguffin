@@ -2766,16 +2766,30 @@ func TestCLI_Unarchive(t *testing.T) {
 	if !strings.Contains(string(out), "Unarchived "+id) {
 		t.Errorf("unarchive output should mention 'Unarchived %s', got %q", id, out)
 	}
+	if !strings.Contains(string(out), "to done") {
+		t.Errorf("unarchive output should name the status it restored to, got %q", out)
+	}
 
-	// Verify the item is now available
+	// The item was done when it was archived, so it must come back done — not
+	// available, which would hand finished work back to the dispatch loop.
+	cmd = exec.Command(bin, "list", "--status=done")
+	cmd.Env = env
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("mg list --status=done failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), id) {
+		t.Errorf("item %s should be in done after unarchive, got:\n%s", id, out)
+	}
+
 	cmd = exec.Command(bin, "list", "--status=available")
 	cmd.Env = env
 	out, err = cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("mg list --status=available failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(string(out), id) {
-		t.Errorf("item %s should be in available after unarchive, got:\n%s", id, out)
+	if strings.Contains(string(out), id) {
+		t.Errorf("item %s must not be restored to available: it was done when archived, got:\n%s", id, out)
 	}
 
 	// Unarchiving again should fail (no longer archived)
@@ -2787,6 +2801,74 @@ func TestCLI_Unarchive(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "not archived") {
 		t.Errorf("error should mention 'not archived', got %q", out)
+	}
+}
+
+// TestCLI_UnarchiveRefusesWithoutPriorStatus covers the recovery path when the
+// store cannot say what the item was: unarchive refuses and names the flag,
+// rather than picking a status for a caller who is mid-incident and will not
+// audit the result. The refusal is conditional — TestCLI_Unarchive above shows
+// the same command succeeding when the prior status IS known.
+func TestCLI_UnarchiveRefusesWithoutPriorStatus(t *testing.T) {
+	tmpHome := t.TempDir()
+	bin := buildBinary(t)
+	env := append(os.Environ(), "HOME="+tmpHome)
+
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command(bin, args...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	if out, err := run("init"); err != nil {
+		t.Fatalf("mg init failed: %v\n%s", err, out)
+	}
+	out, err := run("new", "--type=task", "Gate carrier")
+	if err != nil {
+		t.Fatalf("mg new failed: %v\n%s", err, out)
+	}
+	id := strings.TrimPrefix(strings.Split(out, ":")[0], "Created ")
+
+	for _, args := range [][]string{{"claim", id}, {"done", id}, {"archive", "--days=0"}} {
+		if out, err := run(args...); err != nil {
+			t.Fatalf("mg %s failed: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+
+	// Rotate the event log away: now nothing records what the item was.
+	if err := os.Remove(filepath.Join(tmpHome, ".macguffin", "events.jsonl")); err != nil {
+		t.Fatalf("removing event log: %v", err)
+	}
+
+	out, err = run("unarchive", id)
+	if err == nil {
+		t.Fatalf("expected mg unarchive to refuse without a prior-status record, got:\n%s", out)
+	}
+	if code := exitCodeOf(err); code != 4 {
+		t.Errorf("exit code = %d, want 4 (conflict); output:\n%s", code, out)
+	}
+	if !strings.Contains(out, "--status") {
+		t.Errorf("refusal should tell the caller to pass --status, got %q", out)
+	}
+
+	// The refusal must leave the item where it was, still recoverable.
+	if out, err := run("list", "--status=available"); err != nil {
+		t.Fatalf("mg list failed: %v\n%s", err, out)
+	} else if strings.Contains(out, id) {
+		t.Fatalf("refused unarchive still moved %s into available:\n%s", id, out)
+	}
+
+	// Naming the status explicitly is the way through.
+	if out, err := run("unarchive", id, "--status=done"); err != nil {
+		t.Fatalf("mg unarchive --status=done failed: %v\n%s", err, out)
+	} else if !strings.Contains(out, "to done") {
+		t.Errorf("output should confirm the restored status, got %q", out)
+	}
+	if out, err := run("list", "--status=done"); err != nil {
+		t.Fatalf("mg list failed: %v\n%s", err, out)
+	} else if !strings.Contains(out, id) {
+		t.Errorf("item %s should be in done after --status=done, got:\n%s", id, out)
 	}
 }
 

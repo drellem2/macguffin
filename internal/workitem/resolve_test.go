@@ -454,7 +454,7 @@ func TestAmbiguousID_IsLoudEverywhere(t *testing.T) {
 		{"done", "claimed", id + ".md.991", "pending", func(root string) error { _, _, err := Done(root, id, nil); return err }},
 		{"reopen", "done", id + ".md", filepath.Join("archive", "2026-05"), func(root string) error { _, err := Reopen(root, id); return err }},
 		{"unshelve", "shelved", id + ".md", "pending", func(root string) error { _, err := Unshelve(root, id); return err }},
-		{"unarchive", "available", id + ".md", "pending", func(root string) error { _, err := Unarchive(root, id); return err }},
+		{"unarchive", "available", id + ".md", "pending", func(root string) error { _, _, err := Unarchive(root, id, ""); return err }},
 	}
 
 	for _, tc := range cases {
