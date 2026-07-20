@@ -107,6 +107,18 @@ func Update(root, id string, fields UpdateField) (*Item, error) {
 		}
 	}
 
+	// One fact, one marker (see workflowmarker.go). Checked on the POST-update
+	// body and tags, because either half can be edited independently: an
+	// `--add-tags=gh-issue` onto an unmarked body, or a --body rewrite that
+	// drops the carrier block from an already-tagged item, both reintroduce the
+	// divergence that mg-560d nearly shipped. Runs before the write, so a
+	// refusal leaves the stored item untouched.
+	tags, err := reconcileWorkflowMarkers(composeBody(item), item.Tags)
+	if err != nil {
+		return nil, err
+	}
+	item.Tags = tags
+
 	content := Render(item)
 	if err := os.WriteFile(itemPath, []byte(content), 0o644); err != nil {
 		return nil, ioErr(fmt.Sprintf("%s: could not be saved: %s", id, fsErrText(err)))

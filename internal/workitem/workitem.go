@@ -173,6 +173,16 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 			opt(item)
 		}
 
+		// One fact, one marker: a workflow tag and the body's leading
+		// `workflow:` line must agree, and the body is the source of truth
+		// (see workflowmarker.go). Refuses BEFORE any write, so a rejected
+		// filing leaves nothing behind.
+		tags, err := reconcileWorkflowMarkers(composeBody(item), item.Tags)
+		if err != nil {
+			return nil, err
+		}
+		item.Tags = tags
+
 		// Layer 2: atomic, non-truncating create.
 		path := filepath.Join(dir, id+".md")
 		if err := writeNew(path, Render(item)); err != nil {
@@ -214,6 +224,26 @@ func writeNew(path, content string) error {
 }
 
 // Render serialises an Item back to markdown with YAML frontmatter.
+// composeBody returns the body EXACTLY as it will be persisted, including the
+// "# Title" heading that is generated when the body does not already carry one.
+//
+// This is split out of Render because the stored body is not always the body the
+// caller supplied, and anything validating the body has to inspect the stored
+// form or it is checking a string that never hits disk. In particular the
+// gh-issue carrier block sits at the top of the body and the generated heading
+// is inserted above it — see reconcileWorkflowMarkers in workflowmarker.go.
+func composeBody(item *Item) string {
+	body := item.Body
+	// If body is empty or doesn't start with the title heading, generate it
+	if body == "" || !strings.Contains(body, "# "+item.Title) {
+		body = fmt.Sprintf("\n# %s\n", item.Title)
+		if item.Body != "" {
+			body += item.Body
+		}
+	}
+	return body
+}
+
 func Render(item *Item) string {
 	depsLine := "[]"
 	if len(item.Depends) > 0 {
@@ -250,14 +280,7 @@ func Render(item *Item) string {
 		tagsLine = fmt.Sprintf("tags: [%s]\n", strings.Join(item.Tags, ", "))
 	}
 
-	body := item.Body
-	// If body is empty or doesn't start with the title heading, generate it
-	if body == "" || !strings.Contains(body, "# "+item.Title) {
-		body = fmt.Sprintf("\n# %s\n", item.Title)
-		if item.Body != "" {
-			body += item.Body
-		}
-	}
+	body := composeBody(item)
 
 	return fmt.Sprintf("---\nid: %s\ntype: %s\ncreated: %s\ncreator: %s\ndepends: %s\n%s%s%s%s%s%s---\n%s",
 		item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, depsLine, tagsLine, repoLine, assigneeLine, priorityLine, branchLine, budgetLine, body)

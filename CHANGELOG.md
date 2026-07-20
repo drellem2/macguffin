@@ -14,6 +14,34 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ## [Unreleased]
 
+### Fixed
+
+- **A workflow tag and its body carrier can no longer disagree (mg-5d4e).**
+  `mg new --tags=gh-issue` with no `workflow: gh-issue` line in the body used to
+  file successfully. Dispatch routes on the **body** marker, not the tag, so the
+  item went to the *default build template* — meaning a build polecat opening a
+  PR against an externally-reported GitHub issue with **no human gate**, the very
+  review gate all reporter-facing output is supposed to pass through. Caught by
+  hand on mg-560d (2026-07-20); hand-catching is not a control.
+
+  The defect was two markers for one fact with only one of them load-bearing. The
+  tag could not simply be retired — `mg list --tag=gh-issue` is the workflow's
+  board query — so the two are now *welded*, with the body as the single source
+  of truth:
+
+  - body declares the workflow, tag missing → **the tag is derived** and added;
+  - tag claims a workflow the body does not declare → **refused** (exit 2);
+  - tag and body name different workflows → **refused**;
+  - carrier block present but buried below prose → **refused** (dispatch would
+    not see it, though `mg show` makes it look correctly marked).
+
+  mg deliberately will not repair the second case by injecting a carrier block:
+  `stage:` and `gh:` name a state-machine position and a real issue, and a
+  fabricated `gh:` ref would aim a build polecat at the wrong issue — worse than
+  refusing. Enforcement lives in `internal/workitem` rather than in the `new`
+  command, so `mg edit --add-tags=gh-issue` and body rewrites that drop the
+  carrier are covered by the same invariant, as is any write path added later.
+
 ### Added
 
 - **`--body-file <path>` on `mg mail send`, `mg new` and `mg edit` (mg-7850).**

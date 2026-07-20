@@ -54,6 +54,20 @@ regardless of the assignee. Polecats are never named in advance, so they
 cannot be assigned ahead of time; the assignee is the durable owner who
 decides whether to dispatch the work, hold it, or close it.
 
+Workflow tags are welded to the body. A tag that names a workflow (currently
+just 'gh-issue') asserts the same fact as the body's leading 'workflow:' line,
+but only the body line is what dispatch routes on. So the body is the single
+source of truth: declaring the workflow in the body adds the tag for you, while
+passing the tag without declaring it in the body is refused rather than filed as
+an item that would silently route to the default build template. mg will not
+fill in the rest of the carrier block ('stage:', 'gh:') — it cannot know the
+stage or the issue, and guessing a 'gh:' ref would aim a builder at the wrong
+issue. The block belongs at the top of the body, ahead of any prose:
+
+    workflow: gh-issue
+    stage: triage
+    gh: <owner>/<repo>#<n>
+
 The --prefix flag overrides the work item ID prefix for this call only.
 It is not persisted to workspace config (see 'mg init --prefix=...' for
 the workspace-wide default). Useful for filing items under a different

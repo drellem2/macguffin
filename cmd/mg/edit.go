@@ -49,7 +49,14 @@ item, not the agent that runs the work. Substantive work is performed by
 an ephemeral polecat (named after the work-item ID at spawn time)
 regardless of the assignee. Polecats are never named in advance, so they
 cannot be assigned ahead of time; the assignee is the durable owner who
-decides whether to dispatch the work, hold it, or close it.`,
+decides whether to dispatch the work, hold it, or close it.
+
+Workflow tags stay welded to the body across edits, and the check runs on the
+resulting item rather than on the flags: adding a workflow tag (e.g.
+--add-tags=gh-issue) to an item whose body does not declare that workflow is
+refused, and so is a --body rewrite that drops the carrier block off an item
+still carrying the tag. Advancing 'stage:' by rewriting the body is unaffected —
+keep the carrier block at the top. See 'mg new --help' for the block's shape.`,
 	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := resolveRoot()
