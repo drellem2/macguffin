@@ -135,7 +135,7 @@ mg log                 # view snapshot history
 | `mg spend [--by AXIS] [--since D] [--window W] [--total] [--json]` | Aggregate token consumption per item, tag, repo, agent, etc. `--since` is a rolling duration (`24h`, `7d`); `--window today\|week` is calendar-anchored; `--total` prints the today/this-week/all-time headline. See [Token spend accounting](#token-spend-accounting). |
 | `mg snapshot` | Commit a git snapshot of current state. |
 | `mg log [args]` | Show snapshot history (passes args to `git log`). |
-| `mg sidecars [--json]` | Report every `<id>.result.json` that is not sitting beside its item's `.md`. Disposition is **not** mechanical, so it reports and never deletes: a stray whose bytes match the authoritative copy is redundant, but a stray that **differs** is either a superseded draft or the last surviving copy of content the authoritative file overwrote — indistinguishable from the filesystem, and this store has held both. See [Reading a result sidecar](#reading-a-result-sidecar). |
+| `mg sidecars [--json]` | Report every `<id>.result.json` that is not sitting beside its item's `.md`, **classified by content**: `identical`, `equivalent` (same JSON re-serialised), `subset` (names the superset and the keys only it holds), `conflict` (names every key in disagreement), `opaque`, or `unknown` (a file could not be *read* — a failed probe, never reported as a difference). Reports and never deletes; a `subset` verdict is advice, not an instruction to keep the superset. See [Reading a result sidecar](#reading-a-result-sidecar). |
 | `mg schema` | Dump the full command tree as one JSON document (command names, use, flags, and a `mutates`/`idempotent` hint per command) for agent/tooling consumers. Frozen, additive-only shape versioned by `schema_version` (see [schema contract](#mg-schema-contract)). |
 | `mg version` / `mg --version` / `mg -v` | Print version. Release builds include commit + date build metadata (e.g. `mg v0.1.3 (abc1234, 2026-07-08)`). |
 
@@ -211,6 +211,26 @@ Run `mg sidecars` to find strays left behind by older versions. Note that
 claimed items carry a PID suffix (`<id>.md.<pid>`), so "sidecar with no
 matching `<id>.md`" is not a usable test for orphanhood in `claimed/` — use
 `mg sidecars`, which resolves the item rather than pattern-matching filenames.
+
+Each stray is compared by **content**, not by bytes, because the safe action
+differs by case and a single `differs` verdict forces the operator to open both
+files — which is where reconciliation errors come from:
+
+```
+  ~/.macguffin/work/claimed/mg-a6c9.result.json
+      item is archived; vs ~/.macguffin/work/archive/2026-07/mg-a6c9.result.json
+      SUBSET — the authoritative copy is the superset; it agrees on every shared key
+      only in the authoritative copy: branch, completed_by, mr
+      mechanically mergeable: keeping the authoritative copy loses nothing the stray holds
+      but confirm the subset is not a TRUNCATION before discarding it
+```
+
+Naming the keys is the point: `differs` tells you to look, `conflict: branch,
+completed_by, mr` tells you what you are choosing between. Two verdicts are not
+differences at all — `equivalent` is the same object re-serialised (common,
+since anything through `encoding/json` normalises key order) and needs no human,
+and `unknown` means a file could not be **read**, which is a failed probe rather
+than a finding. The tool classifies and never merges or deletes.
 
 Work items are Markdown files with YAML frontmatter — human-readable,
 machine-parseable, and diffable. Claiming is a single `rename(2)` syscall:

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/drellem2/macguffin/internal/workitem"
 	"github.com/spf13/cobra"
@@ -29,11 +30,23 @@ and use that explicit path:
 
     mg show <id> --json | jq -r .status     # then <status>/<id>.result.json
 
-DISPOSITION IS NOT MECHANICAL. A stray whose bytes match the authoritative copy
-is redundant and safe to delete. A stray whose bytes DIFFER is either a
-superseded draft or the last surviving copy of content the authoritative file
-overwrote — this store has held both — so a differing stray is reported for a
-human to judge and is never presented as safe to remove.
+DISPOSITION IS NOT MECHANICAL, so each stray is classified by CONTENT and the
+verdict names what to do:
+
+    identical   same bytes; redundant, safe to delete
+    equivalent  same JSON, re-serialised (key order/whitespace); safe to delete
+    subset      one side's keys contain the other's and they agree on the
+                overlap; names the SUPERSET and the keys only it holds
+    conflict    each side holds something the other lacks, or they disagree on
+                a shared key; names every key in disagreement
+    opaque      bytes differ and a side is not a JSON object; compare by hand
+    unknown     a file could not be READ — this is a failed probe, not a
+                finding, and it is never reported as a difference
+
+CLASSIFICATION IS ADVICE; RECONCILIATION STAYS DELIBERATE. Nothing here merges
+or deletes anything. A subset verdict is not an instruction to keep the
+superset: the subset relation can equally be the artefact of one side having
+been TRUNCATED, and only a reader who opens both files can tell those apart.
 
 Exit status is 0 whether or not strays are found; this is a report, not a gate.`,
 	Args: usageArgs(cobra.NoArgs),
@@ -65,8 +78,12 @@ Exit status is 0 whether or not strays are found; this is a report, not a gate.`
 					"item_status":          s.ItemStatus,
 					"authoritative":        s.Authoritative,
 					"authoritative_exists": s.AuthoritativeExists,
-					"differs":              s.Differs,
+					"differs":              s.Differs(),
 					"redundant":            s.Redundant(),
+					"relation":             string(s.Comparison.Relation),
+					"superset":             s.Comparison.Superset,
+					"differing_keys":       keysOrEmpty(s.Comparison.Keys),
+					"note":                 s.Comparison.Note,
 				})
 			}
 			enc := json.NewEncoder(os.Stdout)
@@ -88,12 +105,11 @@ Exit status is 0 whether or not strays are found; this is a report, not a gate.`
 			case !s.AuthoritativeExists:
 				fmt.Printf("      item is %s, but %s is MISSING\n", s.ItemStatus, s.Authoritative)
 				fmt.Printf("      the only copy of this result; DO NOT DELETE\n")
-			case s.Differs:
-				fmt.Printf("      item is %s; differs from %s\n", s.ItemStatus, s.Authoritative)
-				fmt.Printf("      superseded draft OR surviving content — compare both before deciding\n")
 			default:
-				fmt.Printf("      item is %s; identical to %s\n", s.ItemStatus, s.Authoritative)
-				fmt.Printf("      redundant, safe to delete\n")
+				fmt.Printf("      item is %s; vs %s\n", s.ItemStatus, s.Authoritative)
+				for _, line := range verdictLines(s.Comparison) {
+					fmt.Printf("      %s\n", line)
+				}
 			}
 			fmt.Println()
 		}
@@ -101,6 +117,59 @@ Exit status is 0 whether or not strays are found; this is a report, not a gate.`
 		fmt.Println("    mg show <id> --json | jq -r .status")
 		return nil
 	},
+}
+
+// keysOrEmpty keeps the JSON contract stable: differing_keys is always an
+// array, never null, so a consumer can iterate it without a nil check.
+func keysOrEmpty(keys []string) []string {
+	if keys == nil {
+		return []string{}
+	}
+	return keys
+}
+
+// verdictLines renders a comparison as the verdict plus the action it implies.
+// Every branch says what to DO — a classification an operator has to interpret
+// is the binary "differs" again with more words.
+func verdictLines(c workitem.SidecarComparison) []string {
+	switch c.Relation {
+	case workitem.RelationIdentical:
+		return []string{"IDENTICAL — same bytes", "redundant, safe to delete"}
+	case workitem.RelationEquivalent:
+		return []string{
+			"EQUIVALENT — same JSON, different key order or whitespace",
+			"redundant, safe to delete; no human judgement needed",
+		}
+	case workitem.RelationSubset:
+		super, other := "authoritative copy", "stray"
+		if c.Superset == workitem.SideStray {
+			super, other = "stray", "authoritative copy"
+		}
+		return []string{
+			fmt.Sprintf("SUBSET — the %s is the superset; it agrees on every shared key", super),
+			fmt.Sprintf("only in the %s: %s", super, strings.Join(c.Keys, ", ")),
+			fmt.Sprintf("mechanically mergeable: keeping the %s loses nothing the %s holds", super, other),
+			"but confirm the subset is not a TRUNCATION before discarding it",
+		}
+	case workitem.RelationConflict:
+		return []string{
+			"CONFLICT — each copy holds content the other lacks, or they disagree",
+			fmt.Sprintf("keys in disagreement: %s", strings.Join(c.Keys, ", ")),
+			"needs a human: a wrong merge loses data silently",
+		}
+	case workitem.RelationOpaque:
+		return []string{
+			fmt.Sprintf("OPAQUE — contents differ but cannot be compared by key (%s)", c.Note),
+			"needs a human: compare both files by hand",
+		}
+	case workitem.RelationUnknown:
+		return []string{
+			fmt.Sprintf("UNKNOWN — could not compare (%s)", c.Note),
+			"this is a FAILED PROBE, not a finding; fix the read before judging",
+		}
+	default:
+		return []string{fmt.Sprintf("UNKNOWN — unclassified relation %q", c.Relation)}
+	}
 }
 
 func init() {

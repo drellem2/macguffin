@@ -1,7 +1,6 @@
 package workitem
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,7 +48,7 @@ func moveResultSidecar(srcDir, dstDir, id string) error {
 // The sidecar is a companion to the .md and moveResultSidecar keeps the pair
 // together across every transition, so a stray is by definition a leftover from
 // a transition that predates that guarantee. What a stray is NOT, necessarily,
-// is a redundant copy — see Differs.
+// is a redundant copy — see Comparison.
 type StraySidecar struct {
 	ID       string // the work item the sidecar names
 	Path     string // absolute path to the stray .result.json
@@ -67,30 +66,37 @@ type StraySidecar struct {
 	Authoritative       string
 	AuthoritativeExists bool
 
-	// Differs reports whether the stray's bytes differ from the authoritative
-	// copy. It is the field that decides disposition, and the reason this type
-	// exists rather than a bare list of paths.
+	// Comparison classifies how the stray relates to the authoritative copy.
+	// It is the field that decides disposition, and the reason this type exists
+	// rather than a bare list of paths.
 	//
-	// A stray that does NOT differ is a duplicate: deleting it loses nothing.
-	// A stray that DOES differ is one of two things that look identical from
-	// the filesystem and cannot be told apart mechanically:
+	// It is a classification and not a bit because "differs" collapsed four
+	// situations with four different safe actions (mg-dcb1): same content
+	// re-serialised, a mechanically mergeable subset, a genuine conflict, and
+	// an unreadable file. An operator handed one alarming token for all four
+	// has to open both files to learn which they have — and reconciling by eye
+	// is precisely what produced the mg-eb1e errors. See SidecarRelation.
 	//
-	//   - a SUPERSEDED draft, left behind when the item moved on and was
-	//     re-completed (harmless to delete, actively misleading to read); or
-	//   - the SURVIVING copy of content the authoritative file overwrote —
-	//     e.g. a gh-issue gate carrier whose payload was replaced by a short
-	//     status note during an archive/unarchive round-trip.
-	//
-	// Both were found in this store (mg-eb1e). Deleting every stray on sight
-	// destroys the second kind, so a differing stray is reported for a human to
-	// judge and never auto-resolved.
-	Differs bool
+	// Only meaningful when AuthoritativeExists; the zero value is the empty
+	// relation, which no output path reads.
+	Comparison SidecarComparison
 }
 
+// Differs reports whether the stray's content is known to differ from the
+// authoritative copy. Retained as the coarse question; read Comparison.Relation
+// to decide what to do, and note that an UNREADABLE stray is not a difference.
+func (s StraySidecar) Differs() bool { return s.Comparison.Differs() }
+
 // Redundant reports whether the stray is provably safe to delete: the
-// authoritative copy exists and is byte-identical, so the stray carries no
-// content that would be lost.
-func (s StraySidecar) Redundant() bool { return s.AuthoritativeExists && !s.Differs }
+// authoritative copy exists and provably holds the same content, so the stray
+// carries nothing that would be lost.
+//
+// "Same content" means byte-identical or JSON-equivalent — a stray that is the
+// same object re-serialised with different key order carries no information the
+// authoritative copy lacks. It deliberately does NOT include a subset relation:
+// keeping the superset is a judgement call, not a mechanical fact, because the
+// subset can be the artefact of one side having been truncated.
+func (s StraySidecar) Redundant() bool { return s.AuthoritativeExists && s.Comparison.SameContent() }
 
 // FindStraySidecars reports every result sidecar in the store that is not
 // beside its item's .md file.
@@ -173,11 +179,13 @@ func FindStraySidecars(root string) ([]StraySidecar, error) {
 			itemDir := filepath.Dir(matches[0].Path)
 			s.ItemStatus = matches[0].Status
 			s.Authoritative = filepath.Join(itemDir, resultSidecarName(id))
-			auth, err := os.ReadFile(s.Authoritative)
-			if err == nil {
+			// Presence and readability are separate questions. Stat answers
+			// "is there an authoritative copy at all"; a failure to READ either
+			// file is reported as RelationUnknown by the comparison, never as a
+			// difference and never as absence.
+			if _, err := os.Stat(s.Authoritative); err == nil {
 				s.AuthoritativeExists = true
-				stray, err := os.ReadFile(strayPath)
-				s.Differs = err != nil || !bytes.Equal(stray, auth)
+				s.Comparison = compareSidecarFiles(strayPath, s.Authoritative)
 			}
 			strays = append(strays, s)
 		}

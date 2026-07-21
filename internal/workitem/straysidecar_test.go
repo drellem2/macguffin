@@ -81,8 +81,16 @@ func TestFindStraySidecars_PositiveControl(t *testing.T) {
 	if !s.AuthoritativeExists {
 		t.Error("AuthoritativeExists = false, want true")
 	}
-	if !s.Differs {
-		t.Error("Differs = false, but the two files have different bytes")
+	if !s.Differs() {
+		t.Error("Differs() = false, but the two files hold different content")
+	}
+	// The two disagree on the value of a shared key: that is a conflict, and
+	// the operator must be told WHICH key they are choosing between.
+	if s.Comparison.Relation != RelationConflict {
+		t.Errorf("Relation = %q, want %q", s.Comparison.Relation, RelationConflict)
+	}
+	if len(s.Comparison.Keys) != 1 || s.Comparison.Keys[0] != "verdict" {
+		t.Errorf("Keys = %v, want [verdict]", s.Comparison.Keys)
 	}
 	if s.Redundant() {
 		t.Error("Redundant() = true for a differing stray; that would invite a destructive delete")
@@ -104,8 +112,11 @@ func TestFindStraySidecars_IdenticalIsRedundant(t *testing.T) {
 	if len(strays) != 1 {
 		t.Fatalf("expected 1 stray, got %d", len(strays))
 	}
-	if strays[0].Differs {
-		t.Error("Differs = true for byte-identical copies")
+	if strays[0].Differs() {
+		t.Error("Differs() = true for byte-identical copies")
+	}
+	if strays[0].Comparison.Relation != RelationIdentical {
+		t.Errorf("Relation = %q, want %q", strays[0].Comparison.Relation, RelationIdentical)
 	}
 	if !strays[0].Redundant() {
 		t.Error("Redundant() = false for an identical stray with the authoritative copy present")

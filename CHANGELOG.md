@@ -38,6 +38,46 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
   was a 171-byte status note left by an archive/unarchive round-trip. A
   delete-every-orphan sweep would have destroyed both.
 
+- **`mg sidecars` classifies a difference instead of reporting one bit
+  (mg-dcb1).** The verdict was binary, and `differs` covered four situations
+  with four *different* safe actions. An operator who gets one alarming token
+  for all four has to open both files to learn which they have — and
+  reconciling by eye is exactly what produced the mg-eb1e errors. Each stray is
+  now classified by content, and the verdict names what to do:
+
+  | verdict | meaning | action |
+  |---|---|---|
+  | `identical` | same bytes | redundant, safe to delete |
+  | `equivalent` | same JSON, re-serialised (key order/whitespace) | redundant, safe to delete; **no human needed** |
+  | `subset` | one side's keys contain the other's, agreeing on the overlap | names the **superset** and the keys only it holds |
+  | `conflict` | each side holds what the other lacks, or they disagree | names **every key in disagreement**; needs a human |
+  | `opaque` | bytes differ, a side is not a JSON object | compare by hand |
+  | `unknown` | a file could not be **read** | a failed probe, not a finding |
+
+  Naming the keys is the load-bearing part. `differs` tells an operator to
+  look; `conflict: branch, completed_by, mr` tells them *what they are choosing
+  between*, which is the difference between a decision and a guess. On the live
+  store the `mg-a6c9` stray now reports `subset`, names the archived copy as the
+  superset, and lists exactly the three keys a straight copy would have
+  destroyed.
+
+  Two of the four were not differences at all. `equivalent` is a **false
+  positive** under a byte comparison — anything round-tripping through
+  `encoding/json` normalises key order, so the tool was sending operators to
+  open two files that say the same thing. `unknown` is worse: an unreadable
+  stray reported as `differs`, i.e. a failed probe masquerading as a finding,
+  which is the same defect class this tool exists to catch. An errored probe and
+  a negative result no longer share a token. Presence and readability are now
+  separate questions on both sides, so an authoritative copy that exists but
+  cannot be read is no longer reported as `MISSING`.
+
+  **Classification is advice; reconciliation stays deliberate.** Nothing is
+  merged or deleted. A `subset` verdict is explicitly *not* an instruction to
+  keep the superset — the subset relation can equally be the artefact of one
+  side having been truncated, and only a reader who opens both files can tell
+  those apart. `--json` gains `relation`, `superset`, `differing_keys`, and
+  `note`; `differs` stays and is now false for `unknown`.
+
 - **`mg archive` refuses a done `type: design` item that nothing tracks
   (mg-12a0).** A design's output *is* a recommendation, so at the moment it is
   done the thing it recommends is undone by construction — and an archived item
