@@ -16,6 +16,28 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Added
 
+- **`mg sidecars` reports result sidecars that are not beside their item
+  (mg-eb1e).** Reading a result by glob is unsafe, because the lifecycle
+  directories expand in alphabetical order:
+
+      ls ~/.macguffin/work/*/mg-560d.result.json | head -1
+
+  returns a stray copy from `available/` or `claimed/` *ahead of* the real one
+  in `done/`, and nothing in the file says it is stale. `mg sidecars` resolves
+  each sidecar's item instead of pattern-matching filenames — necessary because
+  claimed items carry a PID suffix (`<id>.md.<pid>`), so "a `.result.json` with
+  no matching `<id>.md`" is not a usable orphan test in `claimed/`.
+
+  It **reports and never deletes**, which is the load-bearing decision. A stray
+  that is byte-identical to the authoritative copy is redundant; a stray that
+  *differs* is one of two things the filesystem cannot tell apart — a superseded
+  draft, or the last surviving copy of content the authoritative file
+  overwrote. Both were found in the live store: `mg-a6c9`'s stray held the
+  polecat's verdict while the archived copy was a 101-byte refinery stub, and
+  `mg-07ba`'s held a gh-issue gate carrier's full payload while the `done/` copy
+  was a 171-byte status note left by an archive/unarchive round-trip. A
+  delete-every-orphan sweep would have destroyed both.
+
 - **`mg archive` refuses a done `type: design` item that nothing tracks
   (mg-12a0).** A design's output *is* a recommendation, so at the moment it is
   done the thing it recommends is undone by construction — and an archived item

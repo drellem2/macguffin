@@ -100,6 +100,7 @@ type commandEffect struct {
 var commandEffects = map[string]commandEffect{
 	"mg":           {mutates: false, idempotent: true}, // root: prints usage
 	"mg schema":    {mutates: false, idempotent: true},
+	"mg sidecars":  {mutates: false, idempotent: true},
 	"mg version":   {mutates: false, idempotent: true},
 	"mg show":      {mutates: false, idempotent: true},
 	"mg list":      {mutates: false, idempotent: true},

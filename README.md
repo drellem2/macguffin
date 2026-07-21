@@ -135,6 +135,7 @@ mg log                 # view snapshot history
 | `mg spend [--by AXIS] [--since D] [--window W] [--total] [--json]` | Aggregate token consumption per item, tag, repo, agent, etc. `--since` is a rolling duration (`24h`, `7d`); `--window today\|week` is calendar-anchored; `--total` prints the today/this-week/all-time headline. See [Token spend accounting](#token-spend-accounting). |
 | `mg snapshot` | Commit a git snapshot of current state. |
 | `mg log [args]` | Show snapshot history (passes args to `git log`). |
+| `mg sidecars [--json]` | Report every `<id>.result.json` that is not sitting beside its item's `.md`. Disposition is **not** mechanical, so it reports and never deletes: a stray whose bytes match the authoritative copy is redundant, but a stray that **differs** is either a superseded draft or the last surviving copy of content the authoritative file overwrote — indistinguishable from the filesystem, and this store has held both. See [Reading a result sidecar](#reading-a-result-sidecar). |
 | `mg schema` | Dump the full command tree as one JSON document (command names, use, flags, and a `mutates`/`idempotent` hint per command) for agent/tooling consumers. Frozen, additive-only shape versioned by `schema_version` (see [schema contract](#mg-schema-contract)). |
 | `mg version` / `mg --version` / `mg -v` | Print version. Release builds include commit + date build metadata (e.g. `mg v0.1.3 (abc1234, 2026-07-08)`). |
 
@@ -184,6 +185,32 @@ gate — a consumer diffing the command surface for stability must **ignore** bo
 ├── log/                  # Append-only event log
 └── .git/                 # Optional: cold-path audit trail
 ```
+
+### Reading a result sidecar
+
+A completed item's result lives in `<id>.result.json` **beside that item's
+`.md`**, and it moves with the `.md` on every status transition. So the
+directory a sidecar sits in is part of its identity, and **globbing across
+statuses is unsafe**:
+
+```sh
+ls ~/.macguffin/work/*/mg-560d.result.json | head -1   # WRONG
+```
+
+Shell globs expand in alphabetical order, so `available/` and `claimed/` are
+returned **ahead of** `done/`. A stale copy left by a pre-`mg-ab67` transition
+wins, and it reads as current — there is nothing in the file saying otherwise.
+Ask where the item is, then use that explicit path:
+
+```sh
+status=$(mg show mg-560d --json | jq -r .status)       # RIGHT
+cat ~/.macguffin/work/"$status"/mg-560d.result.json
+```
+
+Run `mg sidecars` to find strays left behind by older versions. Note that
+claimed items carry a PID suffix (`<id>.md.<pid>`), so "sidecar with no
+matching `<id>.md`" is not a usable test for orphanhood in `claimed/` — use
+`mg sidecars`, which resolves the item rather than pattern-matching filenames.
 
 Work items are Markdown files with YAML frontmatter — human-readable,
 machine-parseable, and diffable. Claiming is a single `rename(2)` syscall:

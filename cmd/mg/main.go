@@ -85,6 +85,7 @@ func init() {
 	rootCmd.AddCommand(flowCmd)
 	rootCmd.AddCommand(spendCmd)
 	rootCmd.AddCommand(schemaCmd)
+	rootCmd.AddCommand(sidecarsCmd)
 
 	// Route cobra-generated flag errors (unknown flag, bad flag value) to the
 	// usage category (exit 2). Arg-count validators are routed via the
