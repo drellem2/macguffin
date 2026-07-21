@@ -124,18 +124,26 @@ var mailSendCmd = &cobra.Command{
 	Short: "Send a message to an agent",
 	Long: `Send a message to an agent's mailbox.
 
-The body comes from --body (inline) or --body-file (read from a file, "-" for
-stdin); the two are mutually exclusive and one is required.
+Reach for --body-file first. It reads the body verbatim ("-" for stdin), with
+no shell in the path at all. The canonical form is a QUOTED heredoc:
 
-Prefer --body-file for any body you care about arriving exactly. The shell
-expands backticks, $VAR and $(cmd) inside --body="..." before mg ever runs, so
-those terms are silently gone from the delivered message and mg still reports
-Delivered — mg receives the mangled string and cannot tell it from one you
-typed. --body-file reads the file's bytes verbatim, with no shell in the path:
+  mg mail send mayor --from=me --subject=s --body-file - <<'EOF'
+  body text with backticks and $VARS and $(cmd), all literal
+  EOF
 
-  mg mail send mayor --from=me --subject=s --body-file ./msg.md
+The quotes around 'EOF' are the entire property. <<'EOF' passes the bytes
+through untouched; an unquoted <<EOF expands backticks, $VAR and $(cmd)
+exactly as --body="..." does, silently reintroducing the bug. A file works the
+same way: --body-file ./msg.md.
 
-A --body-file that cannot be read is an error, never an empty body.
+--body is the inline-only shortcut, and stays correct for the many bodies that
+carry no shell metacharacters. When a body does carry them, the shell expands
+them before mg ever runs, so those terms are silently gone from the delivered
+message and mg still reports Delivered — mg receives the mangled string and
+cannot tell it from one you typed.
+
+The two flags are mutually exclusive and one is required. A --body-file that
+cannot be read is an error, never an empty body.
 
 The recipient's mailbox is created lazily on first delivery, so sending to a
 brand-new agent always succeeds (exit 0). When the recipient's mailbox did not

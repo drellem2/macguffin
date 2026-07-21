@@ -40,12 +40,24 @@ var newCmd = &cobra.Command{
 	Short:   "Create a new work item",
 	Long: `Create a new work item.
 
-The body comes from --body (inline) or --body-file (read from a file, "-" for
-stdin); the two are mutually exclusive. Prefer --body-file for any body whose
-exact text matters: the shell expands backticks, $VAR and $(cmd) inside
---body="..." before mg ever runs, so those terms land in the item silently
-gone. --body-file reads the file's bytes verbatim, with no shell in the path,
-and errors rather than filing an empty body if the file cannot be read.
+Reach for --body-file first. It reads the body verbatim ("-" for stdin), with
+no shell in the path at all. The canonical form is a QUOTED heredoc:
+
+  mg new --title="t" --body-file - <<'EOF'
+  body text with backticks and $VARS and $(cmd), all literal
+  EOF
+
+The quotes around 'EOF' are the entire property. <<'EOF' passes the bytes
+through untouched; an unquoted <<EOF expands backticks, $VAR and $(cmd)
+exactly as --body="..." does, silently reintroducing the bug. A file works the
+same way: --body-file ./body.md.
+
+--body is the inline-only shortcut, and stays correct for the many bodies that
+carry no shell metacharacters. When a body does carry them, the shell expands
+them before mg ever runs, so those terms land in the item silently gone.
+
+The two flags are mutually exclusive. A --body-file that cannot be read is an
+error, never an empty body.
 
 The --assignee flag names the agent that owns triage and routing for the
 item, not the agent that runs the work. Substantive work is performed by

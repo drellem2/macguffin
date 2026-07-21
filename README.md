@@ -86,12 +86,19 @@ mg list
 # Show a specific item
 mg show <id>
 
-# Send mail to an agent
-mg mail send <agent> --from=me --subject="Review needed" --body="Check the auth refactor."
+# Send mail to an agent. The QUOTED heredoc is the canonical form: <<'EOF'
+# passes the bytes through untouched. An unquoted <<EOF expands backticks,
+# $VAR and $(cmd) exactly as --body="..." does, reintroducing the bug.
+mg mail send <agent> --from=me --subject="Review needed" --body-file - <<'EOF'
+Check the auth refactor — `go vet ./...` is clean but $BUILD_TAG is unset.
+EOF
 
-# Compose the body in a file — the safe path for anything with backticks,
-# $VAR or $(cmd) in it, which the shell would eat inside --body="..."
+# A file works the same way
 mg mail send <agent> --from=me --subject="Review needed" --body-file ./msg.md
+
+# --body is the inline-only shortcut: fine when the body carries no shell
+# metacharacters, silently lossy when it does
+mg mail send <agent> --from=me --subject="Review needed" --body="Check the auth refactor."
 
 # Reply to a message, threading it to the original
 mg mail reply <agent>/<msg-id> --body="Looks good."
