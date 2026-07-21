@@ -42,9 +42,23 @@ func Done(root, id string, resultJSON json.RawMessage) (*Item, []*Item, error) {
 		return nil, nil, ioErr(fmt.Sprintf("%s: could not be completed: %s", id, fsErrText(err)))
 	}
 
+	// Carry any pre-existing sidecar forward with the .md. An item arriving here
+	// via done -> reopen -> done already has a result in claimed/ (put there by
+	// Reopen); without this move it is orphaned — a .result.json with no .md
+	// beside it, invisible to `mg show` and asserting a stale completion.
+	//
+	// Done is the only transition that may also WRITE a sidecar, so the move
+	// must come first: the fresh result below then supersedes the carried one at
+	// the destination. Reversing the order would clobber the new result with the
+	// stale one.
+	doneDir := filepath.Join(root, "work", "done")
+	if err := moveResultSidecar(filepath.Dir(srcPath), doneDir, id); err != nil {
+		return nil, nil, fmt.Errorf("moving result sidecar: %w", err)
+	}
+
 	// Write result sidecar if provided
 	if len(resultJSON) > 0 {
-		sidecarPath := filepath.Join(root, "work", "done", id+".result.json")
+		sidecarPath := filepath.Join(doneDir, resultSidecarName(id))
 		if err := os.WriteFile(sidecarPath, resultJSON, 0o644); err != nil {
 			return nil, nil, fmt.Errorf("writing result sidecar: %w", err)
 		}

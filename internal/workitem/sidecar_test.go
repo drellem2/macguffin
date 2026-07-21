@@ -189,6 +189,77 @@ func TestUnshelveMovesSidecar(t *testing.T) {
 	assertNoSidecarAt(t, root, "shelved", item.ID)
 }
 
+// TestDoneMovesSidecar_ReopenDoneRoundTrip is the positive control for mg-9795.
+//
+// Done is the only transition that may *write* a sidecar as well as carry one,
+// and for a long time it only wrote: it built its destination path directly and
+// never touched a sidecar already sitting in the origin directory. A
+// done -> reopen -> done round trip therefore left REV1 stranded in claimed/
+// (put there correctly by Reopen) while REV2 landed in done/, producing a
+// .result.json with no .md beside it — an orphan invisible to `mg show`.
+//
+// The assertion that matters is that the ORIGIN directory is empty of the
+// sidecar, not merely that the destination has one. The weaker
+// destination-only check passes against the broken code, which is precisely why
+// this survived mg-ab67's cleanup.
+func TestDoneMovesSidecar_ReopenDoneRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "mg-", "bug", "Done carries sidecar", nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := Claim(root, item.ID, 0); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if _, _, err := Done(root, item.ID, json.RawMessage(`{"branch":"rev1"}`)); err != nil {
+		t.Fatalf("Done (rev1): %v", err)
+	}
+
+	// Reopen carries REV1 back into claimed/ — this part already worked.
+	if _, err := Reopen(root, item.ID); err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	assertSidecarAt(t, root, "claimed", item.ID, `{"branch":"rev1"}`)
+
+	// The second Done must carry REV1 out of claimed/ before writing REV2.
+	if _, _, err := Done(root, item.ID, json.RawMessage(`{"branch":"rev2"}`)); err != nil {
+		t.Fatalf("Done (rev2): %v", err)
+	}
+
+	// Destination holds the fresh result: REV2 supersedes the carried REV1.
+	assertSidecarAt(t, root, "done", item.ID, `{"branch":"rev2"}`)
+	// The whole ticket: nothing left behind in the origin directory.
+	assertNoSidecarAt(t, root, "claimed", item.ID)
+}
+
+// TestDoneMovesSidecarWithoutNewResult covers the other half of the gap: a Done
+// with no result JSON at all. The old code wrote nothing and moved nothing, so
+// a pre-existing sidecar in claimed/ was orphaned *and* the completed item in
+// done/ lost its result entirely.
+func TestDoneMovesSidecarWithoutNewResult(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, err := Create(root, "mg-", "bug", "Done with no new result", nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := Claim(root, item.ID, 0); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	writeSidecarFile(t, root, "claimed", item.ID, `{"branch":"carried"}`)
+
+	if _, _, err := Done(root, item.ID, nil); err != nil {
+		t.Fatalf("Done: %v", err)
+	}
+
+	// With no fresh result to supersede it, the carried sidecar is the result.
+	assertSidecarAt(t, root, "done", item.ID, `{"branch":"carried"}`)
+	assertNoSidecarAt(t, root, "claimed", item.ID)
+}
+
 // TestTransitionsWithoutSidecarStayClean guards the no-op path: transitioning an
 // item that never had a result must not error nor conjure a stray sidecar.
 func TestTransitionsWithoutSidecarStayClean(t *testing.T) {

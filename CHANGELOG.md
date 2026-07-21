@@ -16,6 +16,45 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Fixed
 
+- **`mg done` now carries the result sidecar instead of only writing one
+  (mg-9795, recurrence of mg-ab67).** Every `.md` rename in `internal/workitem`
+  is paired with a `moveResultSidecar` call — nine of them — except `Done`,
+  which built its destination path directly and never touched a sidecar already
+  sitting in the origin directory. A `done → reopen → done` round trip therefore
+  stranded the first result in `claimed/`:
+
+  ```
+  work/done/<id>.result.json     REV2  (current)
+  work/claimed/<id>.result.json  REV1  (orphan — no .md beside it)
+  ```
+
+  An orphaned sidecar asserts a completion for an item that has moved on, is
+  invisible to `mg show`, and — because it records `workflow:`/`stage:` — reads
+  as a routing marker naming the wrong stage. Nothing in either repo reads
+  sidecar *contents* today, so this was a stale artifact a human or agent could
+  read and believe, not a live misroute; it is fixed on those merits. `Done` now
+  moves any pre-existing sidecar first, then writes the fresh result over it, so
+  the new result supersedes the carried one rather than being clobbered by it.
+  A `Done` with no `--result` at all previously both orphaned the old sidecar
+  and left the completed item with no result; it now carries the prior one
+  forward.
+
+  The regression control is the one that was missing: assert the **origin
+  directory is empty** of the sidecar, not merely that the destination has it.
+  The weaker destination-only check passes against the broken code, which is
+  exactly why eight correct callers and one missing one were indistinguishable
+  and why this survived mg-ab67's cleanup. Both new tests were confirmed to fail
+  before the fix.
+
+  **Process lesson, worth as much as the fix: an archived ticket cannot be the
+  tracker for undone work.** mg-ab67 was archived after its *cleanup* ran, with
+  its own body stating in capitals that the code fix was "STILL IN SCOPE". The
+  symptoms were tidied, the durable half was named and never done, and archiving
+  made the remaining scope invisible. Five fresh orphans in one night was the
+  bill. Existing orphans are left in place deliberately — they are cited as
+  evidence in open reports, and their disposition is a decision for a cleanup
+  pass, not a side effect of this one.
+
 - **A workflow tag and its body carrier can no longer disagree (mg-5d4e).**
   `mg new --tags=gh-issue` with no `workflow: gh-issue` line in the body used to
   file successfully. Dispatch routes on the **body** marker, not the tag, so the
