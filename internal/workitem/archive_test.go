@@ -31,7 +31,7 @@ func TestArchive(t *testing.T) {
 	os.Chtimes(donePath, old, old)
 
 	// Archive with 7-day threshold
-	archived, err := Archive(root, 7*24*time.Hour)
+	archived, _, err := Archive(root, 7*24*time.Hour)
 	if err != nil {
 		t.Fatalf("Archive: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestArchiveSkipsRecent(t *testing.T) {
 	}
 
 	// Don't backdate — item is fresh
-	archived, err := Archive(root, 7*24*time.Hour)
+	archived, _, err := Archive(root, 7*24*time.Hour)
 	if err != nil {
 		t.Fatalf("Archive: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestArchiveWithSidecar(t *testing.T) {
 	os.Chtimes(donePath, old, old)
 	os.Chtimes(sidecarPath, old, old)
 
-	archived, err := Archive(root, 7*24*time.Hour)
+	archived, _, err := Archive(root, 7*24*time.Hour)
 	if err != nil {
 		t.Fatalf("Archive: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestListArchived(t *testing.T) {
 	old := time.Now().Add(-10 * 24 * time.Hour)
 	os.Chtimes(donePath, old, old)
 
-	_, err = Archive(root, 7*24*time.Hour)
+	_, _, err = Archive(root, 7*24*time.Hour)
 	if err != nil {
 		t.Fatalf("Archive: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestArchivedItemReadable(t *testing.T) {
 	old := time.Now().Add(-10 * 24 * time.Hour)
 	os.Chtimes(donePath, old, old)
 
-	_, err = Archive(root, 7*24*time.Hour)
+	_, _, err = Archive(root, 7*24*time.Hour)
 	if err != nil {
 		t.Fatalf("Archive: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestArchiveEmpty(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	archived, err := Archive(root, 7*24*time.Hour)
+	archived, _, err := Archive(root, 7*24*time.Hour)
 	if err != nil {
 		t.Fatalf("Archive: %v", err)
 	}

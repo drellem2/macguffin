@@ -220,7 +220,7 @@ func TestEmitArchive(t *testing.T) {
 	}
 
 	// maxAge=0 archives everything in done/ regardless of age.
-	if _, err := Archive(root, 0); err != nil {
+	if _, _, err := Archive(root, 0); err != nil {
 		t.Fatalf("Archive: %v", err)
 	}
 
@@ -287,7 +287,7 @@ func TestEmitFullLifecycle(t *testing.T) {
 	if _, _, err := Done(root, item.ID, nil); err != nil {
 		t.Fatalf("Done: %v", err)
 	}
-	if _, err := Archive(root, 0); err != nil {
+	if _, _, err := Archive(root, 0); err != nil {
 		t.Fatalf("Archive: %v", err)
 	}
 

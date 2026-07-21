@@ -14,6 +14,47 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ## [Unreleased]
 
+### Added
+
+- **`mg archive` refuses a done `type: design` item that nothing tracks
+  (mg-12a0).** A design's output *is* a recommendation, so at the moment it is
+  done the thing it recommends is undone by construction — and an archived item
+  cannot be the tracker for undone work (the rule from mg-ab67, recurring as
+  mg-9795). Archiving one now fails with exit 4 and names the remedy:
+
+      mg archive <id> --successor <id-of-the-item-that-tracks-it>
+
+  which records a `successor:<id>` tag on the design *before* moving it, so the
+  archived record names its own tracker.
+
+  Two properties are load-bearing rather than incidental:
+
+  - **The satisfaction condition is structural, not textual.** Nothing scans
+    bodies for mentions of the id. A search cannot distinguish a thing from talk
+    about the thing — a body reading "unlike mg-2da4, this one…" mentions the id
+    and tracks nothing, which is a *false pass*, and a false pass here is silent
+    and permanent. Only the explicit tag counts; a tag naming a deleted item, or
+    the design itself, does not.
+  - **`--force` is unoffered.** Some designs are abandoned rather than
+    implemented, and that is a legitimate archive, so `--force` exists — but it
+    is named only in `mg archive --help` and the README, never in the refusal it
+    bypasses, and using it emits a `work.archive_forced` event recording which
+    guard was bypassed. An agent that hits a refusal mid-cleanup, at speed,
+    reaches for whatever the error message hands it; a guard whose failure text
+    teaches its own bypass is decorative.
+
+  The sweep form (`mg archive --days=N`) is not a way around this: it skips
+  guarded items, leaves them visible in `done/`, and names them on stderr.
+  `--successor`/`--force` are rejected on the sweep (exit 2) rather than
+  silently ignored or applied in bulk. `--dry-run` applies the same guard, so
+  the preview cannot promise an archive the real run will refuse.
+
+  The rule this enforces was extracted, written down, and violated by its own
+  author forty minutes later (mg-2da4, recovered by mg-158e) — and that author's
+  subsequent audit of its own archiving passed, because the audit grepped for
+  the phrase one earlier instance happened to use. Same conclusion as mg-7850
+  and mg-e0ca: a rule cannot hold what a mechanism can.
+
 ### Fixed
 
 - **`mg done` now carries the result sidecar instead of only writing one

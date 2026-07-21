@@ -42,7 +42,7 @@ func TestDoneListingExcludesArchivedViaBothPaths(t *testing.T) {
 	// Archived by the legacy --days=0 sweep. Create it alone first so the
 	// unfiltered sweep takes exactly this item and nothing else.
 	legacy := doneItem(t, root, "archived by legacy --days=0 sweep")
-	swept, err := Archive(root, 0)
+	swept, _, err := Archive(root, 0)
 	if err != nil {
 		t.Fatalf("Archive(root, 0): %v", err)
 	}
@@ -52,7 +52,7 @@ func TestDoneListingExcludesArchivedViaBothPaths(t *testing.T) {
 
 	// Archived by the targeted mg-322f path.
 	targeted := doneItem(t, root, "archived by targeted mg archive <id>")
-	if _, err := ArchiveItem(root, targeted.ID); err != nil {
+	if _, err := ArchiveItem(root, targeted.ID, ArchiveOpts{}); err != nil {
 		t.Fatalf("ArchiveItem(%s): %v", targeted.ID, err)
 	}
 

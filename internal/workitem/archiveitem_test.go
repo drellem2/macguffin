@@ -33,7 +33,7 @@ func TestArchiveItemArchivesNamedItem(t *testing.T) {
 
 	item := doneItem(t, root, "targeted")
 
-	got, err := ArchiveItem(root, item.ID)
+	got, err := ArchiveItem(root, item.ID, ArchiveOpts{})
 	if err != nil {
 		t.Fatalf("ArchiveItem: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestArchiveItemIsFresh(t *testing.T) {
 	item := doneItem(t, root, "brand new")
 
 	// The sweep would decline this item at the default threshold...
-	swept, err := Archive(root, 7*24*time.Hour)
+	swept, _, err := Archive(root, 7*24*time.Hour)
 	if err != nil {
 		t.Fatalf("Archive: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestArchiveItemIsFresh(t *testing.T) {
 	}
 
 	// ...but naming it explicitly must work.
-	if _, err := ArchiveItem(root, item.ID); err != nil {
+	if _, err := ArchiveItem(root, item.ID, ArchiveOpts{}); err != nil {
 		t.Fatalf("ArchiveItem on fresh item: %v", err)
 	}
 }
@@ -100,7 +100,7 @@ func TestArchiveItemTouchesNothingElse(t *testing.T) {
 		}
 	}
 
-	if _, err := ArchiveItem(root, target.ID); err != nil {
+	if _, err := ArchiveItem(root, target.ID, ArchiveOpts{}); err != nil {
 		t.Fatalf("ArchiveItem: %v", err)
 	}
 
@@ -135,7 +135,7 @@ func TestArchiveItemUnknownIDArchivesNothing(t *testing.T) {
 		t.Fatalf("Chtimes: %v", err)
 	}
 
-	if _, err := ArchiveItem(root, "mg-nope"); err == nil {
+	if _, err := ArchiveItem(root, "mg-nope", ArchiveOpts{}); err == nil {
 		t.Fatal("ArchiveItem on unknown id returned nil error — a no-op must be loud")
 	}
 
@@ -169,7 +169,7 @@ func TestArchiveItemRejectsNonDone(t *testing.T) {
 		{"claimed", claimed.ID},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ArchiveItem(root, tc.id)
+			_, err := ArchiveItem(root, tc.id, ArchiveOpts{})
 			if err == nil {
 				t.Fatalf("ArchiveItem on %s item returned nil error", tc.name)
 			}
@@ -189,11 +189,11 @@ func TestArchiveItemRejectsAlreadyArchived(t *testing.T) {
 	setupDirs(t, root)
 
 	item := doneItem(t, root, "archive me twice")
-	if _, err := ArchiveItem(root, item.ID); err != nil {
+	if _, err := ArchiveItem(root, item.ID, ArchiveOpts{}); err != nil {
 		t.Fatalf("first ArchiveItem: %v", err)
 	}
 
-	_, err := ArchiveItem(root, item.ID)
+	_, err := ArchiveItem(root, item.ID, ArchiveOpts{})
 	if err == nil {
 		t.Fatal("second ArchiveItem returned nil error, want a conflict")
 	}
@@ -223,7 +223,7 @@ func TestArchiveItemMovesSidecar(t *testing.T) {
 		t.Fatalf("Done: %v", err)
 	}
 
-	if _, err := ArchiveItem(root, item.ID); err != nil {
+	if _, err := ArchiveItem(root, item.ID, ArchiveOpts{}); err != nil {
 		t.Fatalf("ArchiveItem: %v", err)
 	}
 
@@ -249,7 +249,7 @@ func TestArchiveDryRunMovesNothing(t *testing.T) {
 		t.Fatalf("Chtimes: %v", err)
 	}
 
-	preview, err := ArchiveDryRun(root, 7*24*time.Hour)
+	preview, _, err := ArchiveDryRun(root, 7*24*time.Hour)
 	if err != nil {
 		t.Fatalf("ArchiveDryRun: %v", err)
 	}
@@ -272,11 +272,11 @@ func TestArchiveDryRunMatchesArchive(t *testing.T) {
 		doneItem(t, root, title)
 	}
 
-	preview, err := ArchiveDryRun(root, 0)
+	preview, _, err := ArchiveDryRun(root, 0)
 	if err != nil {
 		t.Fatalf("ArchiveDryRun: %v", err)
 	}
-	archived, err := Archive(root, 0)
+	archived, _, err := Archive(root, 0)
 	if err != nil {
 		t.Fatalf("Archive: %v", err)
 	}

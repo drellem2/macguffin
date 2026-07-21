@@ -38,7 +38,7 @@ func archiveItem(t *testing.T, root, title string, result []byte) (*Item, string
 		}
 	}
 
-	if _, err := Archive(root, 7*24*time.Hour); err != nil {
+	if _, _, err := Archive(root, 7*24*time.Hour); err != nil {
 		t.Fatalf("Archive: %v", err)
 	}
 
@@ -285,7 +285,7 @@ func TestUnarchiveRoundTripPreservesBody(t *testing.T) {
 	if _, _, err := Done(root, item.ID, nil); err != nil {
 		t.Fatalf("Done: %v", err)
 	}
-	if _, err := ArchiveItem(root, item.ID); err != nil {
+	if _, err := ArchiveItem(root, item.ID, ArchiveOpts{}); err != nil {
 		t.Fatalf("ArchiveItem: %v", err)
 	}
 
@@ -438,7 +438,7 @@ func TestUnarchiveUsesMostRecentArchiveRecord(t *testing.T) {
 	if _, _, err := Done(root, item.ID, nil); err != nil {
 		t.Fatalf("Done: %v", err)
 	}
-	if _, err := ArchiveItem(root, item.ID); err != nil {
+	if _, err := ArchiveItem(root, item.ID, ArchiveOpts{}); err != nil {
 		t.Fatalf("ArchiveItem: %v", err)
 	}
 
