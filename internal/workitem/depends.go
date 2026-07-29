@@ -52,6 +52,14 @@ const (
 type Dep struct {
 	ID    string
 	State DepState
+
+	// Status is the parent's actual status — available, claimed, pending,
+	// shelved, done, archived — or "" when no such item exists. State answers
+	// "can waiting still release this dependent"; Status answers "what is the
+	// parent doing right now", which is what an operator reading a held report
+	// needs in order to decide whether to chase it. DepWaiting collapses three
+	// statuses into one, so the coarse state alone cannot say.
+	Status string
 }
 
 // Reachable reports whether some future event could still satisfy this
@@ -76,7 +84,8 @@ func classifyDeps(root string, deps []string) ([]Dep, error) {
 
 	out := make([]Dep, 0, len(deps))
 	for _, id := range deps {
-		out = append(out, Dep{ID: id, State: depStateFor(root, id, doneIDs)})
+		state, status := depStateFor(root, id, doneIDs)
+		out = append(out, Dep{ID: id, State: state, Status: status})
 	}
 	return out, nil
 }
@@ -85,9 +94,9 @@ func classifyDeps(root string, deps []string) ([]Dep, error) {
 // it is the authority on "passed through done" — it spans done/ and every
 // archive partition, which is the whole point of dependency satisfaction
 // surviving an archive.
-func depStateFor(root, id string, doneIDs map[string]bool) DepState {
+func depStateFor(root, id string, doneIDs map[string]bool) (DepState, string) {
 	if doneIDs[id] {
-		return DepSatisfied
+		return DepSatisfied, "done"
 	}
 
 	matches, err := Resolve(root, id)
@@ -95,7 +104,7 @@ func depStateFor(root, id string, doneIDs map[string]bool) DepState {
 		// A resolution error here is ambiguity, not absence, and an ambiguous
 		// parent is not something placement should act on. Treat it as unknown:
 		// Stranded will name it, and naming it is the useful outcome either way.
-		return DepUnknown
+		return DepUnknown, ""
 	}
 
 	// Prefer the live match. An ID that shadows an archived twin is answered by
@@ -104,14 +113,14 @@ func depStateFor(root, id string, doneIDs map[string]bool) DepState {
 	for _, m := range matches {
 		if m.Live() {
 			if m.Status == "shelved" {
-				return DepShelved
+				return DepShelved, m.Status
 			}
-			return DepWaiting
+			return DepWaiting, m.Status
 		}
 	}
 
 	// Only terminal matches remain — done or archived, both satisfied.
-	return DepSatisfied
+	return DepSatisfied, matches[0].Status
 }
 
 // placeForDeps returns the work/ subdirectory an item with these dependencies

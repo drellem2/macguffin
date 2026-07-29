@@ -16,6 +16,33 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Fixed
 
+- **`mg schedule` named a snoozed item it could not promote and stayed silent
+  about a dependency-gated one (mg-765a).** One pending item held by a closed
+  dependency gate produced exactly one line — `No items promoted.` — while the
+  same sweep an hour earlier, over a snoozed item, had named the item, the gate
+  and when it opened. `mg schedule` is the reporting surface for gated work and
+  it runs on a cron whose whole purpose is that nobody is watching, so "no items
+  promoted" over a non-empty pending set read as *nothing is waiting* — wrong
+  exactly when a dependency gate is closed, and an item blocked on a dependency
+  that never completes is the case that most needs surfacing.
+
+  The sweep now reports **every** pending item it could not promote, each with
+  every gate that held it and that gate's state:
+
+  ```
+  2 pending item(s) held:
+    mg-5091  depends: mg-9c62 (claimed); snoozed: wakes 2026-07-29T18:40:04Z (in 1h 29m) — Both gates
+    mg-166e  depends: mg-9c62 (claimed) — Child task
+  ```
+
+  Both gates in one list, and both named when both are closed — they are
+  independent, and either can be the one still holding. Dependencies are
+  reported with the parent's **status** (`claimed`, `available`, `shelved`,
+  `does not exist`), not the coarse internal state, because "someone is working
+  on it" and "nobody has picked it up" call for different reactions. The report
+  is empty when `pending/` is empty. **What gets promoted is unchanged** — the
+  gating was already correct, and this is the report catching up to it.
+
 - **The remainder declaration was an opt-in flag, so nothing declared and the
   guard was inert (mg-966d).** `mg done` has refused to complete an item that
   declares a remainder without naming a successor since v0.3.0 — but the
