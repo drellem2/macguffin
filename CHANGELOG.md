@@ -14,6 +14,37 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ## [Unreleased]
 
+### Changed
+
+- **`mg list` fits its lines to the terminal, and the fields worth keeping are
+  the ones it keeps (mg-73ee).** A listing line ran to whatever length the
+  longest title happened to be and wrapped off the right-hand edge. The obvious
+  repair — cut every line at column N — would have been *worse than nothing*
+  here, because of where the fields sit: the order is id, type, title, tags,
+  assignee, snooze, so the two an operator most needs (**who owns this**, and
+  **is it asleep and until when**) are LAST, behind a variable-length title and
+  a variable-length tag list. A column cut deletes precisely those and keeps the
+  tags, which is the opposite of what anyone reading a long listing wants.
+
+  So the budget is spent back-to-front: the id, type, assignee and snooze marker
+  are measured and reserved first, and what remains goes to the title and then
+  to the tags. **Title and tags absorb the squeeze; assignee and snooze never
+  do.** A field that was cut carries a `…` marker, because a silently shortened
+  title is a wrong title — a reader has to be able to tell "short" from
+  "shortened". Width is read from the terminal (`TIOCGWINSZ`), falling back to
+  `COLUMNS` and then to 100 columns for a terminal that will not report a size.
+  ANSI styling is not counted as width, so a dim tag list costs its visible
+  columns and not its bytes.
+
+  **Truncation is a terminal-only affordance.** When stdout is a pipe or a file
+  the reader is `grep`, `awk`, or a script, and dropping columns there would
+  silently corrupt every one of them — so non-terminal output is byte-for-byte
+  what it has always been, and there is a test asserting exactly that against
+  the pre-change format string. It is a positive control on purpose: a test that
+  only checked the *truncated* form would pass on an implementation that
+  truncates unconditionally. `--json` is untouched on every path. `--wide`
+  (alias `--no-truncate`) opts a terminal out.
+
 ### Fixed
 
 - **The remainder declaration was an opt-in flag, so nothing declared and the

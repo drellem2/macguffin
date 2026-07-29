@@ -20,6 +20,7 @@ var listRepo string
 var listTag string
 var listAssignee string
 var listJSON bool
+var listWide bool
 
 // listStatusValues is the single canonical set of values accepted by
 // `mg list --status`, in the order humans expect to read them. BOTH the
@@ -161,7 +162,13 @@ Examples:
   mg list --status=shelved      # show only shelved items
   mg list --status=archived     # show only archived items
   mg list --tag=urgent          # filter by tag
-  mg list --assignee=human      # only items assigned to current user`,
+  mg list --assignee=human      # only items assigned to current user
+  mg list --wide                # never truncate, however narrow the terminal
+
+On a terminal, each line is fitted to the terminal width: the id, type, assignee
+and snooze marker are always shown, and the title and tags are shortened (with a
+… marker) to make room. Piped or redirected output is never truncated, so
+scripts reading ` + "`mg list`" + ` see the full line, and --json is unaffected.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := resolveRoot()
 		if err != nil {
@@ -169,6 +176,7 @@ Examples:
 		}
 
 		currentUser := resolveCurrentUser()
+		width := resolveListWidth(os.Stdout, listWide)
 
 		if listStatus != "" {
 			if !isValidListStatus(listStatus) {
@@ -198,7 +206,7 @@ Examples:
 			}
 
 			for _, item := range items {
-				fmt.Printf("%-10s %-8s %s%s%s%s\n", item.ID, item.Type, item.Title, formatTags(item.Tags), formatAssignee(item.Assignee, currentUser), formatSnooze(item))
+				fmt.Println(renderListLine("", item, currentUser, width))
 			}
 			return nil
 		}
@@ -277,7 +285,7 @@ Examples:
 			printed = true
 			fmt.Printf("%s:\n", s)
 			for _, item := range items {
-				fmt.Printf("  %-10s %-8s %s%s%s%s\n", item.ID, item.Type, item.Title, formatTags(item.Tags), formatAssignee(item.Assignee, currentUser), formatSnooze(item))
+				fmt.Println(renderListLine("  ", item, currentUser, width))
 			}
 		}
 		if !printed {
@@ -297,6 +305,8 @@ func init() {
 	listCmd.Flags().StringVar(&listTag, "tag", "", "filter by tag")
 	listCmd.Flags().StringVar(&listAssignee, "assignee", "", "filter by assignee (use 'human' for current user)")
 	listCmd.Flags().BoolVar(&listJSON, "json", false, "emit one JSON object per item (NDJSON), instead of human-formatted output")
+	listCmd.Flags().BoolVar(&listWide, "wide", false, "do not fit lines to the terminal width (titles and tags are never shortened)")
+	boolVarAlias(listCmd.Flags(), "wide", "no-truncate")
 }
 
 // formatTags returns a dim-styled tag string like " [tag1, tag2]" for display,
