@@ -63,6 +63,57 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Added
 
+- **`mg mail send` takes the subject from the body's first line when
+  `--subject` is omitted (mg-158e).** `--subject` is now optional; omitted, the
+  subject is the body's first line, the RFC822 / git-commit convention. The
+  point is not convenience — it is that this makes the SAFE path the SHORT one.
+
+  A subject could only ever be answered inline, and inline is where the shell
+  eats things before `mg` is executed. Neither quoting style survives ordinary
+  prose: double quotes lose `` `backticks` ``, `$VAR` and `$(cmd)`, and single
+  quotes lose apostrophes — **silently**, because English carries them in pairs.
+  `--subject='the rock'n'roll release'` is balanced, so the shell succeeds, mg
+  exits 0, and `the rocknroll release` is delivered. No downstream check can
+  catch this: the bytes are gone before `mg` starts, so a guard could only ever
+  fire on the inputs that were *not* corrupted. Every earlier remedy —
+  documentation, examples, a ratchet — left the hazardous spelling as the
+  convenient one and asked callers to be careful; this one removes the choice
+  by making omission shorter than the alternative:
+
+  ```
+  mg mail send mayor --from=me --body-file - <<'EOF'
+  Daniel's call on Monday's park
+
+  body text, `backticks` and $VARS and all
+  EOF
+  ```
+
+  The subject then rides inside the quoted heredoc whose bytes were already
+  proven verbatim (mg-7850).
+
+  Three properties keep this from becoming the defect it cures:
+
+  - **The derived subject is ECHOED BACK** (`Subject: ...`, and
+    `subject`/`subject_derived` under `--json`). mg's older first-line
+    derivation — a work item's title from the body's first `# ` heading —
+    prints nothing, and that silence is what let it rename items for four days
+    while its documented remedy (`pass --title`) did not actually work. A second
+    silent derivation was ruled out.
+  - **The first line is COPIED, not consumed.** The delivered body still
+    contains it. Cutting it would make deriving a body-mutating operation, and
+    this family of defects is precisely about tools delivering something other
+    than what they were handed.
+  - **An underivable subject is REFUSED**, naming `--subject`. A whitespace-only
+    body or a first line carrying control characters is exit 2 rather than a
+    malformed header; mg-b5d3 is what the alternative costs, where a bare CR in
+    a subject silently dropped a message for four days. A trailing CR from a
+    CRLF file is a line terminator, not content, and is stripped.
+
+  Supplying `--subject` is unchanged, including its refusal of an empty value:
+  the ruling was to make *omission* safe, not to make the inline form quieter.
+  `mg mail reply` is untouched — its `Re: ` default comes from the original
+  message, not from a body.
+
 - **`mg archive` refuses an item tagged `blocked-on-*`, naming the tag
   (mg-3c53).** `mg archive` consulted tags for exactly one thing — the
   structured `successor:<id>` tag, and only on `type: design`. It had no notion

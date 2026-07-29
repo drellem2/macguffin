@@ -144,7 +144,8 @@ paths/rename/ENOENT, **MED** = exposes an internal dir name (e.g.
 
 | Case | Current (verbatim) | Leak | Proposed |
 |---|---|---|---|
-| missing flag | `--from, --subject, and --body are required` | OK | unchanged (validation) |
+| missing flag | `--from and a body (--body or --body-file) are required` | OK | unchanged (validation). `--subject` left this list in mg-158e: omitted, it is derived from the body's first line |
+| underivable subject | `cannot derive a subject: the body's first line is blank` / `… control characters … are not allowed in a header value` | OK | unchanged (validation; hint names `--subject`) |
 | OS error writing tmp | `writing to tmp: <path>: <errno>` | HIGH | `could not deliver message to <agent>: <errno text>.` |
 | OS error tmp→new | `atomic move tmp→new: rename …: <errno>` | HIGH | `could not deliver message to <agent>: <errno text>.` |
 

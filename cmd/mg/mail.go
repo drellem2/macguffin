@@ -57,12 +57,23 @@ type (
 	// catch a typo'd / unknown recipient (exit still 0 — first delivery is
 	// legitimate). in_reply_to is the id this message replies to, "" when it
 	// starts a thread; msg_id is the new message's id, unchanged.
+	//
+	// subject is the header as actually written, and subject_derived says where
+	// it came from: true when 'mail send' took it from the body's first line
+	// because --subject was omitted (mg-158e), false when the caller supplied
+	// it — and false on 'mail reply', whose "Re: " default comes from the
+	// original message, not from any body. The pair is the scripted half of the
+	// echo the human path prints: a derivation nobody can see is the defect the
+	// existing title derivation still carries, and shipping a second silent one
+	// was ruled out when this one was adopted.
 	mailSendJSON struct {
 		MsgID          string `json:"msg_id"`
 		From           string `json:"from"`
 		To             string `json:"to"`
 		MailboxCreated bool   `json:"mailbox_created"`
 		InReplyTo      string `json:"in_reply_to"`
+		Subject        string `json:"subject"`
+		SubjectDerived bool   `json:"subject_derived"`
 	}
 
 	// mailReadJSON is the single object emitted by `mg mail read --json`.
@@ -125,9 +136,13 @@ var mailSendCmd = &cobra.Command{
 	Long: `Send a message to an agent's mailbox.
 
 Reach for --body-file first. It reads the body verbatim ("-" for stdin), with
-no shell in the path at all. The canonical form is a QUOTED heredoc:
+no shell in the path at all. The canonical form is a QUOTED heredoc, and it
+answers the SUBJECT too — omit --subject and the first line of the body becomes
+it, the RFC822 / git-commit convention:
 
-  mg mail send mayor --from=me --subject=s --body-file - <<'EOF'
+  mg mail send mayor --from=me --body-file - <<'EOF'
+  Daniel's call on Monday's park
+
   body text with backticks and $VARS and $(cmd), all literal
   EOF
 
@@ -142,8 +157,24 @@ them before mg ever runs, so those terms are silently gone from the delivered
 message and mg still reports Delivered — mg receives the mangled string and
 cannot tell it from one you typed.
 
-The two flags are mutually exclusive and one is required. A --body-file that
-cannot be read is an error, never an empty body.
+The two body flags are mutually exclusive and one is required. A --body-file
+that cannot be read is an error, never an empty body.
+
+SUBJECT. --subject is optional. Omitted, the subject is the body's first line,
+which puts it inside the heredoc where the bytes are already safe — so the
+short spelling is now also the correct one. That matters because a subject can
+only be answered inline, and inline is where the shell eats things:
+--subject="Daniel's call on Monday's park" has an EVEN number of apostrophes,
+so the shell delivers "Daniels park" and mg reports Delivered on it. There is
+no quoting trick that fixes this and no check mg can make afterwards; the bytes
+are gone before mg starts.
+
+A derived subject is ECHOED BACK on send ("Subject: ..."), and marked in --json
+by subject_derived, so nothing is taken from your body without being shown. The
+first line is COPIED, not consumed: the delivered body still contains it. If
+the first line is blank or carries control characters, the send is REFUSED and
+names --subject rather than writing a malformed header. Passing --subject is
+unchanged, including its refusal of an empty value.
 
 The recipient's mailbox is created lazily on first delivery, so sending to a
 brand-new agent always succeeds (exit 0). When the recipient's mailbox did not
@@ -176,8 +207,27 @@ filled in for you, use 'mg mail reply' instead.`,
 
 		// An empty body is refused whichever flag supplied it, so an empty
 		// --body-file cannot deliver nothing and report Delivered.
-		if mailSendFrom == "" || mailSendSubject == "" || body == "" {
-			return fmt.Errorf("--from, --subject, and a body (--body or --body-file) are required")
+		if mailSendFrom == "" || body == "" {
+			return fmt.Errorf("--from and a body (--body or --body-file) are required")
+		}
+
+		// --subject is OPTIONAL: omitted, the subject is taken from the body's
+		// first line (deriveSubject). Given-but-empty keeps the old refusal —
+		// the ruling was to make OMISSION safe, not to make the explicit form
+		// quieter, and "--subject=" is a caller stating a subject they did not
+		// write rather than one letting the body answer.
+		subject := mailSendSubject
+		subjectDerived := false
+		if !cmd.Flags().Changed("subject") {
+			subject, err = deriveSubject(body)
+			if err != nil {
+				return err
+			}
+			subjectDerived = true
+		} else if subject == "" {
+			return mgerr.Usage("missing_required",
+				"--subject was given but empty",
+				"omit --subject entirely to take the subject from the body's first line, or pass a non-empty value")
 		}
 
 		mr, err := mailRoot()
@@ -198,7 +248,7 @@ filled in for you, use 'mg mail reply' instead.`,
 			opts.References = []string{mailSendInReplyTo}
 		}
 
-		msgID, err := mail.SendWithOpts(mr, recipient, mailSendFrom, mailSendSubject, body, opts)
+		msgID, err := mail.SendWithOpts(mr, recipient, mailSendFrom, subject, body, opts)
 		if err != nil {
 			return err
 		}
@@ -212,7 +262,19 @@ filled in for you, use 'mg mail reply' instead.`,
 				To:             recipient,
 				MailboxCreated: created,
 				InReplyTo:      mailSendInReplyTo,
+				Subject:        subject,
+				SubjectDerived: subjectDerived,
 			})
+		}
+
+		// Echo a DERIVED subject back. The caller never named this field, so
+		// nothing else confirms what was taken from their body; mg's older
+		// first-line derivation (a work item's title) prints nothing, and that
+		// silence is precisely what let it rename items for four days without
+		// anyone seeing it. One line, only when derived — a subject the caller
+		// typed needs no read-back.
+		if subjectDerived {
+			fmt.Printf("Subject: %s  (derived from the body's first line — pass --subject to set it explicitly)\n", subject)
 		}
 
 		// Human output must agree with the json mailbox_created field so
@@ -615,6 +677,11 @@ archive it yourself with 'mg mail archive' when you are done with it.`,
 				To:             recipient,
 				MailboxCreated: created,
 				InReplyTo:      orig.ID,
+				Subject:        subject,
+				// reply's default subject comes from the ORIGINAL message, not
+				// from a body, so it is not the first-line derivation the flag
+				// names. Reply is untouched by mg-158e.
+				SubjectDerived: false,
 			})
 		}
 
@@ -712,7 +779,7 @@ func parseAgentMsgID(args []string) (agent, msgID string, err error) {
 
 func init() {
 	mailSendCmd.Flags().StringVar(&mailSendFrom, "from", "", "sender name (required)")
-	mailSendCmd.Flags().StringVar(&mailSendSubject, "subject", "", "message subject (required)")
+	mailSendCmd.Flags().StringVar(&mailSendSubject, "subject", "", "message subject (optional; omitted, it is taken from the body's first line and echoed back)")
 	mailSendCmd.Flags().StringVar(&mailSendBody, "body", "", "message body (required unless --body-file)")
 	mailSendCmd.Flags().StringVar(&mailSendBodyFile, "body-file", "", "read the message body verbatim from a file (\"-\" for stdin); mutually exclusive with --body")
 	mailSendCmd.Flags().StringVar(&mailSendInReplyTo, "in-reply-to", "", "MSG-ID this message replies to (sets In-Reply-To and seeds References)")

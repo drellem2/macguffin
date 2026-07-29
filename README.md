@@ -89,16 +89,27 @@ mg show <id>
 # Send mail to an agent. The QUOTED heredoc is the canonical form: <<'EOF'
 # passes the bytes through untouched. An unquoted <<EOF expands backticks,
 # $VAR and $(cmd) exactly as --body="..." does, reintroducing the bug.
-mg mail send <agent> --from=me --subject="Review needed" --body-file - <<'EOF'
+# Omit --subject and the body's FIRST LINE becomes the subject, so the subject
+# rides inside the heredoc too — it is echoed back on send so you can see what
+# was taken.
+mg mail send <agent> --from=me --body-file - <<'EOF'
+Review needed: Daniel's call on Monday's park
+
 Check the auth refactor — `go vet ./...` is clean but $BUILD_TAG is unset.
 EOF
 
 # A file works the same way
+mg mail send <agent> --from=me --body-file ./msg.md
+
+# --subject is still there when you want an explicit one. It can only be given
+# inline, so it carries the shell's expansion hazard: --subject="Daniel's call
+# on Monday's park" has an EVEN number of apostrophes, so the shell hands mg
+# "Daniels park" and the send succeeds on it.
 mg mail send <agent> --from=me --subject="Review needed" --body-file ./msg.md
 
 # --body is the inline-only shortcut: fine when the body carries no shell
 # metacharacters, silently lossy when it does
-mg mail send <agent> --from=me --subject="Review needed" --body="Check the auth refactor."
+mg mail send <agent> --from=me --body="Check the auth refactor."
 
 # Reply to a message, threading it to the original
 mg mail reply <agent>/<msg-id> --body="Looks good."
@@ -131,6 +142,7 @@ mg log                 # view snapshot history
 | `--append-body-file PATH` / `--append-body TEXT` (`mg edit`) | Append to the existing body instead of replacing it. Reads verbatim, same as `--body-file` (`-` for stdin). An append composes against the body **on disk at write time**, so it cannot destroy a section the caller never saw — see [Concurrent edits](#concurrent-edits-lost-updates). The appended text is stored byte-for-byte; only the join is normalized, to exactly one blank line, so a leading `## heading` renders as a heading. Mutually exclusive with `--body`/`--body-file` (exit 2). |
 | `--if-unchanged HASH` (`mg edit`) | Refuse the edit (exit 4, `body_changed`) unless the stored body still hashes to `HASH`, from `mg show ID --body-hash`. **Opt-in**: without it, `--body-file` behaves exactly as it always has. The hash covers the stored body *including* its `# Title` heading, so it also catches a competing `--title`. A prefix of 8+ characters is accepted. |
 | `--body-file PATH` (`mg new`, `mg edit`, `mg mail send`) | Read the body **verbatim** from a file (`-` for stdin) instead of from `--body`. Mutually exclusive with `--body` (exit 2); an unreadable path is an error, **never** a silently empty body. Reach for it whenever the body's exact text matters. The shell expands `` `backticks` ``, `$VAR` and `$(cmd)` inside `--body="..."` **before mg runs**, so those terms are silently gone from the item or message while mg still reports success — and mg cannot detect this, because the mangled string is byte-identical to one you typed that way. `--body-file` puts no shell in the body's path at all. `--body` is unchanged and **not** deprecated: it stays correct for bodies carrying no metacharacters. |
+| Derived mail subject (`mg mail send`) | `--subject` is **optional**. Omitted, the subject is the body's **first line** (RFC822 / git-commit convention), so it rides inside the same quoted heredoc as the body — the safe spelling is now the short one. This matters because a subject can only be given inline, and no quoting survives ordinary prose: double quotes lose `` `backticks` ``/`$VAR`/`$(cmd)`, and single quotes lose apostrophes **silently**, since English carries them in pairs (`--subject='the rock'n'roll release'` is balanced, exits 0, and delivers `the rocknroll release`). The derived subject is **echoed back** (`Subject: …`, plus `subject`/`subject_derived` under `--json`) — a derivation nobody can see is the defect, not the cure. The first line is **copied, not consumed**: the body arrives whole. A blank or control-character-bearing first line is **refused** (exit 2) naming `--subject`, rather than writing a malformed header. Passing `--subject` is unchanged, empty-value refusal included; `mg mail reply` is untouched. |
 | Mail threading | Every message carries a `Message-Id` equal to its MSG-ID — which is its maildir file name, not a second id space. `mg mail send --in-reply-to MSG-ID` is the explicit, stateless primitive: it stamps `In-Reply-To` and seeds `References`. `mg mail reply AGENT/MSG-ID` wraps it, resolving the recipient, the `Re:` subject and the ancestry chain from the original, marking it read but **not** archiving it. `References` keeps the 20 most recent ids so message files stay cat-able. Nothing is inferred from read history — read and send are separate processes, so threading is always explicit. Message ids are minted **per delivery**: they round-trip for threading within one mailbox and are not globally unique. Header values may not contain CR, LF, or other control characters (exit 2, `invalid_header_value`) — an unsanitized newline would inject arbitrary headers. |
 | `mg event append <type> [--key=value ...]` | Append a structured event to `events.jsonl`. |
 | `mg event list [--type=T] [--since=TS] [--tail=N] [--json]` | List events with optional filtering. Output is already NDJSON; `--json` is accepted for consistency (no behavior change). |
