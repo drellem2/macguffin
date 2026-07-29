@@ -53,7 +53,7 @@ func Claim(root, id string, pid int) (*Item, error) {
 		"item_id":     id,
 		"from_status": "available",
 		"to_status":   "claimed",
-		"actor":       actorFor(item),
+		"actor":       actor(),
 		"pid":         strconv.Itoa(pid),
 	})
 

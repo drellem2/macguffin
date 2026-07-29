@@ -106,8 +106,16 @@ func TestEmitClaim(t *testing.T) {
 	if e.Extra["pid"] != strconv.Itoa(pid) {
 		t.Errorf("pid = %q, want %d", e.Extra["pid"], pid)
 	}
-	if e.Extra["actor"] != "alice" {
-		t.Errorf("actor = %q, want alice (assignee)", e.Extra["actor"])
+	// NOT "alice". The item is assigned to alice; the claim was issued by
+	// whoever ran this process, and that is what the field records (mg-3122).
+	// The assertion this replaced pinned the defect: it demanded the assignee
+	// and would have gone on passing while the log named the wrong agent for
+	// every assigned item. See actor_test.go for the positive control.
+	if e.Extra["actor"] == "alice" {
+		t.Error("actor = \"alice\" — that is the ASSIGNEE, not the caller that claimed")
+	}
+	if e.Extra["actor"] != actor() {
+		t.Errorf("actor = %q, want %q (the invoker)", e.Extra["actor"], actor())
 	}
 }
 

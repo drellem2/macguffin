@@ -114,6 +114,20 @@ clears the body.
 Use --depends to replace all dependencies, or --add-depends / --rm-depends for incremental changes.
 Use --tags to replace all tags, or --add-tags / --rm-tags for incremental changes.
 
+EVERY EDIT IS LOGGED, INCLUDING METADATA-ONLY ONES.
+
+Any edit that actually moves the stored item writes a 'work.edited' event to
+events.jsonl ('mg event list --type=work.edited'). A metadata-only edit records
+mode=metadata, a 'fields' list naming what moved, and a before/after pair per
+field — so an --assignee change is greppable with its old and new values. That
+matters most for --assignee, which is the dispatch gate: 'human' and 'parked'
+suppress both stall-watch and dispatch, so the field deciding whether an item is
+ever worked on should not be changeable without a record.
+
+The event's 'actor' is whoever RAN the command (MG_ACTOR, else POGO_AGENT_NAME,
+else the OS user), not the item's assignee. Setting an edit to no-op values
+writes nothing at all.
+
 The --assignee flag names the agent that owns triage and routing for the
 item, not the agent that runs the work. Substantive work is performed by
 an ephemeral polecat (named after the work-item ID at spawn time)

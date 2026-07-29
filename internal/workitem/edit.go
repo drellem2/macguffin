@@ -131,6 +131,12 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 	// one the item already carried — see writeShape in workflowmarker.go.
 	tagsBefore := append([]string(nil), item.Tags...)
 
+	// Every non-body field as stored. The body has had a before/after record
+	// since mg-f326; the metadata had none at all, so a `--assignee` change —
+	// the dispatch gate — left no trace in events.jsonl (mg-3122). See
+	// fieldchange.go.
+	metaBefore := snapshotMeta(item)
+
 	// The precondition runs FIRST, before a single field is applied and long
 	// before the write, so a refusal leaves the stored item byte-identical.
 	if fields.IfUnchanged != "" {
@@ -233,6 +239,11 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 	}
 	item.Tags = tags
 
+	// AFTER reconcileWorkflowMarkers, because that step can itself add a tag —
+	// and a tag mg wrote on the caller's behalf is exactly as worth recording
+	// as one the caller asked for.
+	metaChanges := diffMeta(metaBefore, snapshotMeta(item))
+
 	// Measure the body against composeBody, not item.Body: composeBody is what
 	// actually lands on disk (it synthesises the "# Title" heading when the
 	// supplied body lacks one), so anything measuring item.Body would be
@@ -283,11 +294,25 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 	// nothing (append, --title) — an absent field means "nothing was at risk",
 	// never "the backup failed", because a failed backup refuses the edit above
 	// and never reaches this line.
-	if change.Changed {
+	//
+	// The condition is "the stored item moved", not "the body moved" (mg-3122).
+	// A metadata-only edit used to emit NOTHING — `mg edit <id> --assignee=X`
+	// printed "Updated" and left events.jsonl byte-identical — which made the
+	// assignee, the field `config.IsDispatchGated` reads to decide whether an
+	// item is ever dispatched at all, silently mutable by anyone. mode is
+	// "metadata" for those, so a reader can tell a write that touched no body
+	// from one that overwrote a body with an identical one; body_hash_before
+	// and body_hash_after are still emitted and still equal, which is the
+	// positive statement that the body was NOT at risk here.
+	if change.Changed || len(metaChanges) > 0 {
+		mode := change.Mode
+		if !change.Changed {
+			mode = "metadata"
+		}
 		extra := map[string]string{
 			"item_id":          item.ID,
-			"actor":            actorFor(item),
-			"mode":             change.Mode,
+			"actor":            actor(),
+			"mode":             mode,
 			"guarded":          strconv.FormatBool(fields.IfUnchanged != ""),
 			"body_hash_before": change.HashBefore,
 			"body_hash_after":  change.HashAfter,
@@ -296,6 +321,17 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 		}
 		if backupPath != "" {
 			extra["body_backup"] = backupPath
+		}
+		// `fields` names what moved so a reader can grep one key instead of
+		// diffing the whole object; the per-field pairs carry the values.
+		if len(metaChanges) > 0 {
+			names := make([]string, 0, len(metaChanges))
+			for _, fc := range metaChanges {
+				names = append(names, fc.Name)
+				extra[fc.Name+"_before"] = fc.Before
+				extra[fc.Name+"_after"] = fc.After
+			}
+			extra["fields"] = strings.Join(names, ",")
 		}
 		event.Emit(root, "work.edited", extra)
 	}

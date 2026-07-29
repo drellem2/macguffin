@@ -103,7 +103,7 @@ func archiveFile(root string, c archiveCandidate) error {
 		"item_id":     c.item.ID,
 		"from_status": "done",
 		"to_status":   "archived",
-		"actor":       actorFor(c.item),
+		"actor":       actor(),
 	})
 
 	return nil
@@ -327,7 +327,7 @@ func ArchiveItem(root, id string, opts ArchiveOpts) (*Item, error) {
 		event.Emit(root, "work.archive_forced", map[string]string{
 			"item_id": item.ID,
 			"reason":  mgerrCode(guardErr),
-			"actor":   actorFor(item),
+			"actor":   actor(),
 		})
 	}
 

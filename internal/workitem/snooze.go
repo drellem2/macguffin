@@ -332,7 +332,7 @@ func SnoozeItem(root, id string, until time.Time) (*Item, string, error) {
 		"from_status": status,
 		"to_status":   "pending",
 		"until":       item.SnoozeRaw,
-		"actor":       actorFor(item),
+		"actor":       actor(),
 	})
 
 	return item, status, nil
@@ -387,7 +387,7 @@ func UnsnoozeItem(root, id string) (*Item, string, error) {
 		"item_id":     id,
 		"from_status": status,
 		"to_status":   dest,
-		"actor":       actorFor(item),
+		"actor":       actor(),
 	})
 
 	return item, dest, nil

@@ -61,7 +61,7 @@ func Schedule(root string) ([]*Item, error) {
 				event.Emit(root, "work.snooze_elapsed", map[string]string{
 					"item_id": item.ID,
 					"until":   woke,
-					"actor":   actorFor(item),
+					"actor":   actor(),
 				})
 			}
 			dst := filepath.Join(root, "work", "available", e.Name())

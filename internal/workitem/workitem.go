@@ -215,7 +215,7 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 		event.Emit(root, "work.created", map[string]string{
 			"item_id":   id,
 			"to_status": subdir,
-			"actor":     actorFor(item),
+			"actor":     actor(),
 		})
 
 		return item, nil

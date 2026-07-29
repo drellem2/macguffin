@@ -26,12 +26,22 @@ type Run struct {
 	Warn func(string)
 
 	// AgentRegistry returns a map of agent name → WorkItemID from pogod's
-	// runtime registry. Used as a fallback when events.jsonl interval-join
-	// misses — polecats self-claim through `mg claim`, but the actor
-	// recorded on the work.claim event is the item's assignee/creator
-	// (mayor or daniel), not the polecat name, so the interval-join always
-	// misses. The registry path closes that gap. When nil, defaults to
-	// readAgentRegistry (which shells out to `pogo agent list --json`).
+	// runtime registry. Used as a fallback when the events.jsonl
+	// interval-join misses.
+	//
+	// It used to miss on EVERY polecat: polecats self-claim through
+	// `mg claim`, and the actor recorded on work.claim was the item's
+	// assignee/creator (mayor or daniel) rather than the polecat name. That
+	// is fixed at the source as of mg-3122 — `actor` is now the invoking
+	// agent, so a polecat's own claim event carries its own name and the
+	// interval-join hits.
+	//
+	// The fallback stays, for two populations the fix cannot reach
+	// retroactively: events written BEFORE mg-3122 shipped (the log is
+	// append-only, so every historical work.claim still names the assignee),
+	// and any caller invoking mg without POGO_AGENT_NAME set. When nil,
+	// defaults to readAgentRegistry (which shells out to
+	// `pogo agent list --json`).
 	AgentRegistry AgentRegistryReader
 }
 
@@ -169,8 +179,10 @@ func (r *Run) Aggregate() (Result, error) {
 	}
 
 	// Snapshot pogod's agent registry once per pass so live polecats with
-	// WorkItemID set still attribute even though their work.claim event was
-	// emitted under a different actor (the item's assignee/creator).
+	// WorkItemID set still attribute when their work.claim event carries a
+	// different actor — every claim recorded before mg-3122 named the item's
+	// assignee/creator rather than the claiming agent, and those lines are
+	// still in the log.
 	registryReader := r.AgentRegistry
 	if registryReader == nil {
 		registryReader = readAgentRegistry

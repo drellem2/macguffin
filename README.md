@@ -273,6 +273,8 @@ Two further properties worth knowing:
   zero for a deliberate deletion and a destroyed one: once a clobber is known to
   have happened, every genuine absence nearby reads as damage, and there was
   previously no instrument anywhere in the system that could tell the two apart.
+- **Every *metadata* change is recorded too.** See
+  [Who did this](#who-did-this-audit-attribution) below.
 
 **Not locking.** Agents are long-lived and can die mid-edit, so a lock needs a
 timeout, and a timeout reintroduces the same race with more moving parts. The
@@ -352,6 +354,85 @@ to be **cheap**, and it is correct for every failure mode including the ones
 nobody predicted — a wrong path, a truncated pipe, an editor crash, a bad `sed`.
 A false block costs a real edit and erodes trust in the guard; a useless backup
 costs a few KB.
+
+### Who did this: audit attribution
+
+Every state change writes a line to `~/.macguffin/events.jsonl` carrying an
+`actor` field. **`actor` is the identity that ran the command** — never a
+property of the item it acted on.
+
+That sentence is load-bearing because the field used to mean something else.
+Until `mg-3122` it resolved to the item's **assignee**, then its creator, then
+the OS user. Measured on the live log, the same command shape on the same item
+produced three different answers depending only on who the item was *assigned*
+to:
+
+```
+assignee unset          work.edited          actor = "daniel"            ← unix user
+assignee = parked       work.snooze_elapsed  actor = "parked"
+assignee = zzz-probe    work.edited          actor = "zzz-probe"
+```
+
+All three read as real answers and two of them were false. In a fleet where the
+mayor edits PM-filed tickets, PMs edit each other's, and polecats edit their
+own, the log confidently named the wrong actor for every assigned item — which
+is strictly worse than an empty field, because nothing in the line tells a
+reader a substitution happened.
+
+`actor` now resolves in this order, and consults the item at no step:
+
+| # | Source | When |
+|---|--------|------|
+| 1 | `MG_ACTOR` | explicit override — a wrapper script or test that knows its identity |
+| 2 | `POGO_AGENT_NAME` | set by pogod on every agent it spawns; the one string separating the agents that share this box's unix user |
+| 3 | the OS user | a human at a terminal |
+| 4 | `unknown` | nothing else resolved |
+
+Steps 3 and 4 are weak, deliberately. On a single-user box every agent is
+`daniel`, so the OS user is vague — but vague is recoverable and a confident
+wrong answer is not. The same identity now appears in the mail audit log
+(`log/mail-audit.log`), so both logs name a caller the same way.
+
+**Events written before `mg-3122` still carry the old meaning.** The log is
+append-only; historical lines are not rewritten. Treat `actor` on a
+pre-`mg-3122` line as "the assignee at the time", not as the caller.
+
+#### Metadata edits are logged
+
+`work.edited` used to fire only when the **body** changed. `mg edit <id>
+--assignee=X` and `mg edit <id> --priority=high` both printed `Updated <id>`
+and wrote nothing at all — the log recorded exit 0 as if nothing had happened.
+That mattered most for `assignee`, which is the **dispatch gate**: `human` and
+`parked` suppress both stall-watch and dispatch, so the single field deciding
+whether an item is ever worked on could be flipped by any agent with no audit
+record whatsoever.
+
+A metadata-only edit now emits `work.edited` with `mode=metadata`, a `fields`
+list naming what moved, and a `<field>_before` / `<field>_after` pair for each:
+
+```json
+{"ts":"2026-07-29T16:04:00Z","type":"work.edited","item_id":"mg-ad6b",
+ "actor":"cat-3122","mode":"metadata","fields":"assignee",
+ "assignee_before":"mayor","assignee_after":"parked",
+ "body_hash_before":"a1b2c3d4","body_hash_after":"a1b2c3d4",
+ "lines_before":"42","lines_after":"42","guarded":"false"}
+```
+
+Tracked fields: `title`, `type`, `repo`, `assignee`, `priority`, `budget`,
+`depends`, `tags`. Notes on reading these lines:
+
+- **`fields` is in a fixed order**, not map order, so two identical edits
+  produce identical lines and a diff of the log is readable.
+- **The body hashes are still emitted, and are equal.** That is the positive
+  statement "the body was not at risk on this write" — an absent field could
+  not make it.
+- **A cleared field is a change like any other.** `assignee_before=parked`,
+  `assignee_after=` is how you find an item being un-parked.
+- **An unset budget is `""`, not `"0"`** — `--budget=0` is the flag that
+  *unsets* one, so the two must stay distinguishable.
+- **A no-op emits nothing.** Setting a field to the value it already holds
+  changes nothing on disk and manufactures no audit line; a log that records
+  non-events is a slower way to be untrustworthy.
 
 ### `--json` output contract
 

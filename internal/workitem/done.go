@@ -137,7 +137,7 @@ func Done(root, id string, resultJSON json.RawMessage, opts ...DoneOption) (*Ite
 		"item_id":     id,
 		"from_status": "claimed",
 		"to_status":   "done",
-		"actor":       actorFor(item),
+		"actor":       actor(),
 		"pid":         claimPID,
 	})
 

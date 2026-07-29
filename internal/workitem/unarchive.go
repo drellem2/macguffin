@@ -145,7 +145,7 @@ func Unarchive(root, id, status string) (*Item, string, error) {
 		"item_id":     item.ID,
 		"from_status": "archived",
 		"to_status":   status,
-		"actor":       actorFor(item),
+		"actor":       actor(),
 	})
 
 	return item, status, nil

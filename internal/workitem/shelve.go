@@ -46,7 +46,7 @@ func Shelve(root, id string) ([]*Item, error) {
 		"item_id":     id,
 		"from_status": status,
 		"to_status":   "shelved",
-		"actor":       actorFor(item),
+		"actor":       actor(),
 	})
 
 	shelved := []*Item{item}
@@ -157,7 +157,7 @@ func Unshelve(root, id string) ([]*Item, error) {
 		"item_id":     id,
 		"from_status": "shelved",
 		"to_status":   subdir,
-		"actor":       actorFor(item),
+		"actor":       actor(),
 	})
 
 	unshelved := []*Item{item}

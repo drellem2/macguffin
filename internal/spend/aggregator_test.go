@@ -251,9 +251,15 @@ func TestQuery_ByAgentIncludesOverhead(t *testing.T) {
 
 // TestAggregate_RegistryFallback_AttributesPolecatWithoutClaimEvent covers
 // the bug fixed by mg-e4e7: a polecat with WorkItemID set in pogod's runtime
-// registry but no work.claim event recorded under its own actor (because
-// `mg claim` writes the item assignee/creator as actor, not the polecat
-// name) must still attribute to the assigned mg item.
+// registry but no work.claim event recorded under its own actor must still
+// attribute to the assigned mg item.
+//
+// The original cause of that miss — `mg claim` writing the item's
+// assignee/creator as actor instead of the claiming agent — was fixed at the
+// source by mg-3122. The fallback is still exercised because the miss itself
+// is still reachable: the event log is append-only, so every claim recorded
+// before that fix still names the assignee, and a caller invoking mg without
+// POGO_AGENT_NAME set produces the same gap today.
 func TestAggregate_RegistryFallback_AttributesPolecatWithoutClaimEvent(t *testing.T) {
 	mgRoot := t.TempDir()
 	projects := t.TempDir()

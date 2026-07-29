@@ -14,7 +14,72 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **The audit log's `actor` field named the item's ASSIGNEE, not whoever acted
+  (mg-3122).** `events.jsonl` could not answer *who did this*, and instead of
+  saying nothing it said something false. Measured on the live log: the same
+  command shape on the same item returned `daniel` (unix user) with the
+  assignee unset, `parked` with the assignee `parked`, and — on a deliberate
+  probe that set the assignee to a string that could be nothing else — that
+  probe string. Two of those three are lies, and every one of them reads as a
+  real answer.
+
+  This is worse than a mislabelled column. Every agent on this box runs as the
+  same unix user, so `actor` was already weak — but it was *plausibly* weak. It
+  was wrong in a way that reads as right: in a fleet where the mayor edits
+  PM-filed tickets, PMs edit each other's, and polecats edit their own, the log
+  confidently named the wrong actor for every **assigned** item, and nothing in
+  the line let a reader see the substitution. It was load-bearing the afternoon
+  it was found — `events.jsonl` was used to reconstruct mg-8970's edit chain
+  after its body was destroyed; had attribution mattered in that reconstruction
+  rather than line counts, it would have been read wrong.
+
+  `actor` is now the **invoking identity**, resolved as `MG_ACTOR` →
+  `POGO_AGENT_NAME` (pogod sets this on every agent it spawns, and it is the
+  one string separating the agents sharing this box's unix user) → the OS user
+  → `unknown`. It consults the item at no step, and the resolver takes no item
+  argument at all, so the assignee cannot quietly become the answer again. The
+  field is **not** removed: *who did this* is a question the log should answer.
+  The same identity already attributes the mail audit log, so the two logs now
+  name a caller the same way.
+
+  Steps 3 and 4 are deliberately weak. On a single-user box the OS user is
+  vague — but vague is recoverable and confidently wrong is not, and it
+  degrades to imprecision rather than to a different question's answer.
+
+  **The log is append-only, so history is not rewritten.** `actor` on a line
+  written before this shipped still means "the assignee at the time".
+  `internal/spend`'s registry fallback stays for exactly that reason.
+
+- **Metadata-only edits emitted no event at all (mg-3122).** `mg edit <id>
+  --assignee=X` and `mg edit <id> --priority=high` both printed `Updated <id>`
+  and left `events.jsonl` byte-identical; only body-changing edits emitted
+  `work.edited`. The log recorded exit 0 as though nothing had happened.
+
+  This is why the attribution defect above was undiagnosable: `actor` shifted
+  when the assignee changed, and the assignee change itself was unlogged, so
+  the log offered no way to see why attribution had moved. And `assignee` is
+  the **dispatch gate** — `config.IsDispatchGated` suppresses both stall-watch
+  and dispatch for `human` and `parked` — so the single field deciding whether
+  an item is ever worked on could be changed by any agent with no audit record
+  whatsoever.
+
+  A metadata-only edit now emits `work.edited` with `mode=metadata`, a `fields`
+  list naming what moved, and `<field>_before` / `<field>_after` for each of
+  `title`, `type`, `repo`, `assignee`, `priority`, `budget`, `depends`, `tags`.
+  The body hashes are still emitted and are equal — the positive statement that
+  the body was not at risk on this write, which an absent field could not make.
+  A no-op edit (setting a field to the value it already holds) still emits
+  nothing: the condition is "the stored item moved", not "a flag was passed".
+
+  **Verified with a positive control, per the ticket.** The tests set an
+  assignee that differs from the invoker and assert `actor` is the *invoker*,
+  and they assert the event **count grows** rather than that a matching event
+  exists — a test asserting only that `actor` is non-empty passes with the bug
+  fully present, and a query that finds a stale event looks identical to one
+  that finds a fresh one. Run against the pre-fix package, the control reports
+  `actor = "zzz-probe-assignee"` and fails.
 
 ## [0.3.0] - 2026-07-29
 

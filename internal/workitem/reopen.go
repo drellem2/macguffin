@@ -44,7 +44,7 @@ func Reopen(root, id string) (*Item, error) {
 		"item_id":     id,
 		"from_status": "done",
 		"to_status":   "claimed",
-		"actor":       actorFor(item),
+		"actor":       actor(),
 	})
 
 	return item, nil
