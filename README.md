@@ -115,11 +115,11 @@ mg log                 # view snapshot history
 |---------|-------------|
 | `mg init [--git]` | Create the `~/.macguffin` directory tree. `--git` enables snapshot tracking. |
 | `mg new` | Create a new work item (Markdown + YAML frontmatter). |
-| `mg show <id> [--json]` | Display a work item by ID. `--json` emits the full item as one JSON object (adds `creator`, `body`, `budget`, `spent` to the `list --json` field set). When two archived twins share a short ID across partitions, disambiguate with `mg show <id>@<partition>` (e.g. `mg show mg-4fa7@2026-04`). |
+| `mg show <id> [--json] [--body-hash]` | Display a work item by ID. `--json` emits the full item as one JSON object (adds `creator`, `body`, `body_hash`, `budget`, `spent` to the `list --json` field set). `--body-hash` prints only the body's SHA-256 — the version token `mg edit --if-unchanged` checks against — so a guarded write is one command rather than a pipe through `jq`. When two archived twins share a short ID across partitions, disambiguate with `mg show <id>@<partition>` (e.g. `mg show mg-4fa7@2026-04`). |
 | `mg list [--json]` | List work items. `--json` emits NDJSON (one JSON object per line) for scripts and dashboards. |
 | `mg claim ID` | Atomically claim a work item by ID. |
 | `mg done ID` | Mark a claimed work item as done. |
-| `mg edit ID [flags]` | Update fields on an existing work item. |
+| `mg edit ID [flags]` | Update fields on an existing work item. **Adding to a body? Use `--append-body-file`, not `--body-file`** — see [Concurrent edits](#concurrent-edits-lost-updates). |
 | `mg archive [ID]` | With an `ID`, archive exactly that one done item and nothing else — the form to use for items the refinery never merged (investigations, evaluations). With no `ID`, sweep `done/` and archive every item older than `--days` (default 7; `--days=0` takes **all** done items). The two forms are exclusive: passing both an `ID` and `--days` is an error, never a silent choice between archiving one item and archiving every item. `--dry-run` previews without moving anything. A targeted archive that cannot act (unknown ID, item not done) exits non-zero and says why. **Done `type: design` items are guarded**: see below. |
 | `mg archive <id> --successor <id>` | A design's output *is* a recommendation, so at the moment it is done the thing it recommends is undone by construction — and an archived item cannot be the tracker for undone work. Archiving a done `type: design` item is therefore **refused** unless it names a successor. `--successor <id>` records a `successor:<id>` tag on the design before moving it, so the archived record names its own tracker; the id must resolve to a real item and cannot be the design itself. The check is on the item **type**, not on any wording in its body, and is satisfied **only** by that structured tag — a body that merely mentions an id proves nothing about who is tracking what. The sweep form never forces: it skips guarded items, leaves them in `done/`, and names them on stderr. A design that was *abandoned* rather than implemented is a legitimate archive — `--force` takes it and records a `work.archive_forced` event naming the guard that was bypassed. `--force` is documented here and in `mg archive --help`, and is deliberately **not** named by the refusal itself, so a guard hit mid-cleanup does not hand out its own bypass. |
 | `mg unarchive ID [--status=S]` | Restore an archived work item to the status it held when archived. Refuses if that status is unknown — pass `--status` to say where it belongs. |
@@ -127,6 +127,8 @@ mg log                 # view snapshot history
 | `mg schedule` | Promote pending items whose dependencies are met. |
 | `mg mail send\|reply\|list\|read\|archive\|migrate` | Maildir-style messaging between agents. `archive AGENT/MSG-ID` moves a message out of the active mailbox; `list AGENT --archived` inspects archived messages. Each operation logs a `mail.sent`/`mail.read`/`mail.archived` event to `events.jsonl` and a caller-attributed line (pid + `POGO_AGENT_NAME`) to `log/mail-audit.log`; malformed message files are skipped loudly (`mail.malformed` event, stderr warning, count in `list` output). `read` and `reply` refuse to touch another agent's mailbox when `POGO_AGENT_NAME` is set (both mark the message read for its owner) unless `--force` is given; denials and forced reads are audited too. |
 | Canonical mailbox addressing | Every recipient/mailbox argument is canonicalized before it resolves to a directory: the harness prefixes `mg-` and `cat-` are stripped, so the work-item alias `mg-<id>`, the process name `cat-mg-<id>`, and the bare live id `<id>` all address the **same** mailbox. This closes the silent-drop class where mailing `mg-<id>` (the spelling many templates use) minted a stray mailbox nobody read while a watcher polling `mg mail list mg-<id>` waited forever. Crew mailboxes (`mayor`, `architect`, …) carry no prefix and pass through unchanged. `mg mail migrate` (`--dry-run` to preview) is a one-shot, idempotent cleanup that merges any pre-existing stray `mg-<id>` mailbox into its canonical `<id>` box — unread, read and archived mail alike — preserving read state and then removing the emptied stray directory. |
+| `--append-body-file PATH` / `--append-body TEXT` (`mg edit`) | Append to the existing body instead of replacing it. Reads verbatim, same as `--body-file` (`-` for stdin). An append composes against the body **on disk at write time**, so it cannot destroy a section the caller never saw — see [Concurrent edits](#concurrent-edits-lost-updates). The appended text is stored byte-for-byte; only the join is normalized, to exactly one blank line, so a leading `## heading` renders as a heading. Mutually exclusive with `--body`/`--body-file` (exit 2). |
+| `--if-unchanged HASH` (`mg edit`) | Refuse the edit (exit 4, `body_changed`) unless the stored body still hashes to `HASH`, from `mg show ID --body-hash`. **Opt-in**: without it, `--body-file` behaves exactly as it always has. The hash covers the stored body *including* its `# Title` heading, so it also catches a competing `--title`. A prefix of 8+ characters is accepted. |
 | `--body-file PATH` (`mg new`, `mg edit`, `mg mail send`) | Read the body **verbatim** from a file (`-` for stdin) instead of from `--body`. Mutually exclusive with `--body` (exit 2); an unreadable path is an error, **never** a silently empty body. Reach for it whenever the body's exact text matters. The shell expands `` `backticks` ``, `$VAR` and `$(cmd)` inside `--body="..."` **before mg runs**, so those terms are silently gone from the item or message while mg still reports success — and mg cannot detect this, because the mangled string is byte-identical to one you typed that way. `--body-file` puts no shell in the body's path at all. `--body` is unchanged and **not** deprecated: it stays correct for bodies carrying no metacharacters. |
 | Mail threading | Every message carries a `Message-Id` equal to its MSG-ID — which is its maildir file name, not a second id space. `mg mail send --in-reply-to MSG-ID` is the explicit, stateless primitive: it stamps `In-Reply-To` and seeds `References`. `mg mail reply AGENT/MSG-ID` wraps it, resolving the recipient, the `Re:` subject and the ancestry chain from the original, marking it read but **not** archiving it. `References` keeps the 20 most recent ids so message files stay cat-able. Nothing is inferred from read history — read and send are separate processes, so threading is always explicit. Message ids are minted **per delivery**: they round-trip for threading within one mailbox and are not globally unique. Header values may not contain CR, LF, or other control characters (exit 2, `invalid_header_value`) — an unsanitized newline would inject arbitrary headers. |
 | `mg event append <type> [--key=value ...]` | Append a structured event to `events.jsonl`. |
@@ -138,6 +140,67 @@ mg log                 # view snapshot history
 | `mg sidecars [--json]` | Report every `<id>.result.json` that is not sitting beside its item's `.md`, **classified by content**: `identical`, `equivalent` (same JSON re-serialised), `subset` (names the superset and the keys only it holds), `conflict` (names every key in disagreement), `opaque`, or `unknown` (a file could not be *read* — a failed probe, never reported as a difference). Reports and never deletes; a `subset` verdict is advice, not an instruction to keep the superset. See [Reading a result sidecar](#reading-a-result-sidecar). |
 | `mg schema` | Dump the full command tree as one JSON document (command names, use, flags, and a `mutates`/`idempotent` hint per command) for agent/tooling consumers. Frozen, additive-only shape versioned by `schema_version` (see [schema contract](#mg-schema-contract)). |
 | `mg version` / `mg --version` / `mg -v` | Print version. Release builds include commit + date build metadata (e.g. `mg v0.1.3 (abc1234, 2026-07-08)`). |
+
+### Concurrent edits (lost updates)
+
+`mg edit --body` / `--body-file` sends a **complete replacement body**, composed
+by the caller from a read that happened seconds, minutes, or a whole agent turn
+earlier. Anything another writer stored inside that window is destroyed. Before
+`mg-f326` this happened silently — exit 0, no warning, no diff — and three
+agents did it to each other three times in two hours.
+
+**The fix is to stop sending whole bodies.**
+
+```sh
+mg edit mg-1234 --append-body-file - <<'EOF'
+## 2026-07-29 04:20 — reconciliation
+
+...
+EOF
+```
+
+An append composes against the body **on disk at write time**, so it cannot
+destroy a section it never saw. It also matches how these bodies are actually
+written — dated sections that accumulate — and needs no coordination with
+anyone. All three of the night's collisions were appends of separate sections
+that had no reason to conflict.
+
+**When a full rewrite really is the shape, name the version you read:**
+
+```sh
+HASH=$(mg show mg-1234 --body-hash)
+# ... compose the new body ...
+mg edit mg-1234 --if-unchanged="$HASH" --body-file ./new-body.md
+```
+
+If someone wrote in between, the edit is **refused** (exit 4, `body_changed`)
+and names what mg can observe — the hash you passed, the hash on disk now, the
+current size, and when the file was last written. Nothing is partially applied.
+
+`--if-unchanged` is **opt-in**. A bare `--body-file` behaves exactly as it
+always has, because `mg` self-installs across the whole fleet on merge and this
+is the most-used write path in that fleet's own tooling: a write path that
+starts refusing by default is a decision to make on purpose, not a side effect
+of adding a flag.
+
+Two further properties worth knowing:
+
+- **`--title` alone is body-safe.** It rewrites the `# heading` line in place and
+  leaves every other byte of the body untouched. It is the one edit two agents
+  can make to a live item without racing each other's prose. (The body hash
+  still moves, because the heading is part of the body — so `--if-unchanged`
+  catches a competing retitle too.)
+- **Every body change is recorded.** A body-changing edit prints its size delta
+  on the success line (`Updated mg-1234: title (body 227 → 113 lines)`) and
+  writes a `work.edited` event carrying the before/after hashes and line counts.
+  Neither recovers lost bytes. Both exist because `grep -c` returns the same
+  zero for a deliberate deletion and a destroyed one: once a clobber is known to
+  have happened, every genuine absence nearby reads as damage, and there was
+  previously no instrument anywhere in the system that could tell the two apart.
+
+**Not locking.** Agents are long-lived and can die mid-edit, so a lock needs a
+timeout, and a timeout reintroduces the same race with more moving parts. The
+defect being fixed is *silence*, not concurrency.
 
 ### `--json` output contract
 

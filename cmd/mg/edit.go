@@ -4,15 +4,20 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/drellem2/macguffin/internal/mgerr"
 	"github.com/drellem2/macguffin/internal/workitem"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
 var (
-	editTitle      string
-	editBody       string
-	editBodyFile   string
+	editTitle          string
+	editBody           string
+	editBodyFile       string
+	editAppendBody     string
+	editAppendBodyFile string
+	editIfUnchanged    string
+
 	editType       string
 	editRepo       string
 	editDepends    []string
@@ -34,6 +39,40 @@ var editCmd = &cobra.Command{
 
 Use --title, --body-file/--body, --type, --repo, --assignee, --priority to
 replace fields directly.
+
+ADDING TO A BODY? USE --append-body-file, NOT --body-file.
+
+  mg edit mg-1234 --append-body-file - <<'EOF'
+  ## 2026-07-29 04:20 — reconciliation
+  ...
+  EOF
+
+--body-file replaces the WHOLE body with text you composed from a read that
+happened seconds or minutes ago. Anything another writer stored in between is
+destroyed, silently, with exit 0 — three agents did exactly this to each other
+in two hours (mg-f326). --append-body-file composes against the body on disk at
+write time, so it cannot destroy a section it never saw. It is the right shape
+for the dated sections these bodies actually accumulate, and it needs no
+coordination with anyone.
+
+The appended text is taken verbatim; it is joined to the existing body by
+exactly one blank line, so a leading "## heading" renders as a heading.
+
+WHEN A FULL REWRITE REALLY IS THE SHAPE, NAME THE VERSION YOU READ.
+
+  HASH=$(mg show mg-1234 --body-hash)
+  # ... compose the new body ...
+  mg edit mg-1234 --if-unchanged="$HASH" --body-file ./new-body.md
+
+--if-unchanged refuses the write (exit 4) if the stored body no longer hashes to
+that value, instead of overwriting a change you never saw. It is opt-in: without
+it, --body-file behaves exactly as it always has. The hash covers the stored
+body INCLUDING its "# Title" heading, so it also catches a competing --title.
+A prefix of 8 or more characters is accepted.
+
+--title alone is body-safe: it rewrites the "# heading" line in place and leaves
+every other byte of the body untouched. It is the one edit two agents can make
+to a live item without racing each other's prose.
 
 For the replacement body, reach for --body-file first. It reads the body
 verbatim ("-" for stdin), with no shell in the path at all. The canonical form
@@ -91,9 +130,32 @@ keep the carrier block at the top. See 'mg new --help' for the block's shape.`,
 		if err != nil {
 			return err
 		}
+		appendBody, appendSet, err := appendBodyFromFlags(cmd, editAppendBody, editAppendBodyFile)
+		if err != nil {
+			return err
+		}
+		// Replace-and-append in one invocation is a caller who means one of the
+		// two and will not find out which one they got until they re-read.
+		// Refuse rather than pick.
+		if bodySet && appendSet {
+			return mgerr.Usage("mutually_exclusive_flags",
+				"cannot replace and append the body in one edit",
+				"replace it with --body-file, or add to it with --append-body-file — not both")
+		}
 		if bodySet {
 			fields.Body = &body
 			changed = true
+		}
+		if appendSet {
+			fields.AppendBody = &appendBody
+			changed = true
+		}
+		if cmd.Flags().Changed("if-unchanged") {
+			// A precondition on nothing is a caller who believes they are
+			// guarded and is not writing anything; and if it were allowed to
+			// stand alone it would report "no fields specified" while looking
+			// like a successful check. Carried as a field, not counted as one.
+			fields.IfUnchanged = editIfUnchanged
 		}
 		if cmd.Flags().Changed("type") {
 			fields.Type = &editType
@@ -152,12 +214,22 @@ keep the carrier block at the top. See 'mg new --help' for the block's shape.`,
 			return fmt.Errorf("no fields specified; use --title, --body, --type, --assignee, --depends, --tags, etc.")
 		}
 
-		item, err := workitem.Update(root, args[0], fields)
+		item, change, err := workitem.UpdateWithBodyChange(root, args[0], fields)
 		if err != nil {
 			return err
 		}
 
-		fmt.Printf("Updated %s: %s\n", item.ID, item.Title)
+		// Report the body's size delta on the write itself. In mg-f326's first
+		// incident a body went 227 → 113 lines and the writer was told only
+		// "Updated"; the loss surfaced seven minutes later, by luck, when
+		// someone re-read and grepped for markers they expected. A number here
+		// costs nothing and puts the evidence in front of the one agent
+		// guaranteed to be looking.
+		note := ""
+		if change != nil && change.Changed {
+			note = fmt.Sprintf(" (body %d → %d lines)", change.LinesBefore, change.LinesAfter)
+		}
+		fmt.Printf("Updated %s: %s%s\n", item.ID, item.Title, note)
 		return nil
 	},
 }
@@ -166,6 +238,9 @@ func init() {
 	editCmd.Flags().StringVar(&editTitle, "title", "", "new title")
 	editCmd.Flags().StringVar(&editBody, "body", "", "new body (markdown)")
 	editCmd.Flags().StringVar(&editBodyFile, "body-file", "", "read the new body verbatim from a file (\"-\" for stdin); mutually exclusive with --body")
+	editCmd.Flags().StringVar(&editAppendBody, "append-body", "", "append text to the existing body instead of replacing it")
+	editCmd.Flags().StringVar(&editAppendBodyFile, "append-body-file", "", "append the verbatim contents of a file (\"-\" for stdin) to the existing body; cannot clobber a concurrent write")
+	editCmd.Flags().StringVar(&editIfUnchanged, "if-unchanged", "", "refuse the edit unless the stored body still hashes to this (from 'mg show ID --body-hash'); a prefix of 8+ chars is accepted")
 	editCmd.Flags().StringVar(&editType, "type", "", "new type")
 	editCmd.Flags().StringVar(&editRepo, "repo", "", "new repo path")
 	stringSliceVarWithAlias(editCmd.Flags(), &editDepends, "depends", "depend", "replace all dependencies (comma-separated or repeated)")

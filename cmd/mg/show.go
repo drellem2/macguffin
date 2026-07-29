@@ -6,12 +6,16 @@ import (
 	"os"
 	"strings"
 
+	"github.com/drellem2/macguffin/internal/mgerr"
 	"github.com/drellem2/macguffin/internal/spend"
 	"github.com/drellem2/macguffin/internal/workitem"
 	"github.com/spf13/cobra"
 )
 
-var showJSON bool
+var (
+	showJSON     bool
+	showBodyHash bool
+)
 
 // showJSONItem is the stable on-the-wire shape for `mg show ID --json`: the
 // full work item as ONE JSON object. It embeds listJSONItem so the fields
@@ -23,8 +27,14 @@ type showJSONItem struct {
 	listJSONItem
 	Creator string `json:"creator"`
 	Body    string `json:"body"`
-	Budget  *int   `json:"budget"` // null when unset
-	Spent   int    `json:"spent"`  // total tokens recorded against this item
+	// BodyHash is the SHA-256 of the Body field's exact bytes — the version
+	// token 'mg edit --if-unchanged' checks against. It rides alongside the
+	// body so a reader gets the content and its version in ONE read: any gap
+	// between fetching them is a window in which the pair can disagree, which
+	// is the same defect at a smaller scale.
+	BodyHash string `json:"body_hash"`
+	Budget   *int   `json:"budget"` // null when unset
+	Spent    int    `json:"spent"`  // total tokens recorded against this item
 }
 
 var showCmd = &cobra.Command{
@@ -48,6 +58,20 @@ bare ID is ambiguous. Disambiguate with an @partition qualifier:
 		item, status, err := workitem.ReadWithStatus(root, args[0])
 		if err != nil {
 			return err
+		}
+
+		if showJSON && showBodyHash {
+			return mgerr.Usage("mutually_exclusive_flags",
+				"cannot use both --json and --body-hash",
+				"--json already carries the hash in its body_hash field")
+		}
+
+		// --body-hash prints the bare hash and nothing else, so the safe write
+		// is one command rather than a pipe through jq:
+		//   mg edit ID --if-unchanged="$(mg show ID --body-hash)" --body-file …
+		if showBodyHash {
+			fmt.Println(workitem.BodyHash(item.Body))
+			return nil
 		}
 
 		if showJSON {
@@ -103,6 +127,7 @@ bare ID is ambiguous. Disambiguate with an @partition qualifier:
 
 func init() {
 	showCmd.Flags().BoolVar(&showJSON, "json", false, "emit the full work item as one JSON object")
+	showCmd.Flags().BoolVar(&showBodyHash, "body-hash", false, "print only the body's SHA-256, for 'mg edit --if-unchanged'")
 }
 
 // writeShowJSON marshals the work item as a single JSON object on stdout.
@@ -119,6 +144,7 @@ func writeShowJSON(root string, item *workitem.Item, status string) error {
 		listJSONItem: toJSONItem(item, status),
 		Creator:      item.Creator,
 		Body:         item.Body,
+		BodyHash:     workitem.BodyHash(item.Body),
 		Budget:       item.Budget,
 		Spent:        spent,
 	}

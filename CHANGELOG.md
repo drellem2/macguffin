@@ -16,6 +16,68 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Added
 
+- **`mg edit --append-body-file`, and an opt-in `--if-unchanged` version check
+  (mg-f326).** `mg edit --body`/`--body-file` was a read-modify-write with no
+  version check: the caller sends a whole body composed from a read that
+  happened seconds or minutes ago, and anything another writer stored in that
+  window was destroyed. Exit 0, no warning, no diff, no record that a prior
+  version existed. Three agents did this to each other three times in two
+  hours — 85 lines of reconciliation in one incident, a title in another.
+
+  Two changes, in the order they should be reached for:
+
+  - **`--append-body-file PATH` / `--append-body TEXT`** appends instead of
+    replacing. An append composes against the body *on disk at write time*, so
+    it cannot destroy a section it never saw. All three collisions were appends
+    of separate dated sections that had no reason to conflict; this flag alone
+    would have prevented every one of them, with no locking and no coordination.
+    It reads verbatim like `--body-file` (`-` for stdin), and the appended text
+    is stored byte-for-byte — only the join is normalized, to exactly one blank
+    line, because a `## heading` placed directly under the previous line is
+    paragraph text under CommonMark, not a heading.
+  - **`--if-unchanged=<hash>`** refuses a write (exit 4, `body_changed`) when
+    the stored body no longer hashes to the value the caller read. The hash
+    comes from `mg show ID --body-hash`, or the new `body_hash` field on
+    `mg show ID --json`, which rides alongside `body` so a reader gets the
+    content and its version in one read. It covers the stored body *including*
+    its `# Title` heading, so it catches a competing `--title` as well as a
+    competing body. A prefix of 8+ characters is accepted. The refusal names
+    the hash you passed, the hash on disk now, the current size and the file's
+    last-write time; it does not claim to know what changed, because the
+    version you read is not stored anywhere mg can reach, and inventing that
+    would be the same class of lie as the exit 0 it replaces. It is
+    `retryable=false` on purpose — the identical retry can never succeed.
+
+  **`--if-unchanged` is opt-in, and a bare `--body-file` is byte-for-byte
+  unchanged.** `mg` self-installs across the whole fleet on merge and this is
+  the most-used write path in that fleet's own tooling; if a default-on refusal
+  misfired, the tool needed to file the follow-up ticket would be the tool that
+  is broken. A regression test pins the unguarded clobber precisely so that
+  making the check default-on later has to be a deliberate, separately-shipped
+  decision rather than a side effect. That gap is real and named: a writer who
+  does not pass the flag is still unguarded.
+
+  **Two instruments, for the damage that outlasts the lost bytes.** A
+  body-changing edit now prints its size delta on the success line (`Updated
+  mg-1234: title (body 227 → 113 lines)`) and writes a `work.edited` event
+  carrying the before/after body hashes, line counts, the mode
+  (`replace`/`append`/`incidental`) and whether the write was guarded. Neither
+  recovers anything. Both exist because `grep -c` returns the **same zero for a
+  deliberate deletion and a destroyed one**: after a known clobber, every
+  genuine absence in the blast radius reads as damage, and no instrument in the
+  system could tell the two apart. As pm-pogo put it — an incident does not just
+  cost the work it destroys, it degrades the instruments everyone nearby is
+  using for the next hour, in a direction the incident chooses.
+
+  **Deliberately not locking.** Agents are long-lived and can die mid-edit, so a
+  lock needs a timeout, and a timeout is the same race with more moving parts.
+  The defect is silence, not concurrency.
+
+  **`mg edit --title` alone remains body-safe** and is now pinned by a test: it
+  rewrites the `# heading` line in place and leaves every other byte of the body
+  untouched. It is the one edit two agents can make to a live item without
+  racing each other's prose.
+
 - **`mg sidecars` reports result sidecars that are not beside their item
   (mg-eb1e).** Reading a result by glob is unsafe, because the lifecycle
   directories expand in alphabetical order:

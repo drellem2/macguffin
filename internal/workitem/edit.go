@@ -4,13 +4,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/drellem2/macguffin/internal/event"
+	"github.com/drellem2/macguffin/internal/mgerr"
 )
 
 // UpdateField represents which field to update and how.
 type UpdateField struct {
 	Title      *string  // replace title
 	Body       *string  // replace body
+	AppendBody *string  // append to the existing body (see appendToBody)
 	Type       *string  // replace type
 	Repo       *string  // replace repo
 	Assignee   *string  // replace assignee
@@ -22,6 +28,26 @@ type UpdateField struct {
 	Tags       []string // replace all tags (nil = no change, empty = clear)
 	AddTags    []string // append to existing tags
 	RmTags     []string // remove from existing tags
+
+	// IfUnchanged is an optional precondition: the stored body must hash to
+	// this value (a full BodyHash or a prefix of at least minHashPrefix
+	// characters) or the whole update is refused before anything is written.
+	// Empty means no precondition — the historical, unguarded behaviour.
+	IfUnchanged string
+}
+
+// BodyChange reports what an update did to the stored body. It exists so the
+// CLI can print a size delta on the success line: after mg-f326's incident 1 a
+// body went 227 → 113 lines and the writer was told only "Updated", so the loss
+// was found seven minutes later by a re-read and a grep. A number on the write
+// itself is the cheapest instrument that would have shown it immediately.
+type BodyChange struct {
+	Changed     bool
+	Mode        string // "replace", "append", or "incidental" (a title rewrite)
+	HashBefore  string
+	HashAfter   string
+	LinesBefore int
+	LinesAfter  int
 }
 
 // Update applies field changes to an existing work item and writes it back.
@@ -29,19 +55,76 @@ type UpdateField struct {
 // available/ to pending/. Conversely, if all deps are now met, it moves from
 // pending/ to available/.
 func Update(root, id string, fields UpdateField) (*Item, error) {
+	item, _, err := UpdateWithBodyChange(root, id, fields)
+	return item, err
+}
+
+// UpdateWithBodyChange is Update plus a report of what happened to the body.
+// Update is the thin wrapper, so the dozens of callers that do not care about
+// the body delta are unaffected.
+//
+// LOST UPDATES (mg-f326). This is a read-modify-write: it reads the stored
+// item, applies fields, and writes the whole file back. That is safe for the
+// incremental fields (--add-tags and friends compose against what is on disk at
+// write time) and unsafe for Body, which arrives as a complete replacement
+// computed by the caller from a read that happened at caller-scale — seconds,
+// minutes, or an agent's whole turn earlier. Anything written into that window
+// is destroyed with exit 0.
+//
+// Two defences, in the order they should be reached for:
+//
+//  1. AppendBody. An append composes against the body on disk at write time, so
+//     it cannot destroy a section it never saw. All three of mg-f326's
+//     collisions were appends of separate dated sections that had no reason to
+//     conflict. This closes the caller-scale window entirely rather than
+//     detecting a write into it.
+//  2. IfUnchanged. When a full-body replacement genuinely is the right shape,
+//     naming the version you read turns a silent clobber into a loud refusal.
+//     It is opt-in: a bare Body write behaves exactly as it always has, because
+//     mg self-installs across the whole fleet on merge and a write path that
+//     starts refusing by default would take out the tooling needed to report
+//     that it had.
+//
+// Deliberately NOT a lock. Callers are long-lived agents that can die
+// mid-edit, so a lock needs a timeout, and a timeout is the same race with more
+// moving parts. The defect is silence, not concurrency.
+//
+// A residual window remains between this function's own read and its own write
+// — microseconds inside one process, against the caller-scale window that
+// produced every observed incident. Closing it would require the locking above.
+func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChange, error) {
 	itemPath, status, err := FindPath(root, id)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	data, err := os.ReadFile(itemPath)
 	if err != nil {
-		return nil, fmt.Errorf("reading work item: %w", err)
+		return nil, nil, fmt.Errorf("reading work item: %w", err)
 	}
 
 	item, err := Parse(string(data))
 	if err != nil {
-		return nil, fmt.Errorf("parsing work item: %w", err)
+		return nil, nil, fmt.Errorf("parsing work item: %w", err)
+	}
+
+	// The body as stored, captured before any field is applied. This is both
+	// the value IfUnchanged is checked against and the "before" side of the
+	// reported delta.
+	bodyBefore := item.Body
+
+	// The precondition runs FIRST, before a single field is applied and long
+	// before the write, so a refusal leaves the stored item byte-identical.
+	if fields.IfUnchanged != "" {
+		want, err := normalizeHashArg(fields.IfUnchanged)
+		if err != nil {
+			return nil, nil, mgerr.Usage("invalid_value",
+				fmt.Sprintf("--if-unchanged=%q is not a body hash: %v", fields.IfUnchanged, err),
+				fmt.Sprintf("Get the current one with 'mg show %s --body-hash'.", id))
+		}
+		if !bodyHashMatches(want, bodyBefore) {
+			return nil, nil, errBodyChanged(id, itemPath, want, bodyBefore)
+		}
 	}
 
 	// Apply field updates
@@ -56,6 +139,10 @@ func Update(root, id string, fields UpdateField) (*Item, error) {
 
 	if fields.Body != nil {
 		item.Body = *fields.Body
+	}
+
+	if fields.AppendBody != nil {
+		item.Body = appendToBody(item.Body, *fields.AppendBody)
 	}
 
 	if fields.Type != nil {
@@ -115,13 +202,40 @@ func Update(root, id string, fields UpdateField) (*Item, error) {
 	// refusal leaves the stored item untouched.
 	tags, err := reconcileWorkflowMarkers(composeBody(item), item.Tags)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	item.Tags = tags
 
+	// Measure the body against composeBody, not item.Body: composeBody is what
+	// actually lands on disk (it synthesises the "# Title" heading when the
+	// supplied body lacks one), so anything measuring item.Body would be
+	// reporting on a string that never gets stored.
+	change := describeBodyChange(fields, bodyBefore, composeBody(item))
+
 	content := Render(item)
 	if err := os.WriteFile(itemPath, []byte(content), 0o644); err != nil {
-		return nil, ioErr(fmt.Sprintf("%s: could not be saved: %s", id, fsErrText(err)))
+		return nil, nil, ioErr(fmt.Sprintf("%s: could not be saved: %s", id, fsErrText(err)))
+	}
+
+	// A durable record that a prior version existed. mg-f326's complaint was
+	// not only that a write destroyed 85 lines but that nothing anywhere said
+	// so afterwards: `grep -c` returns the same zero for a deliberate deletion
+	// and a destroyed one, so once a clobber is known to have happened every
+	// genuine absence in the blast radius reads as damage. This line does not
+	// recover the bytes, but it does let a later reader tell "the body shrank
+	// by 114 lines at 04:05, replacing hash a1b2…" from "that section was never
+	// there" — which is the distinction no instrument could previously make.
+	if change.Changed {
+		event.Emit(root, "work.edited", map[string]string{
+			"item_id":          item.ID,
+			"actor":            actorFor(item),
+			"mode":             change.Mode,
+			"guarded":          strconv.FormatBool(fields.IfUnchanged != ""),
+			"body_hash_before": change.HashBefore,
+			"body_hash_after":  change.HashAfter,
+			"lines_before":     strconv.Itoa(change.LinesBefore),
+			"lines_after":      strconv.Itoa(change.LinesAfter),
+		})
 	}
 
 	// After dependency changes, move items between available/ and pending/
@@ -132,36 +246,117 @@ func Update(root, id string, fields UpdateField) (*Item, error) {
 			// Check if any dependency is unmet → move to pending/
 			doneIDs, err := doneIDSet(root)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if !allDepsMet(item.Depends, doneIDs) {
 				dst := filepath.Join(root, "work", "pending", filepath.Base(itemPath))
 				if err := os.Rename(itemPath, dst); err != nil {
-					return nil, ioErr(fmt.Sprintf("%s: saved, but could not be moved to pending: %s", id, fsErrText(err)))
+					return nil, nil, ioErr(fmt.Sprintf("%s: saved, but could not be moved to pending: %s", id, fsErrText(err)))
 				}
 				if err := moveResultSidecar(filepath.Dir(itemPath), filepath.Dir(dst), id); err != nil {
-					return nil, ioErr(fmt.Sprintf("%s: moved to pending, but result sidecar could not follow: %s", id, fsErrText(err)))
+					return nil, nil, ioErr(fmt.Sprintf("%s: moved to pending, but result sidecar could not follow: %s", id, fsErrText(err)))
 				}
 			}
 		} else if status == "pending" {
 			// Check if all deps are now met → move to available/
 			doneIDs, err := doneIDSet(root)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if len(item.Depends) == 0 || allDepsMet(item.Depends, doneIDs) {
 				dst := filepath.Join(root, "work", "available", filepath.Base(itemPath))
 				if err := os.Rename(itemPath, dst); err != nil {
-					return nil, ioErr(fmt.Sprintf("%s: saved, but could not be promoted to available: %s", id, fsErrText(err)))
+					return nil, nil, ioErr(fmt.Sprintf("%s: saved, but could not be promoted to available: %s", id, fsErrText(err)))
 				}
 				if err := moveResultSidecar(filepath.Dir(itemPath), filepath.Dir(dst), id); err != nil {
-					return nil, ioErr(fmt.Sprintf("%s: promoted to available, but result sidecar could not follow: %s", id, fsErrText(err)))
+					return nil, nil, ioErr(fmt.Sprintf("%s: promoted to available, but result sidecar could not follow: %s", id, fsErrText(err)))
 				}
 			}
 		}
 	}
 
-	return item, nil
+	return item, change, nil
+}
+
+// appendToBody joins text onto the end of body, separated by exactly one blank
+// line.
+//
+// The appended text itself is taken VERBATIM — the same guarantee --body-file
+// makes. Only the join is normalized, and it is normalized rather than
+// concatenated raw because these bodies are markdown: a "## 2026-07-29 04:20"
+// heading placed directly under the previous paragraph's last line is not a
+// heading at all under CommonMark, it is more paragraph text. Requiring every
+// caller to remember a leading blank line would make the safe path cost more
+// keystrokes and more knowledge than the dangerous one, which is the gradient
+// --body-file exists to invert.
+//
+// Trailing newlines on the existing body are collapsed to the single blank-line
+// separator, so appending twice yields one blank line between sections, not a
+// growing run of them.
+func appendToBody(body, text string) string {
+	trimmed := strings.TrimRight(body, "\n")
+	if strings.TrimSpace(trimmed) == "" {
+		return text
+	}
+	return trimmed + "\n\n" + text
+}
+
+// describeBodyChange measures the stored body before and after an update and
+// names which flag drove the change. "incidental" covers the case where no body
+// flag was passed at all but the body still moved — in practice a --title edit,
+// which rewrites the "# heading" line in place.
+func describeBodyChange(fields UpdateField, before, after string) *BodyChange {
+	mode := "incidental"
+	switch {
+	case fields.Body != nil:
+		mode = "replace"
+	case fields.AppendBody != nil:
+		mode = "append"
+	}
+	return &BodyChange{
+		Changed:     before != after,
+		Mode:        mode,
+		HashBefore:  BodyHash(before),
+		HashAfter:   BodyHash(after),
+		LinesBefore: countBodyLines(before),
+		LinesAfter:  countBodyLines(after),
+	}
+}
+
+// errBodyChanged is the loud refusal --if-unchanged exists to produce.
+//
+// It reports everything mg can actually observe about the change — the current
+// hash, the current size, and when the file was last written — and no more. It
+// cannot say WHAT changed, because the version the caller read is not stored
+// anywhere mg can reach; claiming otherwise would be the same class of lie as
+// the exit 0 this replaces. Naming the size and the timestamp is enough for a
+// caller to find the other writer.
+//
+// Conflict (exit 4), not retryable: re-running the identical command with the
+// same now-stale hash can never succeed, and a caller that retried on it would
+// spin. The remedy is a re-read, which the hint spells out.
+func errBodyChanged(id, itemPath, want, stored string) *mgerr.Error {
+	modified := "unknown"
+	if info, err := os.Stat(itemPath); err == nil {
+		modified = info.ModTime().UTC().Format(time.RFC3339)
+	}
+
+	msg := fmt.Sprintf(
+		"%s: the body changed since you read it — refusing to overwrite it.\n"+
+			"  you passed --if-unchanged=%s\n"+
+			"  on disk now %s (%d lines, last written %s)",
+		id, want, BodyHash(stored), countBodyLines(stored), modified)
+
+	hint := fmt.Sprintf(
+		"Someone else wrote to %s after the read your body is based on. "+
+			"Re-read it ('mg show %s --json'), merge your changes into the CURRENT body, "+
+			"and retry with the new hash from 'mg show %s --body-hash'. "+
+			"If you are adding a section rather than rewriting, use "+
+			"'mg edit %s --append-body-file -' instead — an append composes against "+
+			"what is on disk and cannot clobber a section it never saw.",
+		id, id, id, id)
+
+	return mgerr.Conflict("body_changed", msg, hint)
 }
 
 // addUnique appends values to a slice, skipping duplicates.
