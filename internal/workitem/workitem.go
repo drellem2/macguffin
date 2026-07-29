@@ -177,7 +177,9 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 		// `workflow:` line must agree, and the body is the source of truth
 		// (see workflowmarker.go). Refuses BEFORE any write, so a rejected
 		// filing leaves nothing behind.
-		tags, err := reconcileWorkflowMarkers(composeBody(item), item.Tags)
+		// A filing authors both markers from scratch, so writeShape is the zero
+		// value: nothing to grandfather, full enforcement.
+		tags, err := reconcileWorkflowMarkers(composeBody(item), item.Tags, writeShape{})
 		if err != nil {
 			return nil, err
 		}

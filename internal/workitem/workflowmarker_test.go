@@ -367,7 +367,7 @@ func TestLeadingWorkflow(t *testing.T) {
 // TestReconcileWorkflowMarkers_DoesNotWrite pins that reconciliation is pure:
 // both Create and Update rely on it refusing before they touch the store.
 func TestReconcileWorkflowMarkers_DoesNotWrite(t *testing.T) {
-	tags, err := reconcileWorkflowMarkers(carrierBody, nil)
+	tags, err := reconcileWorkflowMarkers(carrierBody, nil, writeShape{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

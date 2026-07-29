@@ -226,6 +226,55 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Fixed
 
+- **`mg edit --append-body-file` now reaches the 41 gh-issue items filed before
+  the carrier block existed (mg-d878).** The workflow-marker guard (mg-5d4e)
+  validated the item's effective tags against its resulting body on *every*
+  write. That is right for a filing and wrong for a correction: an item carrying
+  `gh-issue` with no leading `workflow:` line refused every edit that touched its
+  body — including an append that changes no classification and asserts nothing
+  about routing. On 2026-07-29, 41 of 92 `gh-issue` items were in that state, 7
+  of them live.
+
+  There was no append-only way around it. A carrier block written *in* the
+  appended text lands below the prose and is `misplaced`, which is refused
+  outright and correctly so. That left three moves, all wrong: rewrite the body
+  from a captured read (the clobber mg-f326 exists to prevent), `--rm-tags`
+  (destroys the classification `mg list --tag=gh-issue` depends on, and re-adding
+  it trips the same guard), or give up and mail the finding — which is what the
+  mg-d489 audit did, and is exactly the failure the append-only protocol exists
+  to prevent: *a finding that lives in an inbox dies with the thread.* mg-ace6's
+  body still asserts an open bug that shipped fixed on 2026-07-11, and the
+  pointer saying so could not be written.
+
+  **The guard was right about the invariant and wrong about the population.** So
+  the exemption is narrow, and it is keyed on what a write can *do*, not on which
+  flag was typed:
+
+  - An append cannot author the body's leading block — appended text is below the
+    prose by construction. It can therefore only **inherit** a missing carrier,
+    never create one. A pure append onto a tag the item **already carried** skips
+    the `!found` refusal.
+  - Everything else is unchanged. `--body`/`--body-file` rewrites stay refused,
+    because a rewrite *can* place the block and the remedy the guard hands back is
+    a real one on that path. An append that also adds the workflow tag
+    (`--add-tags=gh-issue`, or `--tags=` naming it) is *introducing* the
+    disagreement and stays refused. `misplaced` and the conflict direction are
+    untouched. `mg new` passes the zero write-shape, so no filing can ever be
+    grandfathered — the mg-560d hazard (a `gh-issue` item routed to the default
+    build template, opening a PR against an externally-reported issue with no
+    human gate) is exactly as closed as it was.
+
+  Allowed is not repaired, and the difference is said out loud: a successful
+  append to an unmarked item prints a note **on stderr** naming the tag and the
+  routing consequence. mg still will not inject the block itself — `stage:` and
+  `gh:` name a state-machine position and a real GitHub issue, and a guessed
+  `gh:` ref points a build polecat at the wrong issue, which is strictly worse
+  than refusing to guess.
+
+  Not done here, and deliberately: backfilling the 41 bodies. That needs a human
+  eye on each `stage:`, and doing it from captured reads is the write shape this
+  whole chain exists to stop.
+
 - **`mg done` now carries the result sidecar instead of only writing one
   (mg-9795, recurrence of mg-ab67).** Every `.md` rename in `internal/workitem`
   is paired with a `moveResultSidecar` call — nine of them — except `Done`,

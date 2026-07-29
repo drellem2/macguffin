@@ -113,6 +113,11 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 	// reported delta.
 	bodyBefore := item.Body
 
+	// The tag set as stored, likewise captured before any field is applied. The
+	// workflow-marker guard needs it to tell a workflow tag this write ADDS from
+	// one the item already carried — see writeShape in workflowmarker.go.
+	tagsBefore := append([]string(nil), item.Tags...)
+
 	// The precondition runs FIRST, before a single field is applied and long
 	// before the write, so a refusal leaves the stored item byte-identical.
 	if fields.IfUnchanged != "" {
@@ -200,7 +205,16 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 	// drops the carrier block from an already-tagged item, both reintroduce the
 	// divergence that mg-560d nearly shipped. Runs before the write, so a
 	// refusal leaves the stored item untouched.
-	tags, err := reconcileWorkflowMarkers(composeBody(item), item.Tags)
+	//
+	// The shape is passed in because "what the resulting item looks like" is not
+	// enough on its own: a pure append cannot author the body's leading block,
+	// so on an item that ALREADY carried the tag it can only inherit a missing
+	// carrier, never create one. Refusing there left mg-d878's 41 legacy items
+	// with no append-only route to a correction at all.
+	tags, err := reconcileWorkflowMarkers(composeBody(item), item.Tags, writeShape{
+		appendOnly: fields.AppendBody != nil && fields.Body == nil,
+		priorTags:  tagsBefore,
+	})
 	if err != nil {
 		return nil, nil, err
 	}

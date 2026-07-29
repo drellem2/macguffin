@@ -101,6 +101,67 @@ func leadingWorkflow(body string) (name string, found, misplaced bool) {
 	return "", false, false
 }
 
+// writeShape tells reconcileWorkflowMarkers what the write it is guarding
+// actually does, so the guard can distinguish a write that INTRODUCES a
+// marker/tag disagreement from one that merely INHERITS a pre-existing one.
+//
+// WHY THIS EXISTS (mg-d878). The guard above validates the item's effective tag
+// set against its resulting body on every write. That is exactly right for a
+// filing — the shape it was built for — and exactly wrong for a correction to an
+// item filed BEFORE the carrier block was a convention. Of the 92 items tagged
+// gh-issue on 2026-07-29, 41 carried no leading carrier block, and for those the
+// guard refused *every* edit that touched the body. That includes
+// `--append-body-file`, which is the append-only correction protocol mg-f326
+// exists to make the default: an append composes against the body on disk, so it
+// is the one write shape that cannot clobber a section it never saw.
+//
+// The trap that leaves is total. The three ways out were: rewrite the body from
+// a captured read (the clobber mg-f326 forbids), --rm-tags=gh-issue (destroys
+// the board query, and re-adding the tag trips the same guard), or give up and
+// mail the finding instead — which is a finding that dies with the thread. The
+// mg-d489 docs audit took the third, on mg-ace6, whose body still asserts an
+// open bug that shipped fixed on 2026-07-11.
+//
+// So the relaxation is deliberately narrow. An append cannot change the body's
+// leading block by construction — appended text lands below the prose, and a
+// carrier block written there is `misplaced`, which stays refused. It therefore
+// cannot turn a declared workflow into an undeclared one; it can only inherit an
+// item that was already undeclared. A pure append onto a tag the item ALREADY
+// carried is thus the one case where the `!found` refusal protects nothing and
+// costs the item its only route to correction.
+//
+// Everything else keeps the guard as it was, and the ordering matters: it is the
+// `!found` direction that stops a gh-issue item routing to the default build
+// template and opening a PR against an externally-reported issue with no human
+// gate (the mg-560d near-miss). A write that ADDS the workflow tag — even
+// alongside an append — is introducing the disagreement, not inheriting it, and
+// is still refused.
+type writeShape struct {
+	// appendOnly is true when the write only adds text to the end of the
+	// existing body: 'mg edit --append-body-file' and nothing that replaces the
+	// body wholesale.
+	appendOnly bool
+	// priorTags is the tag set the item carried on disk before this write, so
+	// the guard can tell an inherited workflow tag from a newly added one. It is
+	// empty for a Create, where every tag is new by definition.
+	priorTags []string
+}
+
+// grandfathers reports whether tag may keep its missing carrier block through
+// this write. Both halves are required: the write must be unable to author the
+// leading block, and the tag must already have been on the item.
+func (s writeShape) grandfathers(tag string) bool {
+	if !s.appendOnly {
+		return false
+	}
+	for _, prior := range s.priorTags {
+		if prior == tag {
+			return true
+		}
+	}
+	return false
+}
+
 // reconcileWorkflowMarkers enforces the one-fact-one-marker invariant described
 // above. It returns the tags the item should be stored with — identical to the
 // input except that a workflow declared in the body adds its tag — or an error
@@ -108,7 +169,7 @@ func leadingWorkflow(body string) (name string, found, misplaced bool) {
 //
 // It is total over its inputs and performs no I/O, so both Create and Update can
 // call it before touching the store: a refusal means nothing was written.
-func reconcileWorkflowMarkers(body string, tags []string) ([]string, error) {
+func reconcileWorkflowMarkers(body string, tags []string, shape writeShape) ([]string, error) {
 	declared, found, misplaced := leadingWorkflow(body)
 
 	// A carrier block buried below prose is a silent misroute dressed up as a
@@ -128,6 +189,13 @@ func reconcileWorkflowMarkers(body string, tags []string) ([]string, error) {
 			continue
 		}
 		switch {
+		case !found && shape.grandfathers(tag):
+			// A pure append onto a tag the item already carried. The write
+			// inherits the disagreement rather than creating it, and refusing
+			// here would leave the item with no append-only route to a
+			// correction at all. The item stays as unroutable as it was — see
+			// MissingWorkflowCarrier, which is how callers say so out loud.
+			continue
 		case !found:
 			return nil, mgerr.Usage("workflow_marker_missing",
 				fmt.Sprintf("--tags=%s marks this as a %s workflow item, but the body does not declare it. Dispatch routes on the body, not the tag, so this item would go to the DEFAULT BUILD template — on a gh-issue that means a PR opened against an externally-reported issue with no human gate.", tag, wf),
@@ -152,6 +220,29 @@ func reconcileWorkflowMarkers(body string, tags []string) ([]string, error) {
 	}
 
 	return tags, nil
+}
+
+// MissingWorkflowCarrier returns the workflow tag the item carries whose body
+// does not declare the matching carrier block, or "" when the two agree.
+//
+// This is the residue of the grandfathering above. Letting an append through on
+// a legacy item is the right call — the alternative is no correction at all —
+// but it must not be a SILENT right call: the item is still one that dispatch
+// will route to the default build template, and the agent appending to it is the
+// one agent guaranteed to be looking. mg reports the state; it does not repair
+// it, because repairing means inventing a `gh:` ref and a `stage:`, and a wrong
+// `gh:` ref points a build polecat at the wrong issue.
+func MissingWorkflowCarrier(item *Item) string {
+	_, found, _ := leadingWorkflow(composeBody(item))
+	if found {
+		return ""
+	}
+	for _, tag := range item.Tags {
+		if _, isWorkflowTag := workflowTags[tag]; isWorkflowTag {
+			return tag
+		}
+	}
+	return ""
 }
 
 // workflowTagFor returns the tag that projects the named workflow, or "" if the

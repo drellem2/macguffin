@@ -111,7 +111,16 @@ resulting item rather than on the flags: adding a workflow tag (e.g.
 --add-tags=gh-issue) to an item whose body does not declare that workflow is
 refused, and so is a --body rewrite that drops the carrier block off an item
 still carrying the tag. Advancing 'stage:' by rewriting the body is unaffected —
-keep the carrier block at the top. See 'mg new --help' for the block's shape.`,
+keep the carrier block at the top. See 'mg new --help' for the block's shape.
+
+--append-body-file is exempt from that refusal on an item that ALREADY carried
+the tag. An append lands below the prose, so it cannot author the body's leading
+block: it can only inherit a missing carrier block, never create one. Without
+the exemption, an item filed before the carrier block was a convention could not
+be corrected at all except by the full-body rewrite --append-body-file exists to
+avoid. The append prints a note on stderr saying the item still routes to the
+default build template; a carrier block IN the appended text is still refused
+(it would read as marked while routing as unmarked).`,
 	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := resolveRoot()
@@ -230,6 +239,21 @@ keep the carrier block at the top. See 'mg new --help' for the block's shape.`,
 			note = fmt.Sprintf(" (body %d → %d lines)", change.LinesBefore, change.LinesAfter)
 		}
 		fmt.Printf("Updated %s: %s%s\n", item.ID, item.Title, note)
+
+		// The write succeeded on an item whose workflow tag and body still
+		// disagree — only an append can get here (mg-d878). Saying so is the
+		// whole difference between grandfathering and forgetting: the item is
+		// still one dispatch routes to the default build template, and the
+		// agent that just appended to it is the one agent guaranteed to be
+		// looking. stderr, so it cannot corrupt anything parsing stdout.
+		if tag := workitem.MissingWorkflowCarrier(item); tag != "" {
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"note: %s is tagged %s but its body does not lead with the carrier block, "+
+					"so dispatch will route it to the DEFAULT BUILD template. The append was "+
+					"allowed because it cannot fix that either way; mg will not invent the "+
+					"stage/gh values. See 'mg new --help' for the block's shape.\n",
+				item.ID, tag)
+		}
 		return nil
 	},
 }
