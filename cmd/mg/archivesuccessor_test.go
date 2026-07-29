@@ -28,9 +28,21 @@ import (
 // those words. Knowing is not a mechanism; neither is a grep.
 
 // seedDoneOfType creates a done item of the given type and returns its id.
+//
+// It files with --no-declares-remainder (unless the caller forced the
+// declaration on) because these tests are about the ARCHIVE-time guards, and
+// since mg-966d a `--type=design` filing declares a remainder by default — which
+// `mg done` refuses, so the helper could not reach done/ at all. Opting out here
+// seeds precisely the shape the archive guards exist for: an item that reached
+// done/ having declared nothing, which is every design filed before mg-8970 and
+// every one filed with the escape since. The default itself is proven in
+// newdeclares_test.go, where it is the subject rather than the fixture.
 func seedDoneOfType(t *testing.T, bin, root, typ, title string, extra ...string) string {
 	t.Helper()
 	args := append([]string{"new", "--type=" + typ, title}, extra...)
+	if !hasFlag(extra, "--declares-remainder") {
+		args = append(args, "--no-declares-remainder")
+	}
 	out, code := mgArchive(t, bin, root, args...)
 	if code != 0 {
 		t.Fatalf("mg new %s: exit %d\n%s", typ, code, out)
@@ -52,6 +64,17 @@ func seedDoneOfType(t *testing.T, bin, root, typ, title string, extra ...string)
 		t.Fatalf("mg done %s: exit %d\n%s", id, code, out)
 	}
 	return id
+}
+
+// hasFlag reports whether args contains the named flag, in either the bare
+// `--flag` or the `--flag=value` form.
+func hasFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag || strings.HasPrefix(a, flag+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 // seedAvailable creates an item and leaves it available, returning its id.

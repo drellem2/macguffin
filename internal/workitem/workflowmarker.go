@@ -101,6 +101,30 @@ func leadingWorkflow(body string) (name string, found, misplaced bool) {
 	return "", false, false
 }
 
+// leadingCarrierValue returns the value of the named carrier field (`stage`,
+// `gh`, ...) when it appears in the body's LEADING BLOCK, or "" when it appears
+// only below prose or not at all.
+//
+// It applies exactly the block rule leadingWorkflow does, for exactly the same
+// reason: a `stage:` line buried in prose is a mention, not a declaration, and
+// treating the two alike is how a marker comes to mean whatever the nearest
+// paragraph happens to say. The scan stops at the first line of prose, so a body
+// that discusses stages further down cannot reach back and change the block.
+func leadingCarrierValue(body, key string) string {
+	prefix := key + ":"
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if v, ok := strings.CutPrefix(trimmed, prefix); ok {
+			return strings.TrimSpace(v)
+		}
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || carrierFieldRe.MatchString(trimmed) {
+			continue
+		}
+		return ""
+	}
+	return ""
+}
+
 // writeShape tells reconcileWorkflowMarkers what the write it is guarding
 // actually does, so the guard can distinguish a write that INTRODUCES a
 // marker/tag disagreement from one that merely INHERITS a pre-existing one.

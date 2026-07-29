@@ -28,11 +28,13 @@ var (
 	newBudget   int
 	newPrefix   string
 
-	// newDeclaresRemainder marks the item as one whose OUTPUT IS A
-	// RECOMMENDATION, so `mg done` refuses it until something tracks what it
-	// recommends. See internal/workitem/remainder.go for why this is declared
-	// rather than inferred from type or stage.
-	newDeclaresRemainder bool
+	// newDeclaresRemainder / newNoDeclaresRemainder are the two halves of one
+	// three-state answer to "does this item's OUTPUT IS A RECOMMENDATION?":
+	// forced on, forced off, or unset — in which case mg picks the default from
+	// the type and the body's carrier block. See internal/workitem/remainder.go
+	// for why the DEFAULT may read the type while the GUARD may not.
+	newDeclaresRemainder   bool
+	newNoDeclaresRemainder bool
 )
 
 // validPrefixRe matches lowercase alphanumeric + hyphens, ending with a single
@@ -86,13 +88,24 @@ issue. The block belongs at the top of the body, ahead of any prose:
     stage: triage
     gh: <owner>/<repo>#<n>
 
---declares-remainder marks an item whose OUTPUT IS A RECOMMENDATION: a triage
-verdict, a design, a proposal. Its build is undone by construction at the
-moment it completes, so 'mg done' refuses it until --successor names the item
-carrying it forward (and 'mg archive' refuses it as a backstop). Declare it,
-rather than letting mg infer it from a type or a workflow stage — those are
-proxies that miss triages and over-fire on paused items. An item that does not
-declare a remainder is never touched by the guard.
+An item whose OUTPUT IS A RECOMMENDATION — a triage verdict, a design, a
+proposal — carries a 'declares-remainder' tag. Its build is undone by
+construction at the moment it completes, so 'mg done' refuses it until
+--successor names the item carrying it forward (and 'mg archive' refuses it as a
+backstop). An item without the tag is never touched by the guard.
+
+mg emits the tag BY DEFAULT, from the type (--type=design, scoping, audit,
+idea) and from a body whose leading carrier block says 'stage: triage' — the
+latter because a triage is a workflow position, not a type, and the escape that
+produced this rule was a 'type: task' triage. Pass --no-declares-remainder for
+the genuine exception; the item is then filed with no declaration and completes
+exactly as an ordinary task does. --declares-remainder forces the tag on for a
+type mg does not default (say a task that concludes in a recommendation).
+
+The default reads the type; the GUARD does not, and must not. 'mg done' fires on
+the tag the item carries and nothing else, so a default that is wrong is wrong
+visibly, in the item's own text, where the filer can drop it — not invisibly at
+completion time on an item that never said anything.
 
 The --prefix flag overrides the work item ID prefix for this call only.
 It is not persisted to workspace config (see 'mg init --prefix=...' for
@@ -110,6 +123,9 @@ optional internal hyphens, and must end in a hyphen.`,
 		}
 		if title == "" {
 			return mgerr.Usage("missing_required", "title is required (use --title flag or positional arguments)", "")
+		}
+		if newDeclaresRemainder && newNoDeclaresRemainder {
+			return mgerr.Usage("mutually_exclusive_flags", "cannot use both --declares-remainder and --no-declares-remainder", "Pass one or neither: with neither, mg picks the default from --type and the body's carrier block.")
 		}
 
 		deps := normSlice(newDepends)
@@ -161,20 +177,25 @@ optional internal hyphens, and must end in a hyphen.`,
 				return mgerr.Usage("invalid_value", fmt.Sprintf("invalid priority %q: must be low, medium, or high", priority), "")
 			}
 		}
+		// The body is read before the tags are assembled because the
+		// declaration's default reads the body's carrier block: a `stage: triage`
+		// item is a triage whatever its type says.
+		body, _, err := bodyFromFlags(cmd, newBody, newBodyFile)
+		if err != nil {
+			return err
+		}
 		tags := normSlice(newTags)
-		if newDeclaresRemainder {
+		if declaresRemainder(newType, body) {
 			// mg writes the marker itself, in its canonical spelling, rather
-			// than asking the filer to remember a tag string — a declaration
-			// the tool writes cannot be forgotten or misspelled the way a
-			// convention a prompt merely asks for can.
+			// than asking the filer to remember a tag string — and it decides
+			// WHETHER to write it, rather than asking the filer to remember a
+			// flag. A declaration the tool emits cannot be forgotten; one it
+			// merely accepts can, and for sixteen hours after mg-8970 shipped,
+			// was: zero items in the store declared anything (mg-966d).
 			tags = addUniqueTag(tags, workitem.DeclaresRemainderTag)
 		}
 		if len(tags) > 0 {
 			opts = append(opts, workitem.WithTags(tags))
-		}
-		body, _, err := bodyFromFlags(cmd, newBody, newBodyFile)
-		if err != nil {
-			return err
 		}
 		if body != "" {
 			opts = append(opts, workitem.WithBody(body))
@@ -242,7 +263,28 @@ func init() {
 	newCmd.Flags().BoolVar(&newNoRepo, "no-repo", false, "do not auto-detect or set a repo (use for non-coding work items)")
 	newCmd.Flags().IntVar(&newBudget, "budget", 0, "estimated token budget (integer; omit or 0 to leave unset)")
 	newCmd.Flags().StringVar(&newPrefix, "prefix", "", "override work item ID prefix for this call only (e.g. 'dr-'); not persisted")
-	newCmd.Flags().BoolVar(&newDeclaresRemainder, "declares-remainder", false, "this item's output is a recommendation: 'mg done' refuses it until --successor names the item carrying it forward")
+	newCmd.Flags().BoolVar(&newDeclaresRemainder, "declares-remainder", false, "force the declaration on: this item's output is a recommendation, so 'mg done' refuses it until --successor names the item carrying it forward (already the default for --type=design/scoping/audit/idea and for a 'stage: triage' body)")
+	newCmd.Flags().BoolVar(&newNoDeclaresRemainder, "no-declares-remainder", false, "force the declaration off for a type that would otherwise default to it: the item is filed with no declaration and completes like an ordinary task")
+}
+
+// declaresRemainder decides whether a new item carries the declaration.
+//
+// The two flags are an explicit answer and win outright; with neither, mg picks
+// the default. Putting the choice HERE rather than in workitem.Create is
+// deliberate: this is the filing decision, and it must not become an invariant
+// that every later write re-derives. `mg edit --type=design` on an item filed as
+// a task must not retroactively make it declare something it never claimed —
+// a historical item declaring nothing is a true record of what it declared.
+func declaresRemainder(itemType, body string) bool {
+	switch {
+	case newDeclaresRemainder:
+		return true
+	case newNoDeclaresRemainder:
+		return false
+	default:
+		return workitem.TypeDeclaresRemainderByDefault(itemType) ||
+			workitem.BodyDeclaresRemainderByDefault(body)
+	}
 }
 
 // addUniqueTag appends tag unless an equal-folded copy is already present, so

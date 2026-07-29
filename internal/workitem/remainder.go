@@ -57,6 +57,88 @@ import (
 // red line whose hand-authorisation queue stood at four items on 2026-07-29,
 // but mostly because a declaration THE TOOL WRITES CANNOT BE FORGOTTEN in the
 // way a convention a template merely asks for can.
+//
+// EMISSION IS NOT ENFORCEMENT (mg-966d).
+//
+// The paragraph above was true of the SPELLING and false of everything else,
+// because the declaration shipped as an OPT-IN boolean. The forgettable step did
+// not go away; it moved, from "remember the tag string" to "remember the flag" —
+// the second thing wearing the first thing's clothes. Measured over the live
+// store on 2026-07-29, sixteen hours after the guard merged: ZERO items carried
+// the marker, including mg-ee98 (the triage that died of exactly this defect) and
+// every triage and design filed since by agents holding the ticket in context.
+// The guard was live and could not fire.
+//
+// So mg picks the DEFAULT at creation, from the item's type and from a triage
+// carrier block, and writes it into the item as an explicit, visible tag the
+// filer can drop with `--no-declares-remainder`. This does NOT reintroduce the
+// rejected `type == design` predicate, and the distinction is the whole of it:
+//
+//	ENFORCEMENT stays keyed on the declaration. requireRemainderDischarged
+//	below reads the tag and never the type. Unchanged, and it must stay that way.
+//
+//	EMISSION uses the type to choose a default, which is then written down.
+//
+// A default is wrong in the safe direction: it is on the item in plain text, the
+// filer can remove it before or after filing, and the item says what it claims.
+// A type-keyed GUARD is wrong invisibly, at `mg done` time, on an item that never
+// said anything — which is what mg-8970 rejected and what stays rejected.
+
+// typesDeclaringRemainderByDefault names the item types whose output IS a
+// recommendation by construction, so an item of that type declares a remainder
+// unless the filer says otherwise.
+//
+// Membership is decided by one question: does completing this item leave the
+// thing it produced UNDONE? A design recommends a build. A scoping produces a
+// scope somebody else executes. An audit produces findings. An idea is a
+// proposal. In each case the item's own completion is the moment its output
+// becomes work nothing tracks.
+//
+// Deliberately absent: `task`, `bug`, `chore`, `doc`, `qa` — these DO the thing,
+// so completing one discharges it. Also absent: `decision`, whose output binds
+// rather than recommends. The set is kept narrow because every member is a
+// default that a filer has to notice and remove when it is wrong, and the
+// population that matters (1,876 of 1,955 items on 2026-07-29) is `task`.
+//
+// A `type: task` TRIAGE is not reachable from the type at all — that was
+// mg-ee98's escape, and it is caught by the carrier block instead; see
+// BodyDeclaresRemainderByDefault.
+var typesDeclaringRemainderByDefault = map[string]bool{
+	"design":  true,
+	"scoping": true,
+	"audit":   true,
+	"idea":    true,
+}
+
+// TypeDeclaresRemainderByDefault reports whether `mg new --type=<itemType>`
+// should emit the declaration when the filer passes neither
+// --declares-remainder nor --no-declares-remainder.
+//
+// Matching is case-folded and trimmed to match how the type is compared
+// everywhere else, and because a default that misses on " Design" would be a
+// silent no-op rather than an error.
+func TypeDeclaresRemainderByDefault(itemType string) bool {
+	return typesDeclaringRemainderByDefault[strings.ToLower(strings.TrimSpace(itemType))]
+}
+
+// BodyDeclaresRemainderByDefault reports whether the body's LEADING CARRIER
+// BLOCK marks this item as a triage, whose output is a verdict and nothing else.
+//
+// This is the mg-ee98 shape and the reason the type alone is not enough: that
+// item was `type: task`, its verdict was IMPLEMENT on a reproduced data-loss
+// mechanism, and nothing carried the fix. Triage is not a type; it is a position
+// in the gh-issue workflow, declared by the filer in the body's opening block.
+//
+// Reading `stage:` HERE, at creation, is not the stage-keyed predicate mg-8970
+// rejected. That one asked "is this stage non-terminal?" of an item at `mg done`
+// time and over-fired on 41 items whose stage meant a PAUSE. This one asks
+// whether the filer wrote `stage: triage` in the block they are filing right
+// now, and the answer only picks a default that lands in the item as text. A
+// triage that turns out to owe nothing drops the tag; a pause is never filed as
+// a triage in the first place.
+func BodyDeclaresRemainderByDefault(body string) bool {
+	return strings.EqualFold(leadingCarrierValue(body, "stage"), "triage")
+}
 
 // DeclaresRemainderTag is the declaration itself. It is an ordinary tag, so
 // `mg list --tag=declares-remainder` finds every outstanding one across every

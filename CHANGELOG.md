@@ -16,6 +16,46 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Fixed
 
+- **The remainder declaration was an opt-in flag, so nothing declared and the
+  guard was inert (mg-966d).** `mg done` has refused to complete an item that
+  declares a remainder without naming a successor since v0.3.0 — but the
+  declaration shipped as `mg new --declares-remainder`, a boolean the filer had
+  to remember. Measured against the live store sixteen hours after that merge:
+  **zero items carried the marker.** Not the triage the whole rule was written
+  from, not the ticket reporting this defect, not one of the triages and designs
+  filed in the interval by agents that had the guard's own ticket in context.
+  The guard was running and could not fire.
+
+  The argument for putting emission in `mg` rather than in a prompt template was
+  that *a declaration the tool writes cannot be forgotten, while a convention a
+  template asks for can*. That was true of the spelling and false of everything
+  else: the forgettable step had not been removed, it had moved — from remember
+  the tag string to remember the flag, which is the second thing wearing the
+  first thing's clothes.
+
+  `mg new` now emits the declaration **by default**, from the type
+  (`--type=design`, `scoping`, `audit`, `idea`) and from a body whose leading
+  carrier block says `stage: triage` — the latter because a triage is a position
+  in a workflow rather than a type, which is exactly how the original escape got
+  through. `--no-declares-remainder` is the escape for the genuine exception;
+  `--declares-remainder` still forces it on for a type that does not default.
+
+  Adoption, measured over the 1,968-item live store: **1 item declares today**
+  (filed by hand while this defect was being reported). Replaying the same
+  population through the new default marks **83** — 59 by type, 24 by the triage
+  carrier block, including mg-ee98, the item the rule was written from. The other
+  **1,885 (95.8%) are untouched**, which is the half that matters just as much:
+  a guard that fires on routine completions is a guard that gets deleted.
+
+  **This does not reopen the settled ruling that the guard must not key on
+  `type`.** Enforcement is unchanged: `mg done` and `mg archive` read the tag on
+  the item and never its type. Only *emission* consults the type, and only to
+  pick a default that is then written into the item as explicit, visible,
+  overridable text. A wrong default costs one flag and says so on the item; a
+  type-keyed guard is wrong invisibly, at completion time, on an item that never
+  claimed anything. Existing items are deliberately **not** retrofitted — an item
+  that declared nothing is a true record of what it declared.
+
 - **The audit log's `actor` field named the item's ASSIGNEE, not whoever acted
   (mg-3122).** `events.jsonl` could not answer *who did this*, and instead of
   saying nothing it said something false. Measured on the live log: the same

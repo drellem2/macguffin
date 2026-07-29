@@ -441,11 +441,17 @@ func TestCLI_DesignSuccessorGuardStillFiresAtArchive(t *testing.T) {
 // placement for it would re-introduce the very substitution this guard exists
 // to end. A design completes at done/ as it always has; the type-keyed refusal
 // lives at archive, where mg-12a0 put it.
+//
+// Since mg-966d the design has to opt OUT to reach this shape, which is what
+// makes the test sharper rather than weaker: the item is `type: design` and the
+// done guard still lets it through, so the guard demonstrably reads the tag and
+// not the type. If anyone ever moves the type check to `mg done`, this fails.
 func TestCLI_DoneDesignWithoutDeclarationStillCompletes(t *testing.T) {
 	bin := buildBinary(t)
 	root := archiveTestRoot(t, bin)
 
-	id := seedClaimedTagged(t, bin, root, "a design nobody declared a remainder on", "--type=design")
+	id := seedClaimedTagged(t, bin, root, "a design nobody declared a remainder on",
+		"--type=design", "--no-declares-remainder")
 
 	out, code := mgArchive(t, bin, root, "done", id)
 	if code != 0 {

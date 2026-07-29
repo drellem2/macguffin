@@ -111,10 +111,9 @@ the move above until a `successor:<id>` tag names what carries the
 recommendation forward. The refusal happens before the rename, so a refused
 completion leaves the item claimed and the store untouched.
 
-**The guard reads a DECLARATION, not an inference.** `mg new
---declares-remainder` writes a `declares-remainder` tag; nothing else trips the
-guard. Two inferred predicates were tried first and both failed, in opposite
-directions:
+**The guard reads a DECLARATION, not an inference.** A `declares-remainder` tag
+on the item is the only thing that trips the guard. Two inferred predicates were
+tried first and both failed, in opposite directions:
 
 | predicate | failure |
 |---|---|
@@ -126,6 +125,31 @@ exactly as it always has, so a forgotten declaration costs the status quo — wh
 an over-firing guard blocks routine completions, and `mg` self-installs on merge.
 A `snooze:` timestamp (a declared *pause*) declares nothing here, so it cannot
 trip the guard: the paused-vs-owed discrimination never has to be made.
+
+**Emission is not enforcement.** The declaration first shipped as an opt-in
+`mg new --declares-remainder` flag, and sixteen hours later **zero** items in the
+store carried the marker — including the very triage the rule was written from,
+and every triage and design filed in the interval by agents holding the ticket in
+context. The guard was live and could not fire. Putting emission in the tool had
+not removed the forgettable step; it had moved it, from *remember the tag string*
+to *remember the flag*.
+
+So `mg new` picks the **default** — on for `--type=design`, `scoping`, `audit`,
+`idea`, and for a body whose leading carrier block says `stage: triage` (triage
+is a workflow position, not a type: that was the original escape) — and writes it
+into the item as a visible tag. `--no-declares-remainder` is the escape.
+
+This is *not* the rejected `type == design` predicate returning. The two halves
+sit on opposite sides of the line:
+
+| | reads | wrong how |
+|---|---|---|
+| **emission** (`mg new`) | type, carrier block | *visibly*: the tag is in the item's text and the filer can drop it |
+| **enforcement** (`mg done`, `mg archive`) | the tag, never the type | — |
+
+A default that over-fires costs one `--no-declares-remainder`. A type-keyed
+*guard* fires invisibly, at completion time, on an item that never said anything.
+The type may choose what an item claims; it may never decide what is refused.
 
 `mg archive` re-checks the same declaration as a backstop, alongside the older
 `type: design` and `blocked-on-*` archive guards.

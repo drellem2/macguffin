@@ -18,10 +18,12 @@ var doneCmd = &cobra.Command{
 	Short: "Mark a claimed work item as done",
 	Long: `Mark a claimed work item as done.
 
-An item filed with --declares-remainder says its own output is a
-RECOMMENDATION — a triage verdict, a design, a proposal — so at the moment it
-completes, the thing it recommends is undone by construction. Completing it
-with nothing tracking that work discards the recommendation, so mg refuses:
+An item tagged 'declares-remainder' says its own output is a RECOMMENDATION — a
+triage verdict, a design, a proposal — so at the moment it completes, the thing
+it recommends is undone by construction. 'mg new' writes that tag by default for
+the types and the triage carrier block where it holds (see 'mg new --help');
+--no-declares-remainder files without it. Completing a declared item with
+nothing tracking its recommendation discards it, so mg refuses:
 
     mg done <id>
     <id> declares a remainder ... and names no successor
@@ -35,13 +37,15 @@ completed record names its own tracker for any later reader. The successor must
 already exist and cannot be the item itself; a tag pointing at nothing tracks
 nothing.
 
-If a triage concludes that nothing is owed after all, the declaration was
-wrong and the right fix is to retract it, not to work around it:
+If a triage concludes that nothing is owed after all — or the default was
+simply wrong for this item — the declaration is wrong and the right fix is to
+retract it, not to work around it:
 
     mg edit <id> --rm-tags=declares-remainder
 
-The refusal fires ONLY on the declaration. An item that never declared a
-remainder — every ordinary task — completes exactly as before.`,
+The refusal fires ONLY on the declaration, never on the item's type. An item
+that does not carry the tag — every ordinary task — completes exactly as
+before.`,
 	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		id := args[0]
