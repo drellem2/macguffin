@@ -2376,23 +2376,77 @@ func buildBinary(t *testing.T) string {
 	return bin
 }
 
-func testProjectRoot(t *testing.T) string {
-	t.Helper()
-	// Walk up from cmd/mg to find go.mod
+// projectRoot is resolved once by TestMain, BEFORE it moves the suite off the
+// source tree. It cannot be re-derived afterwards: findProjectRoot walks up from
+// the working directory looking for go.mod, and there is no go.mod above a
+// scratch directory.
+var projectRoot string
+
+// TestMain pins the working directory the whole suite runs from.
+//
+// Almost every CLI test here execs the mg binary WITHOUT setting cmd.Dir, so it
+// inherits the test process's working directory — and `mg new` resolves an
+// omitted --repo from exactly that. The suite was therefore quietly asserting
+// against whatever directory `go test` was invoked from. That was invisible until
+// the ephemeral-repo guard landed (mg-0b57): ~130 tests passed from a normal
+// checkout and failed from a polecat worktree, which is where every polecat in
+// the fleet runs them.
+//
+// The fix is not to teach those tests about the guard — it is to stop them having
+// an ambient repo at all. The suite runs from a neutral scratch directory that is
+// no git repo, so auto-detection resolves to nothing and no result depends on
+// where the developer or agent happened to be standing. Tests that genuinely
+// exercise repo detection set cmd.Dir themselves (TestCLI_NewNoRepo,
+// TestCLI_RepoAutoDetectSkippedUnderPogo, the mg-0b57 tests); this makes that
+// explicit form mandatory rather than optional.
+func TestMain(m *testing.M) {
+	root, err := findProjectRoot()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mg tests: %v\n", err)
+		os.Exit(1)
+	}
+	projectRoot = root
+
+	neutral, err := os.MkdirTemp("", "mg-test-cwd-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mg tests: creating a neutral working directory: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.Chdir(neutral); err != nil {
+		fmt.Fprintf(os.Stderr, "mg tests: %v\n", err)
+		os.Exit(1)
+	}
+
+	code := m.Run()
+	// Explicit, not deferred: os.Exit does not run deferred functions.
+	os.RemoveAll(neutral)
+	os.Exit(code)
+}
+
+// findProjectRoot walks up from the current directory to the module root.
+func findProjectRoot() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
-		t.Fatal(err)
+		return "", err
 	}
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
+			return dir, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			t.Fatal("could not find project root (go.mod)")
+			return "", fmt.Errorf("could not find project root (go.mod) above the working directory")
 		}
 		dir = parent
 	}
+}
+
+func testProjectRoot(t *testing.T) string {
+	t.Helper()
+	if projectRoot == "" {
+		t.Fatal("projectRoot is unset — TestMain did not run")
+	}
+	return projectRoot
 }
 
 // jsonItem mirrors the public NDJSON shape emitted by `mg list --json`.

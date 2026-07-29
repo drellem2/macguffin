@@ -28,6 +28,12 @@ var (
 	newBudget   int
 	newPrefix   string
 
+	// newAllowEphemeralRepo is the escape hatch on the ephemeral-repo guard. It
+	// exists so the refusal has a documented override: a guard with no way past
+	// it gets routed around by some other means, and an override that has to be
+	// named on the command line stays visible in the audit log.
+	newAllowEphemeralRepo bool
+
 	// newDeclaresRemainder / newNoDeclaresRemainder are the two halves of one
 	// three-state answer to "does this item's OUTPUT IS A RECOMMENDATION?":
 	// forced on, forced off, or unset — in which case mg picks the default from
@@ -107,6 +113,16 @@ the tag the item carries and nothing else, so a default that is wrong is wrong
 visibly, in the item's own text, where the filer can drop it — not invisibly at
 completion time on an item that never said anything.
 
+The --repo breadcrumb must outlive the filing. Two trees under the pogo home do
+not: ~/.pogo/polecats and ~/.pogo/refinery/worktrees hold one disposable
+worktree per agent, deleted when that agent is reaped. A repo resolving inside
+either is REFUSED — whether it came from an omitted --repo (resolved from the
+current directory, which for an agent IS its doomed worktree) or from an
+explicit --repo naming the same path. The refusal names the repo the worktree
+was created from, so the right path is a copy-paste rather than a lookup; mg
+does not substitute it silently. Pass --no-repo for an item that is not about a
+code repo, or --allow-ephemeral-repo to record the path anyway.
+
 The --prefix flag overrides the work item ID prefix for this call only.
 It is not persisted to workspace config (see 'mg init --prefix=...' for
 the workspace-wide default). Useful for filing items under a different
@@ -155,6 +171,16 @@ optional internal hyphens, and must end in a hyphen.`,
 			repo = newRepo
 		default:
 			repo = autoDetectRepo()
+		}
+		// The guard runs on the RESOLVED repo, so an explicit --repo=$(pwd) from
+		// inside a disposable worktree is caught alongside an omitted flag: both
+		// file the same item pointing at the same doomed path. See
+		// cmd/mg/ephemeralrepo.go for why this keys on the path and not on
+		// POGO_PID.
+		if repo != "" && !newAllowEphemeralRepo {
+			if err := checkEphemeralRepo(repo, cmd.Flags().Changed("repo")); err != nil {
+				return err
+			}
 		}
 		if repo != "" {
 			opts = append(opts, workitem.WithRepo(repo))
@@ -259,8 +285,9 @@ func init() {
 	newCmd.Flags().StringVar(&newTitle, "title", "", "work item title (alternative to positional args)")
 	newCmd.Flags().StringVar(&newBody, "body", "", "work item body (markdown)")
 	newCmd.Flags().StringVar(&newBodyFile, "body-file", "", "read the body verbatim from a file (\"-\" for stdin); mutually exclusive with --body")
-	newCmd.Flags().StringVar(&newRepo, "repo", "", "repo path (defaults to current git toplevel for interactive use; auto-detection is skipped under pogo automation, where POGO_PID is set — pass --repo=PATH explicitly there; --repo=\"\" or --no-repo leaves it empty)")
+	newCmd.Flags().StringVar(&newRepo, "repo", "", "repo path (defaults to current git toplevel for interactive use; auto-detection is skipped under pogo automation, where POGO_PID is set — pass --repo=PATH explicitly there; --repo=\"\" or --no-repo leaves it empty; a path inside a pogo-owned ephemeral tree is refused however it was resolved)")
 	newCmd.Flags().BoolVar(&newNoRepo, "no-repo", false, "do not auto-detect or set a repo (use for non-coding work items)")
+	newCmd.Flags().BoolVar(&newAllowEphemeralRepo, "allow-ephemeral-repo", false, "record a repo path inside a pogo-owned ephemeral tree (~/.pogo/polecats, ~/.pogo/refinery/worktrees) that would otherwise be refused")
 	newCmd.Flags().IntVar(&newBudget, "budget", 0, "estimated token budget (integer; omit or 0 to leave unset)")
 	newCmd.Flags().StringVar(&newPrefix, "prefix", "", "override work item ID prefix for this call only (e.g. 'dr-'); not persisted")
 	newCmd.Flags().BoolVar(&newDeclaresRemainder, "declares-remainder", false, "force the declaration on: this item's output is a recommendation, so 'mg done' refuses it until --successor names the item carrying it forward (already the default for --type=design/scoping/audit/idea and for a 'stage: triage' body)")

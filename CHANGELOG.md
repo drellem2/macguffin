@@ -45,6 +45,56 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
   truncates unconditionally. `--json` is untouched on every path. `--wide`
   (alias `--no-truncate`) opts a terminal out.
 
+- **`mg new` refuses a `repo` path inside a tree pogo owns as ephemeral
+  (mg-0b57).** `--repo` defaults to the caller's git toplevel, and an agent's
+  toplevel is its own worktree under `~/.pogo/polecats/` — a directory gitgc
+  deletes when the agent is reaped. Measured over the live store beforehand: 2 of
+  85 items carried such a path. Neither did damage, and the rate was measured
+  *before* "polecat files its own successor" became the standard shape on the
+  gh-issue track, which makes the routine filer of new items an agent whose cwd
+  is **guaranteed** to be deleted.
+
+  The failure is silent and delayed, which is why it was worth a guard rather
+  than a note. The path is correct at filing time and stays correct for as long
+  as the worktree lives; it breaks only when the item is dispatched *after* the
+  reap, handing a polecat a repo that does not exist for an item filed weeks
+  earlier by an agent nobody can ask. Nothing reports it at filing time, nothing
+  at reap time, and there is no error until the point of use.
+
+  A resolved repo inside `~/.pogo/polecats/` or `~/.pogo/refinery/worktrees/` is
+  now refused with exit 2 and code `ephemeral_repo`. Three things about the shape
+  of it:
+
+  - It keys on **the path, not on an environment variable.** `mg new` already
+    declined to auto-detect under pogo automation — but that rule keys on
+    `POGO_PID`, and `POGO_PID` is not set in a polecat's environment at all
+    (it gets `POGO_HOME`, `POGO_AGENT_NAME`, `POGO_AGENT_TYPE`,
+    `POGO_PROCESS_NAME`, `POGO_AGENT_PROMPT`, `POGO_ROLE`), so for the fleet's
+    most common filer that check had never fired. A path is an observation about
+    where the repo is; an env var is a hope about what the spawner exported.
+  - It fires on the **resolved** repo, so an explicit `--repo="$(pwd)"` is caught
+    alongside an omitted flag. Both file the same doomed item, and "remember to
+    pass the right `--repo`" is precisely the class of convention a refusal is
+    supposed to replace.
+  - It does **not** silently rewrite the path to the worktree's origin repo. It
+    names that origin in the hint — the worktree knows its own provenance via
+    its shared git dir — so the right path is a copy-paste the filer confirms
+    rather than a substitution mg makes on their behalf.
+
+  `--allow-ephemeral-repo` is the documented override, so the refusal has a way
+  past it that stays visible on the command line instead of being routed around.
+  `--no-repo` and `--repo=""` are unaffected, and **no existing item is
+  rewritten**: a stale path on a filed item is a true record of where it was
+  filed.
+
+  The guard also exposed a latent cwd-dependence in the CLI test suite, now
+  fixed: nearly every test exec'd `mg` without setting `cmd.Dir`, so the suite
+  inherited an ambient repo from wherever `go test` was invoked. ~130 tests
+  passed from a normal checkout and failed from a polecat worktree — which is
+  where every polecat runs them. A `TestMain` now runs the suite from a neutral
+  non-repo directory, making the tests that genuinely exercise repo detection
+  set their own working directory explicitly.
+
 ### Fixed
 
 - **`mg schedule` named a snoozed item it could not promote and stayed silent

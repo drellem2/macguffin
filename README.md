@@ -619,6 +619,47 @@ specific code repo.
 Override the default with `--repo=PATH`, or opt out entirely with `--no-repo`
 (or `--repo=""`).
 
+#### Ephemeral repo paths are refused
+
+The breadcrumb has to outlive the filing, and two trees under the pogo home do
+not: `~/.pogo/polecats/` and `~/.pogo/refinery/worktrees/` hold one disposable
+git worktree per agent, deleted when that agent is reaped. A `repo` that resolves
+inside either is **refused** (exit 2, code `ephemeral_repo`):
+
+```
+$ mg new --title="filed from a polecat worktree"
+Error: refusing to record repo /Users/you/.pogo/polecats/0b57: it is inside
+~/.pogo/polecats, which pogo deletes when the agent owning it is reaped — the
+item would outlive the path and fail only when someone dispatched it
+  → --repo was omitted, so mg resolved it from the current directory. Pass the
+    durable repo the item is actually about — this worktree was created from
+    /Users/you/dev/macguffin, so --repo=/Users/you/dev/macguffin; or --no-repo
+    if the item is not about a code repo; or --allow-ephemeral-repo to record
+    this path anyway.
+```
+
+This is a delayed, silent failure otherwise: the path is real at filing time and
+stays real while the worktree lives, and breaks only when the item is dispatched
+*after* the reap — handing a polecat a repo that no longer exists, for an item
+filed weeks earlier by an agent nobody can ask.
+
+The guard keys on the **resolved path**, so it catches an explicit
+`--repo="$(pwd)"` as well as an omitted flag: both file the same doomed item, and
+"remember to pass the right `--repo`" is the kind of convention this refusal
+exists to replace. It deliberately does *not* rewrite the path to the worktree's
+origin repo — it only **names** that origin in the hint, so the substitution is a
+copy-paste the filer confirms rather than a guess mg makes on their behalf.
+
+Note this is a separate rule from the `POGO_PID` one above, and a strictly
+broader one: `POGO_PID` is not set in a polecat's environment at all, so that
+check never fired for the fleet's most common filer. A path is an observation
+about where the repo is; an environment variable is a hope that whoever spawned
+the process exported the right name.
+
+Pass `--allow-ephemeral-repo` for the genuine exception — an item that really is
+about a particular worktree. Existing items are untouched: a stale path on an
+already-filed item is a true record of where it was filed.
+
 ### Token spend accounting
 
 `mg spend` aggregates how many tokens agents have consumed, grouped by work
