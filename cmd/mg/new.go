@@ -27,6 +27,12 @@ var (
 	newNoRepo   bool
 	newBudget   int
 	newPrefix   string
+
+	// newDeclaresRemainder marks the item as one whose OUTPUT IS A
+	// RECOMMENDATION, so `mg done` refuses it until something tracks what it
+	// recommends. See internal/workitem/remainder.go for why this is declared
+	// rather than inferred from type or stage.
+	newDeclaresRemainder bool
 )
 
 // validPrefixRe matches lowercase alphanumeric + hyphens, ending with a single
@@ -79,6 +85,14 @@ issue. The block belongs at the top of the body, ahead of any prose:
     workflow: gh-issue
     stage: triage
     gh: <owner>/<repo>#<n>
+
+--declares-remainder marks an item whose OUTPUT IS A RECOMMENDATION: a triage
+verdict, a design, a proposal. Its build is undone by construction at the
+moment it completes, so 'mg done' refuses it until --successor names the item
+carrying it forward (and 'mg archive' refuses it as a backstop). Declare it,
+rather than letting mg infer it from a type or a workflow stage — those are
+proxies that miss triages and over-fire on paused items. An item that does not
+declare a remainder is never touched by the guard.
 
 The --prefix flag overrides the work item ID prefix for this call only.
 It is not persisted to workspace config (see 'mg init --prefix=...' for
@@ -147,7 +161,15 @@ optional internal hyphens, and must end in a hyphen.`,
 				return mgerr.Usage("invalid_value", fmt.Sprintf("invalid priority %q: must be low, medium, or high", priority), "")
 			}
 		}
-		if tags := normSlice(newTags); len(tags) > 0 {
+		tags := normSlice(newTags)
+		if newDeclaresRemainder {
+			// mg writes the marker itself, in its canonical spelling, rather
+			// than asking the filer to remember a tag string — a declaration
+			// the tool writes cannot be forgotten or misspelled the way a
+			// convention a prompt merely asks for can.
+			tags = addUniqueTag(tags, workitem.DeclaresRemainderTag)
+		}
+		if len(tags) > 0 {
 			opts = append(opts, workitem.WithTags(tags))
 		}
 		body, _, err := bodyFromFlags(cmd, newBody, newBodyFile)
@@ -220,6 +242,18 @@ func init() {
 	newCmd.Flags().BoolVar(&newNoRepo, "no-repo", false, "do not auto-detect or set a repo (use for non-coding work items)")
 	newCmd.Flags().IntVar(&newBudget, "budget", 0, "estimated token budget (integer; omit or 0 to leave unset)")
 	newCmd.Flags().StringVar(&newPrefix, "prefix", "", "override work item ID prefix for this call only (e.g. 'dr-'); not persisted")
+	newCmd.Flags().BoolVar(&newDeclaresRemainder, "declares-remainder", false, "this item's output is a recommendation: 'mg done' refuses it until --successor names the item carrying it forward")
+}
+
+// addUniqueTag appends tag unless an equal-folded copy is already present, so
+// `--tags=declares-remainder --declares-remainder` files one tag, not two.
+func addUniqueTag(tags []string, tag string) []string {
+	for _, t := range tags {
+		if strings.EqualFold(strings.TrimSpace(t), tag) {
+			return tags
+		}
+	}
+	return append(tags, tag)
 }
 
 // autoDetectRepo returns the repo path to auto-fill when neither --repo nor

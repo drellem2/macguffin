@@ -102,6 +102,34 @@ echo '{"status": "fixed", "commit": "abc123"}' > done/gt-a3f.result.json
 mv claimed/gt-a3f.md.$$ done/gt-a3f.md
 ```
 
+#### A declared remainder blocks the move
+
+An item whose output is a **recommendation** — a triage verdict, a design, a
+proposal — has undone work by construction at the instant it completes, and a
+completed item cannot be the tracker for undone work. `mg done` refuses to make
+the move above until a `successor:<id>` tag names what carries the
+recommendation forward. The refusal happens before the rename, so a refused
+completion leaves the item claimed and the store untouched.
+
+**The guard reads a DECLARATION, not an inference.** `mg new
+--declares-remainder` writes a `declares-remainder` tag; nothing else trips the
+guard. Two inferred predicates were tried first and both failed, in opposite
+directions:
+
+| predicate | failure |
+|---|---|
+| `type == design` | Misses triage — *triage is not a type*. A `type: task` triage recommending IMPLEMENT on a reproduced data-loss bug completed with nothing carrying the fix. |
+| non-terminal body `stage:` | Over-fires. A stage-shaped **pause** owes nothing; a stage-shaped **gate** does; no stage value distinguishes them. Measured over 1,955 items, it would have fired on 41 that owed nothing. |
+
+The failure direction is what settles it. An item that never declares completes
+exactly as it always has, so a forgotten declaration costs the status quo — while
+an over-firing guard blocks routine completions, and `mg` self-installs on merge.
+A `snooze:` timestamp (a declared *pause*) declares nothing here, so it cannot
+trip the guard: the paused-vs-owed discrimination never has to be made.
+
+`mg archive` re-checks the same declaration as a backstop, alongside the older
+`type: design` and `blocked-on-*` archive guards.
+
 ### Releasing stale claims
 
 When an agent dies mid-work, its claim file lingers in `claimed/`. Releasing

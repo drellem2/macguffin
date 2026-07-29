@@ -16,6 +16,40 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Added
 
+- **`mg done` refuses an item that DECLARES a remainder and names no successor
+  (mg-8970).** An item whose output is a *recommendation* — a triage verdict, a
+  design, a proposal — has undone work by construction the moment it completes,
+  and a completed item cannot be the tracker for undone work. `mg new
+  --declares-remainder` marks such an item; `mg done <id> --successor <id>`
+  discharges it, recording a `successor:<id>` tag before the item moves.
+  `mg archive` refuses it too, as a backstop.
+
+  **The guard keys on the DECLARATION, and that is the whole design.** Three
+  proxies were proposed for this rule first, and each one's author caught the
+  others' and not their own:
+
+  - `type == design` — what `mg archive` already checked. It misses triage,
+    because *triage is not a type*. mg-ee98 was a `type: task` gh-issue triage
+    whose verdict was IMPLEMENT on a **reproduced data-loss mechanism**, and
+    nothing carried the fix. The archive guard never fired; a human noticed the
+    *absence* and filed the build by hand.
+  - non-terminal body `stage:` — catches the triage, but **over-fires**. A
+    stage-shaped *pause* owes nothing while a stage-shaped *gate* does, and no
+    stage value tells them apart. Counted across the whole store on 2026-07-29
+    (1,955 items): 55 carry a `stage:` line — triage 8, gated 12, build 4,
+    review 17, merge 14 — and **none** carries a `successor:` tag, so treating
+    anything but `merge` as non-terminal would have fired on 41 items, 34 of
+    them already archived. `mg` self-installs on merge, so a guard that blocks
+    routine completions at that volume is removed by whoever it inconveniences.
+
+  A fourth proxy would fail the same way, so the item *declares* the remainder
+  and the guard reads the declaration. An item that never declares completes
+  exactly as before — the failure direction is the status quo, never a blocked
+  queue. A snoozed item (mg-0a5f) carries only a `snooze:` timestamp and
+  declares nothing here, so the paused-vs-owed distinction that sank the stage
+  predicate does not arise. The `type: design` archive guard is unchanged and
+  becomes the backstop it was always better suited to be.
+
 - **`mg snooze` / `mg unsnooze`: "not now, come back at …" — with the driver
   that opens the gate, in the same change (mg-0a5f).** There was no way to say
   "revisit this on Monday", so `assignee` was overloaded to mean it — the only

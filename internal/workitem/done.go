@@ -11,12 +11,38 @@ import (
 	"github.com/drellem2/macguffin/internal/event"
 )
 
+// DoneOption configures an optional behaviour of Done.
+type DoneOption func(*doneOpts)
+
+type doneOpts struct {
+	// successor is the id of the item that carries this item's recommendation
+	// forward, written onto the item as a successor: tag before it moves.
+	successor string
+}
+
+// WithDoneSuccessor records the id of the item that tracks what this one
+// recommends, discharging the declared-remainder guard. See remainder.go.
+func WithDoneSuccessor(id string) DoneOption {
+	return func(o *doneOpts) { o.successor = id }
+}
+
 // Done atomically moves a claimed work item to done/ and writes an optional
 // result sidecar JSON file. The item must currently be in claimed/.
 // resultJSON may be nil if no result metadata is provided.
 // After completing the item, any pending items whose dependencies are now
 // fully satisfied are auto-promoted to available.
-func Done(root, id string, resultJSON json.RawMessage) (*Item, []*Item, error) {
+//
+// An item that DECLARES a remainder (see remainder.go) is refused unless
+// something is tracking what it recommends. The refusal happens before any
+// mutation — no rename, no sidecar write — so a refused completion leaves the
+// item claimed and the store exactly as it was, and the agent standing there
+// can file the successor and retry.
+func Done(root, id string, resultJSON json.RawMessage, opts ...DoneOption) (*Item, []*Item, error) {
+	var o doneOpts
+	for _, apply := range opts {
+		apply(&o)
+	}
+
 	m, err := ResolveUnique(root, id)
 	if err != nil {
 		return nil, nil, err
@@ -26,6 +52,24 @@ func Done(root, id string, resultJSON json.RawMessage) (*Item, []*Item, error) {
 	}
 	srcPath := m.Path
 	srcName := filepath.Base(srcPath)
+
+	// Guards run against the item on disk, ahead of everything else. Linking a
+	// successor comes first so that `mg done <id> --successor <id>` is a single
+	// step for the agent: the tag is validated and written, and the guard then
+	// sees the discharged obligation. linkSuccessor validates before it writes,
+	// so a bad target leaves the file untouched.
+	claimed, err := readFile(srcPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	if o.successor != "" {
+		if err := linkSuccessor(root, srcPath, claimed, o.successor); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := requireRemainderDischarged(root, claimed); err != nil {
+		return nil, nil, err
+	}
 
 	// Extract the claim-holder PID from the filename (<id>.md.<pid>) for the event.
 	claimPID := ""

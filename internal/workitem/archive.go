@@ -119,8 +119,19 @@ func archiveFile(root string, c archiveCandidate) error {
 // should hear first, and "a named person still owes something on this item" is
 // the fact no other archive-time query surfaces. It is also the cheaper check —
 // it reads no store state and gates on no type.
+//
+// The declared-remainder check (remainder.go) sits between them as a BACKSTOP,
+// not the primary: `mg done` refuses first, loudly, to the agent standing
+// there, so anything reaching archive still declaring an undischarged remainder
+// got here by a route that predates the guard or by a successor deleted
+// afterwards. It is checked ahead of requireSuccessor because a declaration
+// beats an inference — when both fire, the operator should hear the one the
+// item states about itself.
 func checkArchiveGuards(root string, item *Item) error {
 	if err := requireNotBlocked(item); err != nil {
+		return err
+	}
+	if err := requireRemainderDischarged(root, item); err != nil {
 		return err
 	}
 	return requireSuccessor(root, item)
