@@ -30,6 +30,13 @@ whether it just arrived — so a run missed while the driver was down delays an
 item and can never lose one. It also stamps work/.last-sweep, which is what
 ` + "`mg snooze`" + ` checks before agreeing to set a gate at all.
 
+Every pending item the sweep could NOT promote is listed, with each gate that
+held it and that gate's state — the parent it waits on and what that parent is
+doing, the wake time it has not reached, or both. The two gates are
+independent and either can be the one still closed, so both are named. A sweep
+that reported only one of them made "No items promoted." read as "nothing is
+waiting", which is wrong exactly when a dependency gate is closed.
+
 Items that no completion can ever release are reported rather than skipped
 silently: a dependent waiting on a shelved parent, or on an id that does not
 exist, or an item whose snooze value is not a parseable timestamp, is not
@@ -66,6 +73,27 @@ is exactly what a correctly-waiting item looks like.`,
 			fmt.Printf("Promoted %s: %s\n", item.ID, item.Title)
 		}
 
+		// Report everything the sweep could not promote, with every gate that
+		// held it and that gate's state. "No items promoted." over a non-empty
+		// pending set is true and incomplete, and the reading it invites —
+		// nothing is waiting — is wrong whenever a gate is closed. This is the
+		// only view of that population, and it must be the WHOLE population:
+		// reporting the snooze gate alone left an item blocked forever on a
+		// dependency as the one case the sweep was silent about.
+		held, err := workitem.Held(root)
+		if err != nil {
+			return err
+		}
+		anySnoozed := false
+		if len(held) > 0 {
+			now := time.Now().UTC()
+			fmt.Printf("\n%d pending item(s) held:\n", len(held))
+			for _, h := range held {
+				fmt.Printf("  %s  %s — %s\n", h.Item.ID, h.Gates(now), h.Item.Title)
+				anySnoozed = anySnoozed || h.Snoozed
+			}
+		}
+
 		// Report what the sweep could never promote. A pending item waiting on
 		// a shelved or nonexistent parent is not waiting — it is stranded, and
 		// it looks identical to a correctly-waiting item from every other
@@ -93,26 +121,12 @@ is exactly what a correctly-waiting item looks like.`,
 			fmt.Printf("or shelve the dependent so it stops claiming to be waiting.\n")
 		}
 
-		// Report what is still snoozed. A gate that cannot be listed is a gate
-		// nobody can audit, and an unauditable gate is how "it looks scheduled"
-		// becomes "it was swallowed". This is the only view of the population.
-		snoozed, err := workitem.SnoozedPending(root)
-		if err != nil {
-			return err
-		}
-		if len(snoozed) > 0 {
-			now := time.Now().UTC()
-			fmt.Printf("\n%d pending item(s) snoozed:\n", len(snoozed))
-			for _, item := range snoozed {
-				fmt.Printf("  %s  wakes %s (in %s): %s\n",
-					item.ID, item.SnoozeRaw, workitem.HumanUntil(item.Snooze.Sub(now)), item.Title)
-			}
-		}
-
 		// A long gap since the previous sweep is the symptom of an absent
 		// driver. Saying so here — while somebody is looking at sweep output —
 		// is the difference between a gap that gets fixed and fifteen days.
-		if prior.Stale && (len(snoozed) > 0 || len(promoted) > 0) {
+		// Only a snooze needs the clock: a dependency gate opens on `mg done`,
+		// so a dependency-only hold is no evidence about the driver either way.
+		if prior.Stale && (anySnoozed || len(promoted) > 0) {
 			gap := "no previous sweep was ever recorded"
 			if prior.Ever {
 				gap = fmt.Sprintf("the previous sweep ran %s ago", workitem.HumanUntil(prior.Since))

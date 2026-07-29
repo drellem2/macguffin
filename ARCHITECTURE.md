@@ -301,6 +301,14 @@ item looks like. So `mg schedule` must be run on a clock (see
 run delays rather than loses, and `mg snooze` refuses to set a gate at all when
 nothing has driven the sweep recently.
 
+The same corollary governs the sweep's **report**, and one gate at a time is not
+enough. `mg schedule` lists every pending item it could not promote with each
+closed gate and that gate's state, both kinds in one list — because a report
+covering one gate makes "no items promoted" read as *nothing is waiting*, which
+is false whenever the other gate is the closed one. The population a gate
+report covers must be the whole held population, or it is an instrument that
+answers rather than declining to.
+
 ### Querying work items
 
 Simple shell pipeline — no query language:
