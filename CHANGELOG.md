@@ -16,6 +16,51 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Added
 
+- **`mg archive` refuses an item tagged `blocked-on-*`, naming the tag
+  (mg-3c53).** `mg archive` consulted tags for exactly one thing — the
+  structured `successor:<id>` tag, and only on `type: design`. It had no notion
+  of `blocked-on-*` at all, so a `done` item tagged `blocked-on-daniel`
+  archived silently: the tag that says *a person still owes something here* was
+  invisible to the one operation that discards the record. mg-cf48 is that
+  item — `type: task`, `status: done`, still waiting on a ruling.
+
+  The general form is worth stating, because this is the second instance: **a
+  guard whose population is named by one attribute cannot see the same defect
+  wearing another.** The successor guard fires on `type: design` because a
+  design's output *is* a recommendation, so its build is undone by definition —
+  a structural property needing no judgement. `type: task` has no such
+  property; most done tasks really are complete, and a guard that fires on
+  ordinary completions gets switched off. Type cannot carry this. The tag can,
+  and it already existed as a live convention *and* as a working cross-status
+  query (`mg list --tag=blocked-on-daniel` with no `--status` finds `done`
+  items). The index and the query were already there; only the destructive
+  operation ignored them.
+
+  - The refusal (exit 4, `blocked_on_tag`) **names the tag it found**. "Blocked"
+    and "no successor" are two states with two remedies — remove a tag once a
+    person has answered, versus file the item that tracks a recommendation — and
+    an unnamed refusal teaches neither. The hint names `mg edit <id>
+    --rm-tags=<tag>`.
+  - It fires on **any type**, since the tag rather than the type names the
+    population. Matching is a case-folded prefix over `blocked-on-`, so
+    `blocked-on-daniel-confirm` and any future name need no code change; a bare
+    `blocked-on-` still blocks, because this predicate only ever causes a
+    refusal and a false pass is the direction that is silent and permanent.
+  - **`--force` applies**, deliberately and on the record, the same as for the
+    successor guard: an obligation can be discharged out of band with the tag
+    left behind, and with no recorded escape hatch the operator strips the tag
+    by hand — the same bypass with none of the audit trail. It emits
+    `work.archive_forced` with `reason: blocked_on_tag`. As with the successor
+    refusal, the failure text does **not** mention `--force`; a guard whose own
+    error message teaches the bypass is decorative.
+  - **`--successor` does not satisfy it.** Naming a tracker for a recommendation
+    says nothing about whether a person still owes something, so the preview no
+    longer returns early on `--successor` and skips the remaining guards.
+  - The **sweep** skips blocked items exactly as it skips untracked designs, and
+    now reports each skipped item **with the reason and remedy for the guard
+    that actually fired** rather than one summary line assuming they were all
+    designs.
+
 - **`mg edit --append-body-file`, and an opt-in `--if-unchanged` version check
   (mg-f326).** `mg edit --body`/`--body-file` was a read-modify-write with no
   version check: the caller sends a whole body composed from a read that
