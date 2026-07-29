@@ -14,6 +14,28 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.0] - 2026-07-29
+
+Minor release rolling up the 28 commits merged since v0.2.0 (this release-prep
+commit excluded): 13 `feat`, 12 `fix`, 2 `docs`, 1 `test`.
+
+**Semver rationale:** a minor (0.3.0) rather than a patch bump because the range
+adds new backwards-compatible capabilities — `mg snooze`/`mg unsnooze` with its
+pogod driver, `--body-file` and `--append-body-file` on the body-carrying
+commands, the declared-remainder successor guard, restorable prior bodies on
+replace-mode edits, `mg sidecars` classification, workspace isolation via
+`--root`/`MG_ROOT`, and `@partition` disambiguation. No commit in the range
+carries a `BREAKING CHANGE` trailer or a `type!:` subject, and none was found by
+re-reading the range at cut time; every existing invocation keeps working.
+
+The `fix` half of the range is mostly identity and durability: short-ID
+collisions no longer destroy items (`a70abd9`), `Resolve()` is total over the
+store (`41f0586`), and the `.result.json` sidecar is carried and merged rather
+than overwritten across status transitions (`ca05def`, `2e60454`, `72c72b7`) —
+so a `--result` written by one agent survives a later transition by another.
+
 ### Added
 
 - **`mg done` refuses an item that DECLARES a remainder and names no successor
@@ -943,5 +965,6 @@ unaffected. Only a consumer matching on the literal `1` would notice, and none d
 Released before this file existed. See the git history and the GitHub release
 notes at <https://github.com/drellem2/macguffin/releases>.
 
-[Unreleased]: https://github.com/drellem2/macguffin/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/drellem2/macguffin/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/drellem2/macguffin/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/drellem2/macguffin/compare/v0.1.4...v0.2.0
