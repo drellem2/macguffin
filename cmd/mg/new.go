@@ -173,7 +173,31 @@ optional internal hyphens, and must end in a hyphen.`,
 
 		fmt.Printf("Created %s: %s\n", item.ID, item.Title)
 		if len(deps) > 0 {
-			fmt.Printf("  depends: %s (pending)\n", strings.Join(deps, ", "))
+			// Report where the item ACTUALLY landed. This line used to say
+			// "(pending)" unconditionally, which was a guess dressed as a fact:
+			// an item filed onto an already-completed parent lands available,
+			// and one filed onto a shelved parent lands shelved.
+			status, err := workitem.Status(root, item.ID)
+			if err != nil {
+				status = "unknown"
+			}
+			fmt.Printf("  depends: %s (%s)\n", strings.Join(deps, ", "), status)
+
+			// A dependent parked behind a shelved parent is the strand this
+			// guard exists to prevent. Filing it is allowed — pre-filing work
+			// behind a gate is a legitimate pattern — but it must not be
+			// silent, because a silently-parked item is indistinguishable from
+			// one that is waiting correctly.
+			if status == "shelved" {
+				blocking, err := workitem.ShelvedDeps(root, item.Depends)
+				if err == nil && len(blocking) > 0 {
+					fmt.Printf("\nNOTE: %s is shelved, not pending — it depends on shelved %s.\n",
+						item.ID, strings.Join(blocking, ", "))
+					fmt.Printf("      A shelved parent never reaches done, so a pending dependent would\n")
+					fmt.Printf("      wait forever while looking like it was waiting correctly.\n")
+					fmt.Printf("      Release it with: mg unshelve %s\n", blocking[0])
+				}
+			}
 		}
 		return nil
 	},

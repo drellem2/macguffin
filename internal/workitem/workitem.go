@@ -142,11 +142,18 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 	now := nowFunc()
 	creator := currentUser()
 
-	// Items with dependencies start in pending/; others in available/
-	subdir := "available"
-	if len(depends) > 0 {
-		subdir = "pending"
+	// Placement is decided against the RESOLVED state of every dependency, not
+	// against the mere presence of a depends list. Parking an item in pending/
+	// because it names a parent — when that parent finished last week, or is
+	// shelved and will never finish — is what stranded three items in a day:
+	// pending/ is only swept by Done, so a dependent filed after its parent
+	// completed waits on an unrelated completion, and a dependent of a shelved
+	// parent waits on nothing at all. See depends.go.
+	deps, err := classifyDeps(root, depends)
+	if err != nil {
+		return nil, err
 	}
+	subdir, _ := placeForDeps(deps)
 	dir := filepath.Join(root, "work", subdir)
 
 	for nonce := 0; nonce < maxMintAttempts; nonce++ {

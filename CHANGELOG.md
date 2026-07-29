@@ -16,6 +16,64 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Fixed
 
+- **A dependent filed onto a finished or shelved parent no longer strands
+  silently and permanently (mg-6ddc).** Three measured instances in one day, two
+  of them two weeks old before anyone noticed.
+
+  The reported diagnosis — "children of `archived` parents do not release" — was
+  half wrong, and establishing the real mechanism changed the fix. Dependency
+  *lookup* already spanned `archive/` (mg-4c9b); a pre-filed dependent whose
+  parent merges and is archived in the same cycle releases correctly, and there
+  is now a regression test pinning that. The actual strander was **placement**:
+  `Create` parked an item in `pending/` whenever it named a dependency at all,
+  without ever asking what state that dependency was in. Since `pending/` is
+  swept only by `Done`, an item filed onto a parent that had *already* completed
+  waited on an unrelated completion to sweep it up — the "timing luck" the two
+  surviving pairs in that chain ran on — and an item filed onto a **shelved**
+  parent waited on nothing at all, because nothing moves a shelved item to done.
+
+  The failure was invisible in both directions: an unreleased dependent is not
+  `available/`, so stall-watch and priority-wake cannot see it, and `pending` is
+  exactly what a correctly-waiting item looks like. Nobody goes looking for a
+  ticket that is behaving.
+
+  Placement is now decided at filing time against the resolved state of every
+  dependency (`internal/workitem/depends.go`, the one place that answers what a
+  dependency means):
+
+  - **Satisfied** — the parent passed through `done`, in `done/` *or* `archive/`.
+    The item is filed straight to `available/`, never parked behind a sweep.
+  - **Waiting** — the parent is live. `pending/`, as before; this is the only
+    state in which `pending` is the honest placement.
+  - **Shelved** — the item is filed as `shelved`, alongside its parent.
+  - **Unknown** — no such id. Still `pending/` (forward references and
+    hand-written fixtures rely on it), and reported by `mg schedule`.
+
+  **Shelving means "not now", not "cancelled"**, and dependents are *not*
+  silently released. Filing behind a shelved gate is allowed — pre-filing gated
+  work is a real pattern — but the dependent is parked explicitly rather than
+  left looking like it is waiting, which is the same treatment `mg shelve`
+  already gave dependents that existed at the moment the parent was shelved.
+  Filing was the last door left open. `mg unshelve` on the parent brings them
+  back as `pending`, and completing it then releases them normally.
+
+  A guard that fires where nobody is looking is not a guard, so both moments are
+  now spoken:
+
+  - `mg new` reports where the item **actually** landed. It previously printed
+    `(pending)` for anything with a depends list — a guess dressed as a fact. On
+    a shelved parent it names the gate and gives the `mg unshelve <id>` that
+    lifts it; on a live parent it stays quiet, because a notice on the healthy
+    path is a notice operators learn to skip.
+  - `mg schedule` reports the pending items it can never promote, each with the
+    parent responsible and why (`is shelved`, `does not exist`). This is the
+    detector the ticket warned not to ship alone — it lands with the placement
+    fix above and with a reader that already existed.
+
+  The three live instances (mg-459c; mg-344a and mg-b8f9 behind the shelved gate
+  mg-7d8a) were unstranded by hand and are reproduced as fixtures rather than
+  re-broken. Each fixture was verified to **fail** against the old placement rule.
+
 - **`mg done --result` merged into the existing result instead of destroying it
   (mg-ef64).** Third filing of a defect archived unbuilt twice (mg-ab67 →
   mg-9795 → this). Both predecessors fixed the *move* — a `.result.json` in
