@@ -85,6 +85,19 @@ func Update(root, id string, fields UpdateField) (*Item, error) {
 //     starts refusing by default would take out the tooling needed to report
 //     that it had.
 //
+// Neither defence is a recovery story, and mg-9fc8 is the incident that made
+// the difference matter: --if-unchanged was passed and SATISFIED while the body
+// was destroyed anyway, because the corruption entered at the READ end of the
+// read-modify-write (a failed `mg show` wrote its own usage error into the file
+// the caller then sent back). A guard on the concurrency end cannot see that.
+// So there is a third, unconditional measure that assumes every defence above
+// has already failed:
+//
+//  3. A body backup. Before a replace-mode edit overwrites a body, the prior
+//     body is written to work/.bodybak/<id>/ and restorable with
+//     `mg restore-body`. It predicts nothing and refuses nothing. See
+//     bodybackup.go.
+//
 // Deliberately NOT a lock. Callers are long-lived agents that can die
 // mid-edit, so a lock needs a timeout, and a timeout is the same race with more
 // moving parts. The defect is silence, not concurrency.
@@ -226,6 +239,30 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 	// reporting on a string that never gets stored.
 	change := describeBodyChange(fields, bodyBefore, composeBody(item))
 
+	// Keep the body we are about to destroy. mg-9fc8: a replace-mode edit took
+	// a 149-line body to 4 lines of a shell usage error, --if-unchanged was
+	// passed AND satisfied (it proves nobody else wrote in the window; it says
+	// nothing about whether the caller's own read succeeded), and the audit line
+	// recorded both hashes and neither body. The bytes came back only because
+	// they happened to still be in a scratchpad — luck, not a property of the
+	// tool. See bodybackup.go for why this is a backup and not a guard.
+	//
+	// BEFORE the write, so a backup that cannot be taken refuses the edit
+	// instead of silently proceeding unprotected: a recovery story that quietly
+	// stops being true is worse than none, because it is relied upon. The item
+	// on disk is byte-identical after this refusal, exactly as it is after an
+	// --if-unchanged refusal.
+	backupPath := ""
+	if change.Changed && change.Mode == "replace" && strings.TrimSpace(bodyBefore) != "" {
+		dir := bodyBackupDirFor(root, itemPath, status, item.ID)
+		backupPath, err = saveBodyBackup(dir, bodyBefore, time.Now())
+		if err != nil {
+			return nil, nil, ioErr(fmt.Sprintf(
+				"%s: refusing to replace the body — the prior body could not be saved to %s: %s. Nothing was written.",
+				id, dir, fsErrText(err)))
+		}
+	}
+
 	content := Render(item)
 	if err := os.WriteFile(itemPath, []byte(content), 0o644); err != nil {
 		return nil, nil, ioErr(fmt.Sprintf("%s: could not be saved: %s", id, fsErrText(err)))
@@ -239,8 +276,15 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 	// recover the bytes, but it does let a later reader tell "the body shrank
 	// by 114 lines at 04:05, replacing hash a1b2…" from "that section was never
 	// there" — which is the distinction no instrument could previously make.
+	//
+	// body_backup closes the gap the rest of the line only measured: a reader
+	// who finds the shrink here now has the path to the bytes, instead of two
+	// hashes proving they are gone. It is empty for the modes that overwrite
+	// nothing (append, --title) — an absent field means "nothing was at risk",
+	// never "the backup failed", because a failed backup refuses the edit above
+	// and never reaches this line.
 	if change.Changed {
-		event.Emit(root, "work.edited", map[string]string{
+		extra := map[string]string{
 			"item_id":          item.ID,
 			"actor":            actorFor(item),
 			"mode":             change.Mode,
@@ -249,7 +293,11 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 			"body_hash_after":  change.HashAfter,
 			"lines_before":     strconv.Itoa(change.LinesBefore),
 			"lines_after":      strconv.Itoa(change.LinesAfter),
-		})
+		}
+		if backupPath != "" {
+			extra["body_backup"] = backupPath
+		}
+		event.Emit(root, "work.edited", extra)
 	}
 
 	// After dependency changes, move items between available/ and pending/

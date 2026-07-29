@@ -131,6 +131,7 @@ mg log                 # view snapshot history
 | `mg claim ID` | Atomically claim a work item by ID. |
 | `mg done ID` | Mark a claimed work item as done. |
 | `mg edit ID [flags]` | Update fields on an existing work item. **Adding to a body? Use `--append-body-file`, not `--body-file`** — see [Concurrent edits](#concurrent-edits-lost-updates). |
+| `mg restore-body ID [--list] [--from=STAMP]` | Put back a body that a replace-mode edit overwrote. Every `mg edit --body`/`--body-file` saves the body it is about to destroy first; `--list` shows what is saved (newest first) and a bare invocation restores the most recent. An item with **nothing saved is an error** (exit 3, `no_body_backup`), never a quiet success and never an empty body. See [Recovering an overwritten body](#recovering-an-overwritten-body). |
 | `mg archive [ID]` | With an `ID`, archive exactly that one done item and nothing else — the form to use for items the refinery never merged (investigations, evaluations). With no `ID`, sweep `done/` and archive every item older than `--days` (default 7; `--days=0` takes **all** done items). The two forms are exclusive: passing both an `ID` and `--days` is an error, never a silent choice between archiving one item and archiving every item. `--dry-run` previews without moving anything. A targeted archive that cannot act (unknown ID, item not done) exits non-zero and says why. **Two guards refuse an archive**: done `type: design` items with no successor, and items of any type tagged `blocked-on-*` — see below. |
 | `mg archive <id> --successor <id>` | A design's output *is* a recommendation, so at the moment it is done the thing it recommends is undone by construction — and an archived item cannot be the tracker for undone work. Archiving a done `type: design` item is therefore **refused** unless it names a successor. `--successor <id>` records a `successor:<id>` tag on the design before moving it, so the archived record names its own tracker; the id must resolve to a real item and cannot be the design itself. The check is on the item **type**, not on any wording in its body, and is satisfied **only** by that structured tag — a body that merely mentions an id proves nothing about who is tracking what. The sweep form never forces: it skips guarded items, leaves them in `done/`, and names them on stderr. A design that was *abandoned* rather than implemented is a legitimate archive — `--force` takes it and records a `work.archive_forced` event naming the guard that was bypassed. `--force` is documented here and in `mg archive --help`, and is deliberately **not** named by the refusal itself, so a guard hit mid-cleanup does not hand out its own bypass. |
 | Archiving an item tagged `blocked-on-*` | A `blocked-on-*` tag says **a person still owes something here**, and an archived item cannot be the tracker for outstanding work — so archiving one is **refused**, whatever its type. The refusal **names the tag it found** (`blocked-on-daniel`, `blocked-on-daniel-confirm`, …), because "blocked" and "no successor" have different remedies and an operator has to be able to tell which fired. The remedy is to settle what the tag names and then `mg edit <id> --rm-tags=blocked-on-<who>`. The check is on the **tag**, not on any wording in the body: the tag was already a live convention and already queryable across every status (`mg list --tag=blocked-on-daniel` with no `--status` spans statuses and finds `done` items), so this only teaches the *destructive* operation to read an index that already existed. `--successor` does **not** satisfy it — naming a tracker for a recommendation says nothing about whether a person still owes something. `--force` **does** apply, as for the successor guard: an obligation can be discharged out of band and the tag left behind, and without a recorded escape hatch the operator strips the tag by hand — the same bypass with none of the audit trail. A forced archive records a `work.archive_forced` event with `reason: blocked_on_tag`, and the refusal itself does not mention `--force`. The sweep skips blocked items, leaves them in `done/`, and names each one on stderr **with the reason it was refused**. |
@@ -274,6 +275,81 @@ Two further properties worth knowing:
 **Not locking.** Agents are long-lived and can die mid-edit, so a lock needs a
 timeout, and a timeout reintroduces the same race with more moving parts. The
 defect being fixed is *silence*, not concurrency.
+
+### Recovering an overwritten body
+
+`--if-unchanged` proves **nobody else** wrote between your read and your write.
+It says nothing about whether **your own read succeeded** — and that is the end
+the damage came in from on `2026-07-29`, when a 149-line body became two lines
+of a shell usage error:
+
+```sh
+mg show mg-8970 --body > b8970.md && python3 ...   # `mg show` has no --body flag
+mg edit mg-8970 --body-file=b8970.md --if-unchanged=<hash>
+```
+
+`mg show` wrote its own usage error into the file and exited non-zero. The `&&`
+bound only the `python3` step, so `mg edit` on the next line ran unconditionally
+and faithfully wrote what it was given. The guard was passed **and satisfied**:
+it was watching the concurrency end of a read-modify-write while the corruption
+entered at the read end. `work.edited` recorded `lines_before=149
+lines_after=4 guarded=true` and both hashes — enough to *prove* the loss, and
+useless for *repairing* it. The store is not a git repo, so there was no VCS
+fallback either.
+
+**So mg keeps the body it is about to destroy.** Before any `mg edit --body` /
+`--body-file` overwrites a body, the prior body is written to
+`~/.macguffin/work/.bodybak/<id>/<timestamp>-<hash8>.md`. The ten most recent
+are kept per item.
+
+```sh
+mg restore-body mg-1234 --list        # what is saved, newest first
+mg restore-body mg-1234               # put back the most recent
+mg restore-body mg-1234 --from=20260729T161400
+```
+
+- **The restore can fail, and says so.** An item with nothing saved exits 3
+  (`no_body_backup`) and leaves the body alone. A recovery command that reports
+  success when it recovered nothing is a second way to lose a body.
+- **`--from` matches a timestamp prefix**, and a prefix naming *more than one*
+  saved body is refused (exit 2, `ambiguous_body_backup`) rather than resolved
+  to a best guess. Picking for you is how you restore the wrong version onto a
+  body you just destroyed.
+- **Restoring is itself a replace, so it is undoable.** The body a restore
+  overwrites is saved first; restoring the wrong version is not terminal, which
+  is what makes trying one safe.
+- **`work.edited` now carries `body_backup`**, the path to the saved bytes — so
+  the audit line that could previously only *prove* a body was destroyed now
+  points at the copy.
+- **A backup that cannot be written refuses the edit**, leaving the stored item
+  byte-identical. A recovery guarantee that quietly stops holding is worse than
+  none, because it is relied upon.
+
+**What this does NOT cover.** Only the wholesale overwrite path.
+`--append-body-file` is *not* a replace — it composes against the body on disk
+at write time and cannot destroy a section it never saw — so it is already safe
+and is deliberately not backed up; nor is `--title`, which rewrites the heading
+line in place. Bodies are saved from the first replace-mode edit **after this
+shipped**, so an item damaged before then has nothing here.
+
+**Where backups go on a transition.** They are keyed by ID and do **not** move
+on claim / unclaim / done / reopen / shelve / unshelve — a shelved item's saved
+bodies stay in `work/.bodybak/<id>/` and restore normally. `mg archive` moves
+them into `work/archive/<partition>/.bodybak/<id>/` with the record, so the
+archive stays self-contained and nothing is orphaned in the live tree; `mg
+unarchive` brings them back.
+
+**Deliberately not a heuristic block.** The tempting version is "refuse a
+replace that shrinks the body by >90%, or whose content looks like an error
+message". A shrink ratio hard-codes a fact about normal edits and decays — a
+legitimate rewrite that condenses a bloated body gets refused, which trains
+people to reach for `--force`. Content-sniffing for `Error:` fails on any item
+that legitimately quotes one; the ticket that asked for this feature would trip
+it. A blocking control has to be right about the **future**; a backup only has
+to be **cheap**, and it is correct for every failure mode including the ones
+nobody predicted — a wrong path, a truncated pipe, an editor crash, a bad `sed`.
+A false block costs a real edit and erodes trust in the guard; a useless backup
+costs a few KB.
 
 ### `--json` output contract
 

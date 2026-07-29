@@ -74,6 +74,57 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
   is not waiting on anybody. It is not a priority, not an assignment, not a
   workflow state machine, and not a recurrence.
 
+- **`mg edit` keeps the body it destroys, and `mg restore-body` puts it back
+  (mg-9fc8).** On 2026-07-29 a replace-mode edit took an item's 149-line body to
+  two lines of a shell usage error. The bytes came back only because they
+  happened to still be in a scratchpad — luck, not a property of the tool.
+
+  None of the existing defences could have caught it, and the reason matters.
+  `--if-unchanged` was **passed and satisfied**: it proves no one *else* wrote
+  between the caller's read and their write, and says nothing about whether the
+  caller's *own read* succeeded. The corruption entered at the read end (`mg
+  show <id> --body` has no such flag, so it wrote its own usage error into the
+  file and exited non-zero; the `&&` bound only the next step, and the `mg edit`
+  on the following line ran unconditionally). A guarded read-modify-write and a
+  *correct* one are different claims, and `guarded=true` in the audit line
+  records the weaker one. Meanwhile `work.edited` carried `body_hash_before`,
+  `body_hash_after` and both line counts but no bodies — enough to **prove** the
+  loss and useless for **repairing** it. The store is not a git repo, so there
+  was no VCS fallback either.
+
+  So a `mode: replace` edit now writes the prior body to
+  `~/.macguffin/work/.bodybak/<id>/<timestamp>-<hash8>.md` before overwriting,
+  keeping the ten most recent per item, and `mg restore-body <id> [--list]
+  [--from=<stamp>]` lists and restores them. `work.edited` gained a
+  `body_backup` field, so the audit line that could only prove a body was gone
+  now names the copy. Restoring is itself a replace and is therefore saved and
+  undoable; an item with **nothing** saved is an error (exit 3,
+  `no_body_backup`), never a quiet success and never an empty body; an ambiguous
+  `--from` is refused (exit 2, `ambiguous_body_backup`) rather than resolved to a
+  guess. A backup that cannot be written refuses the edit and leaves the stored
+  item byte-identical, because a recovery guarantee that quietly stops holding
+  is worse than none.
+
+  **Deliberately not a heuristic block.** The tempting fix — refuse a replace
+  that shrinks the body by >90%, or whose content looks like an error message —
+  was rejected on purpose. A shrink ratio hard-codes a fact about normal edits
+  and decays: a legitimate rewrite that condenses a bloated body gets refused,
+  which trains people to reach for `--force`. Content-sniffing for `Error:`
+  fails on any item that legitimately quotes one, including the ticket that
+  asked for this. A blocking control has to be right about the *future*; a
+  backup only has to be *cheap*, and it is correct for every failure mode
+  including ones nobody predicted — a wrong path, a truncated pipe, an editor
+  crash, a bad `sed`. A false block costs a real edit and erodes trust in the
+  guard; a useless backup costs a few KB.
+
+  **Scope.** The wholesale overwrite path only. `--append-body-file` is not a
+  replace — it composes against the body on disk at write time and cannot
+  destroy a section it never saw — and `--title` rewrites the heading line in
+  place; neither is backed up, because neither is at risk. Backups are keyed by
+  ID and do not move on claim/unclaim/done/reopen/shelve/unshelve; `mg archive`
+  moves them into `work/archive/<partition>/.bodybak/<id>/` with the record so
+  nothing is orphaned in the live tree, and `mg unarchive` brings them back.
+
 ### Fixed
 
 - **A dependent filed onto a finished or shelved parent no longer strands

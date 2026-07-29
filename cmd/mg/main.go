@@ -78,6 +78,7 @@ func init() {
 	rootCmd.AddCommand(archiveCmd)
 	rootCmd.AddCommand(unarchiveCmd)
 	rootCmd.AddCommand(editCmd)
+	rootCmd.AddCommand(restoreBodyCmd)
 	rootCmd.AddCommand(assignCmd)
 	rootCmd.AddCommand(reopenCmd)
 	rootCmd.AddCommand(shelveCmd)

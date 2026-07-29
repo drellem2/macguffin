@@ -88,6 +88,17 @@ func archiveFile(root string, c archiveCandidate) error {
 		return fmt.Errorf("archiving sidecar for %s: %w", id, err)
 	}
 
+	// Saved prior bodies travel too, into archive/<partition>/.bodybak/<id>/.
+	// Archiving must not orphan them: leaving them in work/.bodybak/ would
+	// accumulate a directory per item forever with nothing to reap it, and
+	// deleting them would destroy the only copy of a body at the exact moment
+	// nobody is watching. Moving them keeps the archive self-contained, keeps
+	// `mg restore-body` working on an archived item, and gives Unarchive
+	// something to bring back. See bodyBackupDirFor.
+	if err := moveBodyBackups(liveBodyBackupParent(root), filepath.Join(archiveDir, bodyBackupDirName), id); err != nil {
+		return fmt.Errorf("archiving saved bodies for %s: %w", id, err)
+	}
+
 	event.Emit(root, "work.archive", map[string]string{
 		"item_id":     c.item.ID,
 		"from_status": "done",

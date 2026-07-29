@@ -74,6 +74,21 @@ A prefix of 8 or more characters is accepted.
 every other byte of the body untouched. It is the one edit two agents can make
 to a live item without racing each other's prose.
 
+AND IF IT GOES WRONG ANYWAY, THE PRIOR BODY IS STILL THERE.
+
+  mg restore-body mg-1234 --list
+  mg restore-body mg-1234
+
+Every --body/--body-file write saves the body it is about to destroy first, to
+~/.macguffin/work/.bodybak/<id>/, ten deep. That is not the same guarantee
+--if-unchanged makes: the guard proves nobody ELSE wrote in the window, and says
+nothing about whether YOUR OWN READ succeeded. mg-9fc8 is the incident — a
+'mg show <id> --body' with no such flag wrote its usage error into the file, an
+unconditional 'mg edit' on the next line sent it, and the guard passed. The
+backup assumes every other defence has already failed and predicts nothing.
+
+Appends and --title are not backed up because they do not overwrite anything.
+
 For the replacement body, reach for --body-file first. It reads the body
 verbatim ("-" for stdin), with no shell in the path at all. The canonical form
 is a QUOTED heredoc:

@@ -98,21 +98,28 @@ type commandEffect struct {
 // default only as a runtime safety net. These classifications are provisional
 // and flagged for architect review — see the contract note above.
 var commandEffects = map[string]commandEffect{
-	"mg":           {mutates: false, idempotent: true}, // root: prints usage
-	"mg schema":    {mutates: false, idempotent: true},
-	"mg sidecars":  {mutates: false, idempotent: true},
-	"mg version":   {mutates: false, idempotent: true},
-	"mg show":      {mutates: false, idempotent: true},
-	"mg list":      {mutates: false, idempotent: true},
-	"mg log":       {mutates: false, idempotent: true},
-	"mg flow":      {mutates: false, idempotent: true},
-	"mg spend":     {mutates: false, idempotent: true},
-	"mg init":      {mutates: true, idempotent: true}, // ensures workspace exists
-	"mg new":       {mutates: true, idempotent: false},
-	"mg claim":     {mutates: true, idempotent: false},
-	"mg unclaim":   {mutates: true, idempotent: false},
-	"mg done":      {mutates: true, idempotent: false},
-	"mg edit":      {mutates: true, idempotent: false}, // --add-tags/--rm-tags accumulate; flag-dependent idempotency takes the conservative false
+	"mg":          {mutates: false, idempotent: true}, // root: prints usage
+	"mg schema":   {mutates: false, idempotent: true},
+	"mg sidecars": {mutates: false, idempotent: true},
+	"mg version":  {mutates: false, idempotent: true},
+	"mg show":     {mutates: false, idempotent: true},
+	"mg list":     {mutates: false, idempotent: true},
+	"mg log":      {mutates: false, idempotent: true},
+	"mg flow":     {mutates: false, idempotent: true},
+	"mg spend":    {mutates: false, idempotent: true},
+	"mg init":     {mutates: true, idempotent: true}, // ensures workspace exists
+	"mg new":      {mutates: true, idempotent: false},
+	"mg claim":    {mutates: true, idempotent: false},
+	"mg unclaim":  {mutates: true, idempotent: false},
+	"mg done":     {mutates: true, idempotent: false},
+	"mg edit":     {mutates: true, idempotent: false}, // --add-tags/--rm-tags accumulate; flag-dependent idempotency takes the conservative false
+
+	// Re-running converges on the body, but each run SAVES the body it
+	// overwrites, so a second run consumes a backup slot and the second restore
+	// is a no-op that pushed a real prior version one closer to the prune
+	// bound. The conservative false is the honest classification.
+	"mg restore-body": {mutates: true, idempotent: false},
+
 	"mg assign":    {mutates: true, idempotent: true},
 	"mg reopen":    {mutates: true, idempotent: false},
 	"mg shelve":    {mutates: true, idempotent: false},

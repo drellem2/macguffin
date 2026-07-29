@@ -128,6 +128,14 @@ func Unarchive(root, id, status string) (*Item, string, error) {
 		return nil, "", ioErr(fmt.Sprintf("%s: could not be unarchived (result file): %s", item.ID, fsErrText(err)))
 	}
 
+	// Saved prior bodies come back out of the partition with the record, so the
+	// archive→unarchive round trip leaves them where a live item's backups
+	// live. Without this they would stay behind in archive/<partition>/.bodybak/
+	// while the item is edited from work/, and the two halves would diverge.
+	if err := moveBodyBackups(filepath.Join(filepath.Dir(src), bodyBackupDirName), liveBodyBackupParent(root), item.ID); err != nil {
+		return nil, "", ioErr(fmt.Sprintf("%s: could not be unarchived (saved bodies): %s", item.ID, fsErrText(err)))
+	}
+
 	item, err = readFile(dst)
 	if err != nil {
 		return nil, "", err
