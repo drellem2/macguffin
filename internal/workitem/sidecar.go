@@ -1,9 +1,13 @@
 package workitem
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/drellem2/macguffin/internal/mgerr"
 )
 
 // resultSidecarName is the filename of a work item's result sidecar, written by
@@ -40,6 +44,91 @@ func moveResultSidecar(srcDir, dstDir, id string) error {
 		return err
 	}
 	return os.Rename(src, filepath.Join(dstDir, resultSidecarName(id)))
+}
+
+// mergeResultSidecar combines a freshly supplied --result with a result already
+// on disk at priorPath, returning the bytes Done should write.
+//
+// Done is the only transition that writes a sidecar as well as carrying one, and
+// until now the write was an unconditional overwrite: the fresh result simply
+// replaced whatever was there. mg-ab67 and mg-9795 both read that as correct
+// ("the fresh result supersedes the carried one") because both were reasoning
+// about a done -> reopen -> done round trip, where the prior copy really is a
+// stale completion of the same shape.
+//
+// The dominant case in a real store is the opposite one. A polecat writes its
+// findings to <id>.result.json in claimed/ and then completes the item with the
+// protocol's own invocation, `mg done <id> --result='{"branch": "..."}'`. An
+// unconditional overwrite destroys a report with a branch name. Measured on the
+// live store at 1593 sidecars: 124 carry a report and 1469 hold nothing but
+// merge bookkeeping. The field designed to record what the work found is
+// occupied by the branch it landed on.
+//
+// Note what mg-9795 changed about the failure mode. Before it, the report was
+// STRANDED in claimed/ — recoverable, and mg-eb1e is a report recovered exactly
+// that way ("the strays are the SURVIVORS"). Now that the sidecar correctly
+// follows the .md, the same overwrite ANNIHILATES it instead: the payload is
+// carried into done/ and clobbered there, with no copy left anywhere. Fixing the
+// move without fixing the write turned a recoverable bug into a lossy one.
+//
+// So the rule is that Done must never destroy a result it did not write:
+//
+//   - no prior result: the incoming bytes are written verbatim.
+//   - prior result, no --result: the prior is carried forward untouched.
+//   - both, and both JSON objects: shallow merge, incoming keys winning. The
+//     supersession mg-9795 wanted is preserved key-by-key — `{"branch":"rev1"}`
+//     then `{"branch":"rev2"}` still yields exactly `{"branch":"rev2"}` — while
+//     keys the fresh result says nothing about survive.
+//   - both, not both objects: refuse. See below.
+//
+// The merge is deliberately shallow. Deep-merging two reports is a judgement
+// call about which nested value is authoritative, and guessing wrong silently
+// corrupts a record; replacing a whole value under a key the caller explicitly
+// set is a rule an operator can predict. Values are carried as RawMessage so
+// nested content is never re-normalised.
+//
+// Refusing the non-object case rather than falling back to the overwrite is the
+// same trade: an error leaves both copies on disk and is recoverable by hand,
+// where a clobber is not. It costs a hand-reconcile in a case measured at 0 of
+// 1593 sidecars in the live store.
+func mergeResultSidecar(priorPath, id string, incoming json.RawMessage) ([]byte, error) {
+	prior, err := os.ReadFile(priorPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Nothing to preserve — write the caller's bytes exactly as given,
+			// rather than round-tripping them through the marshaller.
+			return incoming, nil
+		}
+		return nil, err
+	}
+
+	priorObj, priorOK := asJSONObject(prior)
+	incomingObj, incomingOK := asJSONObject(incoming)
+	if !priorOK || !incomingOK {
+		which := "the existing result"
+		if !incomingOK {
+			which = "--result"
+		}
+		return nil, mgerr.Conflict("sidecar_unmergeable",
+			fmt.Sprintf("%s: cannot merge --result with the existing result because %s is not a JSON object; refusing to overwrite it.", id, which),
+			fmt.Sprintf("The existing result is at %s. Reconcile the two by hand, then re-run with the combined JSON.", priorPath))
+	}
+
+	for k, v := range incomingObj {
+		priorObj[k] = v
+	}
+	return json.Marshal(priorObj)
+}
+
+// asJSONObject decodes data as a JSON object, reporting whether it is one.
+// A JSON `null` unmarshals into a nil map without error, so the nil check is
+// what distinguishes "an object" from "valid JSON that is not an object".
+func asJSONObject(data []byte) (map[string]json.RawMessage, bool) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(data, &obj); err != nil || obj == nil {
+		return nil, false
+	}
+	return obj, true
 }
 
 // StraySidecar is a result sidecar sitting in a directory that does not hold

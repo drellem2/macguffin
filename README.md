@@ -271,6 +271,22 @@ status=$(mg show mg-560d --json | jq -r .status)       # RIGHT
 cat ~/.macguffin/work/"$status"/mg-560d.result.json
 ```
 
+`mg done --result` **merges into** any result already recorded for the item
+rather than replacing it, so completing an item cannot silently discard what the
+work found:
+
+```sh
+# the agent records its findings while the item is claimed
+echo '{"kind":"investigation","summary":"..."}' > ~/.macguffin/work/claimed/mg-560d.result.json
+mg done mg-560d --result='{"branch": "polecat-560d"}'
+# done/mg-560d.result.json now holds kind, summary AND branch
+```
+
+The merge is a shallow, key-by-key union in which `--result` wins: keys it sets
+are overwritten, keys it says nothing about survive. If the two cannot be merged
+— either side is valid JSON but not an object — `mg done` refuses and changes
+nothing, leaving both copies on disk to reconcile by hand.
+
 Run `mg sidecars` to find strays left behind by older versions. Note that
 claimed items carry a PID suffix (`<id>.md.<pid>`), so "sidecar with no
 matching `<id>.md`" is not a usable test for orphanhood in `claimed/` — use

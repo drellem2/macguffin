@@ -35,7 +35,26 @@ func Done(root, id string, resultJSON json.RawMessage) (*Item, []*Item, error) {
 		}
 	}
 
-	dstPath := filepath.Join(root, "work", "done", id+".md")
+	doneDir := filepath.Join(root, "work", "done")
+	dstPath := filepath.Join(doneDir, id+".md")
+
+	// Fold any pre-existing result into the fresh one BEFORE the rename, so an
+	// irreconcilable pair fails with the item still claimed and both copies on
+	// disk, rather than half-transitioned. The prior result is the one the move
+	// below will leave at the destination: normally the copy travelling out of
+	// the origin directory, or — when the origin has none — a copy already
+	// sitting in done/ from an earlier completion.
+	var sidecarBytes []byte
+	if len(resultJSON) > 0 {
+		priorPath := filepath.Join(filepath.Dir(srcPath), resultSidecarName(id))
+		if _, err := os.Stat(priorPath); os.IsNotExist(err) {
+			priorPath = filepath.Join(doneDir, resultSidecarName(id))
+		}
+		sidecarBytes, err = mergeResultSidecar(priorPath, id, resultJSON)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 
 	// rename(2) is atomic on local filesystems.
 	if err := os.Rename(srcPath, dstPath); err != nil {
@@ -48,18 +67,19 @@ func Done(root, id string, resultJSON json.RawMessage) (*Item, []*Item, error) {
 	// beside it, invisible to `mg show` and asserting a stale completion.
 	//
 	// Done is the only transition that may also WRITE a sidecar, so the move
-	// must come first: the fresh result below then supersedes the carried one at
-	// the destination. Reversing the order would clobber the new result with the
-	// stale one.
-	doneDir := filepath.Join(root, "work", "done")
+	// must come first: the merged result below then lands on top of the carried
+	// one at the destination. Reversing the order would clobber the new result
+	// with the stale one.
 	if err := moveResultSidecar(filepath.Dir(srcPath), doneDir, id); err != nil {
 		return nil, nil, fmt.Errorf("moving result sidecar: %w", err)
 	}
 
-	// Write result sidecar if provided
-	if len(resultJSON) > 0 {
+	// Write the result sidecar if one was provided. sidecarBytes already carries
+	// forward any keys of the prior result the fresh one did not set — Done must
+	// not destroy a result it did not write. See mergeResultSidecar.
+	if len(sidecarBytes) > 0 {
 		sidecarPath := filepath.Join(doneDir, resultSidecarName(id))
-		if err := os.WriteFile(sidecarPath, resultJSON, 0o644); err != nil {
+		if err := os.WriteFile(sidecarPath, sidecarBytes, 0o644); err != nil {
 			return nil, nil, fmt.Errorf("writing result sidecar: %w", err)
 		}
 	}

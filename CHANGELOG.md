@@ -14,6 +14,53 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ## [Unreleased]
 
+### Fixed
+
+- **`mg done --result` merged into the existing result instead of destroying it
+  (mg-ef64).** Third filing of a defect archived unbuilt twice (mg-ab67 →
+  mg-9795 → this). Both predecessors fixed the *move* — a `.result.json` in
+  `claimed/` now follows its `.md` into `done/` — and both left the *write* an
+  unconditional overwrite, because both were reasoning about a
+  `done → reopen → done` round trip, where the prior copy really is a stale
+  completion of the same shape.
+
+  The dominant sequence in a real store is the opposite one. An agent writes its
+  findings to `claimed/<id>.result.json`, then completes the item with the
+  standard invocation `mg done <id> --result='{"branch": "..."}'`. The overwrite
+  destroyed a report and left a branch name. Measured across the live store at
+  the time of the fix: **1593 sidecars, of which 124 (7%) carry a report and
+  1469 (92%) hold nothing but merge bookkeeping** — `{branch}` alone accounts for
+  594. The field designed to record what the work found is occupied by the branch
+  it landed on.
+
+  Note that mg-9795 made the loss *worse*. While the move was broken the report
+  was stranded in `claimed/` and therefore recoverable — mg-eb1e recovered one
+  exactly that way, an 11907B payload in `claimed/` against a 171B stub in
+  `done/`, which is why `mg sidecars` reports strays instead of deleting them.
+  Once the move was correct, the same overwrite *annihilated* the report: carried
+  into `done/`, clobbered there, no copy left anywhere.
+
+  `Done` now never destroys a result it did not write. With no prior result the
+  caller's bytes are written verbatim; with no `--result` the prior is carried
+  forward untouched; with both, they are shallow-merged with `--result` winning
+  key by key — so mg-9795's supersession is preserved exactly
+  (`{"branch":"rev1"}` then `{"branch":"rev2"}` still yields `{"branch":"rev2"}`)
+  while keys the fresh result is silent about survive. The merge is deliberately
+  shallow: deep-merging two reports is a judgement call about which nested value
+  is authoritative, and guessing wrong corrupts a record silently.
+
+  When a shallow merge is undefined — either side is valid JSON but not an object
+  — `mg done` refuses and changes nothing, leaving the item claimed and both
+  copies on disk. An error is recoverable by hand where a clobber is not, and the
+  case measures 0 of 1593 in the live store. The merge is computed *before* the
+  `.md` rename so a refusal cannot leave the transition half-applied.
+
+  Existing sidecars are not rewritten: the 1469 bookkeeping-only records are
+  evidence of what was lost and their disposition belongs to a cleanup pass. The
+  1593/124 census is recorded here as the baseline for the remaining, distinct
+  cause — an agent whose work merges but which never reaches its own `mg done`,
+  so no report is ever written at all.
+
 ### Added
 
 - **`mg archive` refuses an item tagged `blocked-on-*`, naming the tag

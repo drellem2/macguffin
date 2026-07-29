@@ -48,5 +48,5 @@ var doneCmd = &cobra.Command{
 }
 
 func init() {
-	doneCmd.Flags().StringVar(&doneResult, "result", "", "result JSON to write as sidecar")
+	doneCmd.Flags().StringVar(&doneResult, "result", "", "result JSON to record as sidecar; merged into any existing result (these keys win) rather than replacing it")
 }
