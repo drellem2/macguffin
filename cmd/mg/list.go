@@ -61,6 +61,11 @@ type listJSONItem struct {
 	Depends  []string  `json:"depends"`
 	Created  time.Time `json:"created"`
 	Mtime    time.Time `json:"mtime"`
+	// Snooze is the item's `snooze:` attribute VERBATIM (normally RFC3339 UTC),
+	// empty when it carries none. It is a string rather than a timestamp so a
+	// hand-written value mg could not parse reaches the consumer as written
+	// instead of arriving as a zero time indistinguishable from "no snooze".
+	Snooze string `json:"snooze"`
 }
 
 func toJSONItem(item *workitem.Item, status string) listJSONItem {
@@ -85,7 +90,25 @@ func toJSONItem(item *workitem.Item, status string) listJSONItem {
 		Depends:  depends,
 		Created:  item.Created,
 		Mtime:    item.Mtime,
+		Snooze:   item.SnoozeRaw,
 	}
+}
+
+// formatSnooze returns a dim wake-time marker for the listing, so a snoozed
+// item is distinguishable at a glance from one that is merely pending. That
+// distinction is the whole point: "pending" is exactly what a correctly-waiting
+// item looks like, and a snooze nobody can see is a snooze nobody audits.
+func formatSnooze(item *workitem.Item) string {
+	if item.SnoozeRaw == "" {
+		return ""
+	}
+	if item.SnoozeMalformed() {
+		return " \033[2m[snooze ⚠ unparseable]\033[0m"
+	}
+	if !item.Snoozed(time.Now().UTC()) {
+		return " \033[2m[snooze elapsed]\033[0m"
+	}
+	return fmt.Sprintf(" \033[2m[snoozed %s]\033[0m", item.SnoozeRaw)
 }
 
 func writeJSONItems(out *os.File, items []*workitem.Item, status string) error {
@@ -175,7 +198,7 @@ Examples:
 			}
 
 			for _, item := range items {
-				fmt.Printf("%-10s %-8s %s%s%s\n", item.ID, item.Type, item.Title, formatTags(item.Tags), formatAssignee(item.Assignee, currentUser))
+				fmt.Printf("%-10s %-8s %s%s%s%s\n", item.ID, item.Type, item.Title, formatTags(item.Tags), formatAssignee(item.Assignee, currentUser), formatSnooze(item))
 			}
 			return nil
 		}
@@ -254,7 +277,7 @@ Examples:
 			printed = true
 			fmt.Printf("%s:\n", s)
 			for _, item := range items {
-				fmt.Printf("  %-10s %-8s %s%s%s\n", item.ID, item.Type, item.Title, formatTags(item.Tags), formatAssignee(item.Assignee, currentUser))
+				fmt.Printf("  %-10s %-8s %s%s%s%s\n", item.ID, item.Type, item.Title, formatTags(item.Tags), formatAssignee(item.Assignee, currentUser), formatSnooze(item))
 			}
 		}
 		if !printed {

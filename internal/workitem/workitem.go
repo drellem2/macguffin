@@ -33,6 +33,17 @@ type Item struct {
 	Title    string
 	Body     string    // everything after frontmatter (raw markdown)
 	Mtime    time.Time // file modification time; zero when parsed from a string
+
+	// Snooze is the instant this item's snooze gate opens, in UTC. Zero when
+	// the item carries no `snooze:` attribute — and also when it carries one
+	// that could not be parsed, which SnoozeRaw distinguishes. See snooze.go.
+	Snooze time.Time
+	// SnoozeRaw is the `snooze:` value exactly as written on disk. It is kept
+	// alongside the parsed instant so a value mg cannot parse survives a
+	// read/write round trip: dropping it would silently UNSNOOZE the item and
+	// the next sweep would promote it early, with nothing recording that a
+	// gate had been discarded.
+	SnoozeRaw string
 }
 
 // CreateOption configures optional fields on a new work item.
@@ -284,6 +295,13 @@ func Render(item *Item) string {
 		budgetLine = fmt.Sprintf("budget: %d\n", *item.Budget)
 	}
 
+	// Written from SnoozeRaw, not from the parsed instant, so a hand-written
+	// value mg could not parse round-trips instead of being silently erased.
+	snoozeLine := ""
+	if item.SnoozeRaw != "" {
+		snoozeLine = fmt.Sprintf("%s: %s\n", SnoozeKey, item.SnoozeRaw)
+	}
+
 	tagsLine := ""
 	if len(item.Tags) > 0 {
 		tagsLine = fmt.Sprintf("tags: [%s]\n", strings.Join(item.Tags, ", "))
@@ -291,8 +309,8 @@ func Render(item *Item) string {
 
 	body := composeBody(item)
 
-	return fmt.Sprintf("---\nid: %s\ntype: %s\ncreated: %s\ncreator: %s\ndepends: %s\n%s%s%s%s%s%s---\n%s",
-		item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, depsLine, tagsLine, repoLine, assigneeLine, priorityLine, branchLine, budgetLine, body)
+	return fmt.Sprintf("---\nid: %s\ntype: %s\ncreated: %s\ncreator: %s\ndepends: %s\n%s%s%s%s%s%s%s---\n%s",
+		item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, depsLine, tagsLine, repoLine, assigneeLine, priorityLine, branchLine, budgetLine, snoozeLine, body)
 }
 
 // FindPath returns the filesystem path and status directory for a work item by
@@ -406,6 +424,15 @@ func Parse(content string) (*Item, error) {
 		case "budget":
 			if n, err := strconv.Atoi(val); err == nil {
 				item.Budget = &n
+			}
+		case SnoozeKey:
+			// Kept verbatim even when unparseable. A gate mg cannot read is
+			// reported (Stranded names it) and holds the item; it is never
+			// discarded, because discarding it promotes the item early and
+			// leaves no trace that a gate existed at all. See snooze.go.
+			item.SnoozeRaw = val
+			if t, err := time.Parse(time.RFC3339, val); err == nil {
+				item.Snooze = t.UTC()
 			}
 		}
 	}

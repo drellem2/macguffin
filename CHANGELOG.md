@@ -14,6 +14,66 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ## [Unreleased]
 
+### Added
+
+- **`mg snooze` / `mg unsnooze`: "not now, come back at …" — with the driver
+  that opens the gate, in the same change (mg-0a5f).** There was no way to say
+  "revisit this on Monday", so `assignee` was overloaded to mean it — the only
+  field that silenced stall-watch — which made a routing field carry a
+  scheduling signal and left tickets in someone's queue looking like decisions
+  they owed.
+
+  **Snooze is an ATTRIBUTE, not a sixth status.** Status in mg is the directory
+  an item is in; there is no `status` key in frontmatter and there never has
+  been. A snoozed item is a `pending/` item carrying a `snooze: <RFC3339 UTC>`
+  timestamp: it waits on a CLOCK exactly as `depends:` waits on an ITEM, and
+  both gates are ANDed into one predicate evaluated in one place, rather than
+  mg growing a second gating mechanism that does not know about the first. A
+  sixth directory would have been adding to the model; this is not. Read-time
+  ("lazy") evaluation was considered and rejected: it needs no scheduler but
+  creates a second source of truth for status, which `ls`, `grep`, and every
+  consumer outside mg would then disagree with.
+
+  **The gate ships with its driver, because an attribute alone would be worse
+  than no snooze at all.** A snoozed item is not `available/`, so stall-watch
+  and priority-wake cannot see it, and `pending` is exactly what a
+  correctly-waiting item looks like — the same invisibility that left two items
+  fifteen days behind a gate whose date had already passed. Three properties
+  close that off:
+
+  - **`mg schedule` is level-triggered, never edge-triggered.** It asks whether
+    a wake time has *passed*, not whether it just *arrived*. A driver that is
+    down through the wake instant therefore delays an item and can never lose
+    one; a single late sweep recovers it. `scripts/install-snooze-driver.sh`
+    registers the driver on pogod, which persists schedules to disk and replays
+    them through host sleep, NTP steps and its own restarts.
+  - **Bad times fail loudly at snooze time.** A wake time already in the past,
+    or one mg cannot parse, is refused when it is set (exit 2) rather than
+    written and forgotten. A `snooze:` value that reaches disk unparseable
+    anyway — only a hand-edit can do that — *holds* the item and is *named*, by
+    `mg schedule`'s stranded report and by `mg show`. Held-and-silent is the
+    swallow; held-and-named is the fix.
+  - **No driver, no gate.** `mg schedule` stamps `work/.last-sweep` on every
+    run. If nothing has driven the sweep within two hours, `mg snooze` refuses
+    (exit 4) and prints the exact command that wires the driver. `--force`
+    overrides with a warning on stderr. The driver is a precondition mg checks,
+    not a convention it hopes for.
+
+  Placement now runs through one gate predicate rather than four independent
+  dependency checks, so `mg edit --rm-depends`, `mg unshelve`, `mg done`'s
+  auto-promotion and `mg schedule` all agree that clearing one gate is not
+  clearing every gate. `mg schedule` additionally lists what is still snoozed
+  and when each item wakes; `mg show` and `mg list` show the gate; `mg list
+  --json` / `mg show --json` carry a new additive `snooze` field holding the
+  stored value verbatim.
+
+  **A pending item with no `snooze:` attribute behaves exactly as before**, and
+  a regression test pins it — every `depends` chain in the store rides on that.
+
+  Snooze declares a **pause**, not a remainder: a snoozed item owes nothing and
+  is not waiting on anybody. It is not a priority, not an assignment, not a
+  workflow state machine, and not a recurrence.
+
 ### Fixed
 
 - **A dependent filed onto a finished or shelved parent no longer strands

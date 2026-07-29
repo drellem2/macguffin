@@ -216,6 +216,39 @@ the refresh token itself has expired. Users see a 401 loop.
 - **Self-contained.** Everything needed to work on it is in the file.
 - **Diffable.** Git tracks changes naturally.
 
+### Status is the directory, not a field
+
+**There is no `status` key in frontmatter and there never has been.** An item's
+status is the directory it sits in — `available/`, `claimed/`, `pending/`,
+`done/`, `shelved/`, `archive/`. The parser accepts no such key and the resolver
+sets an item's status from the directory it scanned. **Status is observed, not
+stored**, which is why `ls` is an authoritative answer and why nothing can be
+"marked" into a state it is not filed in.
+
+Everything else in frontmatter is an **attribute**: it *describes* the item, it
+does not *move* it. There are exactly two exceptions, and they are the same
+shape:
+
+| Attribute | Waits on | Evaluated by |
+|-----------|----------|--------------|
+| `depends: [id, …]` | another ITEM reaching `done` | placement at filing time, then the `mg schedule` sweep |
+| `snooze: <RFC3339>` | the CLOCK reaching a time | the same `mg schedule` sweep |
+
+Both are ANDed into **one** gate in **one** place, so an item is released only
+when every gate has opened. That is deliberate: two gating mechanisms that do
+not know about each other is how a filing system starts becoming a workflow
+engine. **Adding a gate means extending that predicate — not adding a
+directory.** A sixth status directory would be adding to the model; an attribute
+an existing gate consults is not.
+
+The corollary is the load-bearing one: **a gate is worth only as much as the
+thing that opens it.** A snoozed item is not `available/`, so stall-watch and
+priority-wake cannot see it, and `pending` is exactly what a correctly-waiting
+item looks like. So `mg schedule` must be run on a clock (see
+`scripts/install-snooze-driver.sh`), the sweep is level-triggered so a missed
+run delays rather than loses, and `mg snooze` refuses to set a gate at all when
+nothing has driven the sweep recently.
+
 ### Querying work items
 
 Simple shell pipeline — no query language:

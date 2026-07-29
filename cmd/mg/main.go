@@ -82,6 +82,8 @@ func init() {
 	rootCmd.AddCommand(reopenCmd)
 	rootCmd.AddCommand(shelveCmd)
 	rootCmd.AddCommand(unshelveCmd)
+	rootCmd.AddCommand(snoozeCmd)
+	rootCmd.AddCommand(unsnoozeCmd)
 	rootCmd.AddCommand(flowCmd)
 	rootCmd.AddCommand(spendCmd)
 	rootCmd.AddCommand(schemaCmd)

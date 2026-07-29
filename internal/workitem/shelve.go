@@ -136,8 +136,10 @@ func Unshelve(root, id string) ([]*Item, error) {
 		return nil, err
 	}
 
+	// gateOpen, not allDepsMet: an item shelved while snoozed must come back
+	// still snoozed. Unshelving lifts the shelf, not every other gate on it.
 	subdir := "available"
-	if len(item.Depends) > 0 && !allDepsMet(item.Depends, doneIDs) {
+	if !gateOpen(item, doneIDs, snoozeNow()) {
 		subdir = "pending"
 	}
 

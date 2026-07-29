@@ -177,12 +177,23 @@ func ShelvedDeps(root string, depends []string) ([]string, error) {
 type Strand struct {
 	Item     *Item
 	Blocking []Dep
+
+	// BadSnooze is the `snooze:` value verbatim when it is not a valid RFC3339
+	// timestamp. A gate nothing can parse is a gate nothing can open: the item
+	// holds in pending/ (see snoozeHolds) looking exactly like an item that is
+	// waiting correctly. Only a hand-edit can produce one — `mg snooze`
+	// refuses an unparseable time at the point of setting it — so this is the
+	// backstop, not the primary defence.
+	BadSnooze string
 }
 
 // Reason renders why this item can never be released, naming each unreachable
 // parent and its state.
 func (s Strand) Reason() string {
-	parts := make([]string, 0, len(s.Blocking))
+	parts := make([]string, 0, len(s.Blocking)+1)
+	if s.BadSnooze != "" {
+		parts = append(parts, fmt.Sprintf("its snooze %q is not an RFC3339 timestamp", s.BadSnooze))
+	}
 	for _, d := range s.Blocking {
 		switch d.State {
 		case DepShelved:
@@ -197,7 +208,8 @@ func (s Strand) Reason() string {
 }
 
 // Stranded scans pending/ for items that no completion can ever release: those
-// waiting on a shelved or nonexistent parent.
+// waiting on a shelved or nonexistent parent, and those whose `snooze:` gate is
+// unparseable and so can never open.
 //
 // This is a detector, and a detector is worth shipping only with a reader —
 // `mg schedule` reports what this returns, right where it reports what it
@@ -222,8 +234,12 @@ func Stranded(root string) ([]Strand, error) {
 				blocking = append(blocking, d)
 			}
 		}
-		if len(blocking) > 0 {
-			out = append(out, Strand{Item: item, Blocking: blocking})
+		bad := ""
+		if item.SnoozeMalformed() {
+			bad = item.SnoozeRaw
+		}
+		if len(blocking) > 0 || bad != "" {
+			out = append(out, Strand{Item: item, Blocking: blocking, BadSnooze: bad})
 		}
 	}
 	return out, nil

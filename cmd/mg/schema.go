@@ -117,7 +117,9 @@ var commandEffects = map[string]commandEffect{
 	"mg reopen":    {mutates: true, idempotent: false},
 	"mg shelve":    {mutates: true, idempotent: false},
 	"mg unshelve":  {mutates: true, idempotent: false},
-	"mg archive":   {mutates: true, idempotent: true}, // sweep: re-run archives nothing new
+	"mg snooze":    {mutates: true, idempotent: false}, // --for is relative, so a re-run moves the wake time
+	"mg unsnooze":  {mutates: true, idempotent: true},  // unsnoozing an unsnoozed item refuses, changing nothing
+	"mg archive":   {mutates: true, idempotent: true},  // sweep: re-run archives nothing new
 	"mg unarchive": {mutates: true, idempotent: false},
 	"mg snapshot":  {mutates: true, idempotent: false}, // creates a git snapshot
 	"mg schedule":  {mutates: true, idempotent: true},  // promotes ready items; re-run is a no-op

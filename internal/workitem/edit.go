@@ -262,7 +262,7 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 			if err != nil {
 				return nil, nil, err
 			}
-			if !allDepsMet(item.Depends, doneIDs) {
+			if !gateOpen(item, doneIDs, snoozeNow()) {
 				dst := filepath.Join(root, "work", "pending", filepath.Base(itemPath))
 				if err := os.Rename(itemPath, dst); err != nil {
 					return nil, nil, ioErr(fmt.Sprintf("%s: saved, but could not be moved to pending: %s", id, fsErrText(err)))
@@ -277,7 +277,10 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 			if err != nil {
 				return nil, nil, err
 			}
-			if len(item.Depends) == 0 || allDepsMet(item.Depends, doneIDs) {
+			// gateOpen, not allDepsMet: clearing the last dependency off a
+			// SNOOZED item must not promote it. Dropping a dependency says
+			// nothing about a wake time that has not arrived.
+			if gateOpen(item, doneIDs, snoozeNow()) {
 				dst := filepath.Join(root, "work", "available", filepath.Base(itemPath))
 				if err := os.Rename(itemPath, dst); err != nil {
 					return nil, nil, ioErr(fmt.Sprintf("%s: saved, but could not be promoted to available: %s", id, fsErrText(err)))

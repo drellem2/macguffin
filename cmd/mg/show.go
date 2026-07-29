@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
 	"github.com/drellem2/macguffin/internal/spend"
@@ -111,6 +112,19 @@ bare ID is ambiguous. Disambiguate with an @partition qualifier:
 		}
 		if len(item.Depends) > 0 {
 			fmt.Printf("%-10s %s\n", "Depends:", strings.Join(item.Depends, ", "))
+		}
+		if item.SnoozeRaw != "" {
+			// A gate you cannot see is a gate nobody audits. Malformed values
+			// are shown as they are stored and named as malformed, because a
+			// snooze mg cannot parse is one that never opens.
+			switch {
+			case item.SnoozeMalformed():
+				fmt.Printf("%-10s %s  ⚠ not an RFC3339 timestamp — this gate can never open\n", "Snooze:", item.SnoozeRaw)
+			case item.Snoozed(time.Now().UTC()):
+				fmt.Printf("%-10s %s (in %s)\n", "Snooze:", item.SnoozeRaw, workitem.HumanUntil(time.Until(item.Snooze)))
+			default:
+				fmt.Printf("%-10s %s (elapsed; the next `mg schedule` sweep releases it)\n", "Snooze:", item.SnoozeRaw)
+			}
 		}
 		if item.Repo != "" {
 			fmt.Printf("%-10s %s\n", "Repo:", item.Repo)

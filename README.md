@@ -136,8 +136,10 @@ mg log                 # view snapshot history
 | Archiving an item tagged `blocked-on-*` | A `blocked-on-*` tag says **a person still owes something here**, and an archived item cannot be the tracker for outstanding work — so archiving one is **refused**, whatever its type. The refusal **names the tag it found** (`blocked-on-daniel`, `blocked-on-daniel-confirm`, …), because "blocked" and "no successor" have different remedies and an operator has to be able to tell which fired. The remedy is to settle what the tag names and then `mg edit <id> --rm-tags=blocked-on-<who>`. The check is on the **tag**, not on any wording in the body: the tag was already a live convention and already queryable across every status (`mg list --tag=blocked-on-daniel` with no `--status` spans statuses and finds `done` items), so this only teaches the *destructive* operation to read an index that already existed. `--successor` does **not** satisfy it — naming a tracker for a recommendation says nothing about whether a person still owes something. `--force` **does** apply, as for the successor guard: an obligation can be discharged out of band and the tag left behind, and without a recorded escape hatch the operator strips the tag by hand — the same bypass with none of the audit trail. A forced archive records a `work.archive_forced` event with `reason: blocked_on_tag`, and the refusal itself does not mention `--force`. The sweep skips blocked items, leaves them in `done/`, and names each one on stderr **with the reason it was refused**. |
 | `mg unarchive ID [--status=S]` | Restore an archived work item to the status it held when archived. Refuses if that status is unknown — pass `--status` to say where it belongs. |
 | `mg unclaim ID` | Release a claim, returning the work item to `available/`. |
-| `mg schedule` | Promote pending items whose dependencies are met, **and report the pending items no completion can ever promote** — those waiting on a `shelved` or nonexistent parent, each named with the parent responsible. A stranded item is invisible from every other angle: it is not `available/`, so stall-watch and priority-wake cannot see it, and `pending` is exactly what a correctly-waiting item looks like. This is the only view that tells the two apart. |
+| `mg schedule` | Promote pending items **whose gates have all opened** — every dependency met, and any `snooze:` wake time now past — **and report the pending items no completion can ever promote** — those waiting on a `shelved` or nonexistent parent, each named with the parent responsible. A stranded item is invisible from every other angle: it is not `available/`, so stall-watch and priority-wake cannot see it, and `pending` is exactly what a correctly-waiting item looks like. This is the only view that tells the two apart. |
 | Dependency satisfaction | A dependency is met once the parent **has passed through `done`** — `done/` and `archive/` both count. Archiving is a filing decision about completed work, not a repudiation of the completion, so archiving a parent never strands its dependents. Placement is decided **at filing time** against the resolved state of every dependency, not deferred to the next sweep: an item whose dependencies are already satisfied is filed straight to `available/`, never parked in `pending/` to wait on an unrelated completion. |
+| `mg snooze ID (--until TIME \| --for DURATION)` | Set an item aside until a time. It moves to `pending/` carrying a `snooze:` attribute and returns to `available/` on the first `mg schedule` sweep after that time. **Snooze is an attribute, not a sixth status** — see [Snooze](#snooze-not-now-come-back-at). `--for` takes Go durations plus `d`/`w` (`90m`, `6h`, `3d`, `2w`); `--until` takes RFC3339 or a local `2026-08-03 14:30`, and a bare date means **09:00 local**, never midnight. The resolved absolute instant is echoed back and stored as RFC3339 UTC. Snoozing a claimed item releases the claim, as shelving does. |
+| `mg unsnooze ID` | Lift a snooze early. A pending item returns to `available/` if its dependencies are also met and stays `pending` if they are not — lifting one gate does not lift the others. Refuses an item that is not snoozed. |
 | Depending on a `shelved` item | Shelving means **"not now"**, not "cancelled". A new item filed onto a shelved parent is filed as **`shelved`**, alongside its parent — not released, and not left in `pending/` masquerading as an item that is waiting correctly. This is the same treatment `mg shelve` already gives dependents that exist when the parent is shelved, so `shelved` means the same thing whichever side of the parent's shelving the dependent was created on. `mg new` **says so**, naming the gate and the `mg unshelve <id>` that lifts it. `mg unshelve` on the parent brings dependents back as `pending`, and completing the parent then releases them normally — the chain is parked, never destroyed. |
 | `mg mail send\|reply\|list\|read\|archive\|migrate` | Maildir-style messaging between agents. `archive AGENT/MSG-ID` moves a message out of the active mailbox; `list AGENT --archived` inspects archived messages. Each operation logs a `mail.sent`/`mail.read`/`mail.archived` event to `events.jsonl` and a caller-attributed line (pid + `POGO_AGENT_NAME`) to `log/mail-audit.log`; malformed message files are skipped loudly (`mail.malformed` event, stderr warning, count in `list` output). `read` and `reply` refuse to touch another agent's mailbox when `POGO_AGENT_NAME` is set (both mark the message read for its owner) unless `--force` is given; denials and forced reads are audited too. |
 | Canonical mailbox addressing | Every recipient/mailbox argument is canonicalized before it resolves to a directory: the harness prefixes `mg-` and `cat-` are stripped, so the work-item alias `mg-<id>`, the process name `cat-mg-<id>`, and the bare live id `<id>` all address the **same** mailbox. This closes the silent-drop class where mailing `mg-<id>` (the spelling many templates use) minted a stray mailbox nobody read while a watcher polling `mg mail list mg-<id>` waited forever. Crew mailboxes (`mayor`, `architect`, …) carry no prefix and pass through unchanged. `mg mail migrate` (`--dry-run` to preview) is a one-shot, idempotent cleanup that merges any pre-existing stray `mg-<id>` mailbox into its canonical `<id>` box — unread, read and archived mail alike — preserving read state and then removing the emptied stray directory. |
@@ -155,6 +157,62 @@ mg log                 # view snapshot history
 | `mg sidecars [--json]` | Report every `<id>.result.json` that is not sitting beside its item's `.md`, **classified by content**: `identical`, `equivalent` (same JSON re-serialised), `subset` (names the superset and the keys only it holds), `conflict` (names every key in disagreement), `opaque`, or `unknown` (a file could not be *read* — a failed probe, never reported as a difference). Reports and never deletes; a `subset` verdict is advice, not an instruction to keep the superset. See [Reading a result sidecar](#reading-a-result-sidecar). |
 | `mg schema` | Dump the full command tree as one JSON document (command names, use, flags, and a `mutates`/`idempotent` hint per command) for agent/tooling consumers. Frozen, additive-only shape versioned by `schema_version` (see [schema contract](#mg-schema-contract)). |
 | `mg version` / `mg --version` / `mg -v` | Print version. Release builds include commit + date build metadata (e.g. `mg v0.1.3 (abc1234, 2026-07-08)`). |
+
+### Snooze: "not now, come back at …"
+
+`mg snooze` expresses the one thing the model had no word for. Before it,
+"revisit this on Monday" was written into `assignee` — the only field that
+silenced stall-watch — which made a routing field carry a scheduling signal and
+left tickets sitting in someone's queue looking like decisions they owed.
+
+```sh
+mg snooze mg-1234 --for 3d
+mg snooze mg-1234 --until 2026-08-03            # 09:00 local on that day
+mg snooze mg-1234 --until "2026-08-03 14:30"    # local wall clock
+mg snooze mg-1234 --until 2026-08-03T14:30:00Z  # explicit zone
+mg unsnooze mg-1234                             # lift it early
+```
+
+**It is an attribute, not a sixth status.** Status in mg is the directory an
+item is in — there is no `status` field and there never has been. A snoozed item
+is a **`pending/` item carrying a `snooze:` timestamp**: it waits on a CLOCK
+exactly as `depends:` waits on an ITEM, both gates are ANDed, and both are
+evaluated in the one place. `ls work/pending` and `grep snooze:` still answer
+truthfully, which a status computed at read time would not.
+
+**`mg schedule` is the driver, and it must be run on a clock.** A gate is worth
+only as much as the thing that opens it, and a snoozed item is invisible from
+every other angle — it is not `available/`, so stall-watch and priority-wake
+cannot see it, and `pending` is exactly what a correctly-waiting item looks like.
+Three properties make it impossible to set a gate nothing will open:
+
+- **Level-triggered, never edge-triggered.** The sweep asks whether the wake
+  time has *passed*, not whether it just *arrived*. A driver down through the
+  wake instant therefore **delays** an item and can never lose one; one late
+  sweep recovers it.
+- **Loud at snooze time.** A wake time that has already passed, or that mg
+  cannot parse, is refused when you set it — not written and forgotten. A
+  `snooze:` value that reaches disk unparseable anyway (a hand-edit) **holds**
+  the item and is **named** by `mg schedule`'s stranded report and by `mg show`.
+- **No driver, no gate.** `mg schedule` stamps `work/.last-sweep` on every run.
+  If nothing has driven the sweep in the last two hours, `mg snooze` **refuses**
+  and prints the command that wires the driver. `--force` overrides with a
+  warning.
+
+Register the driver once — pogod, because it persists schedules to disk and
+replays them through host sleep, NTP steps and its own restarts:
+
+```sh
+scripts/install-snooze-driver.sh     # AGENT=… CRON=… to override
+```
+
+`mg schedule` also lists what is still snoozed and when each item wakes, because
+a population nobody can enumerate is a population nobody audits.
+
+**What snooze is not.** Not a priority, not an assignment, not a workflow state
+machine, and not a recurrence: one item, one absolute wake time. It declares a
+**pause**, not a remainder — a snoozed item owes nothing and is not waiting on
+anybody.
 
 ### Concurrent edits (lost updates)
 
