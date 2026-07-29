@@ -156,6 +156,33 @@ func explainUnclaimFailure(root, id string) *mgerr.Error {
 	}
 }
 
+// explainReclaimFailure produces a user-facing error when 'reclaim' could not
+// find the item in claimed/. Every non-claimed status is a conflict (exit 4)
+// rather than a fallback to claiming the item: `reclaim` re-stamps an existing
+// claim and nothing else, because a reclaim that could also claim an available
+// item would be a `claim` with its atomic refusal — the fleet's
+// duplicate-dispatch guard — bypassed. So the available case names `mg claim`
+// as the remedy and takes no action itself.
+func explainReclaimFailure(root, id string) *mgerr.Error {
+	status, _ := statusWithPID(root, id)
+	switch status {
+	case "":
+		return errNoSuchItem(id)
+	case "available":
+		return mgerr.Conflict("not_claimed", fmt.Sprintf("%s: not claimed, so there is no claim to re-stamp.", id), remediation("available", id))
+	case "pending":
+		return mgerr.Conflict("not_claimed", fmt.Sprintf("%s: not claimed — it is pending on dependencies.", id), remediation("pending", id))
+	case "done":
+		return mgerr.Conflict("already_done", fmt.Sprintf("%s: already done, not claimed.", id), remediation("done", id))
+	case "shelved":
+		return mgerr.Conflict("item_shelved", fmt.Sprintf("%s: is shelved, not claimed.", id), remediation("shelved", id))
+	case "archived":
+		return mgerr.Conflict("item_archived", fmt.Sprintf("%s: is archived, not claimed.", id), remediation("archived", id))
+	default:
+		return mgerr.Conflict("claim_race", fmt.Sprintf("%s: claim could not be re-stamped; it may have just changed. Run 'mg show %s' to check.", id, id), "").WithRetryable(true)
+	}
+}
+
 // explainReopenFailure produces a user-facing error when 'reopen' could not
 // find the item in done/.
 func explainReopenFailure(root, id string) *mgerr.Error {

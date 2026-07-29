@@ -91,6 +91,7 @@ mv available/gt-a3f.md claimed/gt-a3f.md.$$
 - **Crash-safe.** If the claimant dies, `claimed/gt-a3f.md.82407` remains in `claimed/` for an operator to release explicitly with `mg unclaim`.
 - **Observable.** `ls claimed/` tells you what's in progress and who has it. No query tool needed.
 - **Fast.** Single syscall. No network round-trip, no commit, no push.
+- **Transferable without unclaiming.** The PID suffix is the *owner*, and ownership can change hands while the claim stands: `mg reclaim gt-a3f --pid N` renames `claimed/gt-a3f.md.82407` → `claimed/gt-a3f.md.N`, one `rename(2)` *within* `claimed/`. This exists because a claim is often taken on a worker's behalf — pogod claims at spawn, before the worker process exists — and the alternative handover, `mg unclaim` then `mg claim`, parks the item in `available/` for the duration, where another dispatcher can take it. A transfer that has to pass through `available/` is not a transfer; it is a re-race. Note what makes this possible at all: the owner is *in the filename*, so changing owners is the same syscall as changing status, and needs no lock, no record update, and no second directory.
 
 ### Completion
 

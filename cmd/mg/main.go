@@ -70,6 +70,7 @@ func init() {
 	rootCmd.AddCommand(claimCmd)
 	rootCmd.AddCommand(doneCmd)
 	rootCmd.AddCommand(mailCmd)
+	rootCmd.AddCommand(reclaimCmd)
 	rootCmd.AddCommand(unclaimCmd)
 	rootCmd.AddCommand(snapshotCmd)
 	rootCmd.AddCommand(logCmd)

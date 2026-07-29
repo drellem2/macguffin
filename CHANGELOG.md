@@ -14,6 +14,64 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ## [Unreleased]
 
+### Added
+
+- **`mg reclaim <id> [--pid N]` re-stamps the owner PID on a claim without the
+  item leaving `claimed/` (mg-bb43).** A claim is often taken on a worker's
+  behalf: pogod claims a work item at spawn under its own PID, *before* the
+  worker process exists, so an item being worked is never invisible to an
+  ownership check. What was missing was the other half — the handover. `mg
+  claim` requires the item to be `available`, and the item is `claimed`, so the
+  only route was `mg unclaim` + `mg claim`, which parks the item back in
+  `available/` for the duration and reopens precisely the duplicate-dispatch
+  window the spawn-time claim exists to close — on every single dispatch.
+
+  **The item never leaves `claimed/`. That is the feature, not an
+  implementation note.** A reclaim is one `rename(2)` *within* `claimed/`,
+  `<id>.md.<old>` → `<id>.md.<new>`, atomic like `claim`'s own. A `reclaim` that
+  internally round-tripped through `available/` would be useless to the caller
+  that asked for it, so the tests assert the property from the outside rather
+  than by reading the code: one makes `work/available/` unwritable and requires
+  the reclaim to succeed anyway, and one watches both directories across 200
+  re-stamps and requires the item to be seen in `claimed/` and never in
+  `available/` at every sample. An `unclaim`+`claim` implementation fails both.
+
+  This also gives pogo back a **started-signal** it had lost. pogod watches a
+  freshly spawned worker and re-delivers a bare CR if the worker provably never
+  acted — a recovery 73 of 75 wedged workers have needed. The signal used to be
+  "the item left `available/`", i.e. the worker's own `mg claim`; once pogod
+  claimed at spawn, that was satisfied from the first instant and said nothing
+  about the worker. "The claim PID is no longer pogod's" is a positive signal of
+  the worker's *own* act, and a claim file is named `<id>.md.<pid>`, so it is
+  one `ReadDir` away.
+
+  **It is a separate verb, not a flag on `claim`, and that is deliberate.**
+  `mg claim`'s *refusal* is load-bearing outside macguffin: pogo's
+  duplicate-dispatch guard rests entirely on `claim` exiting 4 when the item is
+  not available, and that atomic refusal is what makes two concurrent
+  dispatches onto one item impossible. A `--steal` flag would put that guard one
+  flag away from being bypassed, in the same command, under the same name. A
+  separate verb with a separate precondition cannot be reached by a caller that
+  meant `claim` — so `mg reclaim` on an available item is a refusal (exit 4,
+  `not_claimed`, naming `mg claim` as the remedy), never a fallback claim.
+  `--steal` also names the wrong act: nothing is being taken from anyone, since
+  pogod claimed the item on the worker's behalf and the worker is completing the
+  handover.
+
+  Re-stamping to the PID already recorded **exits 0 and changes nothing**, so a
+  worker that repeats the step after a context compaction gets a no-op rather
+  than an error that reads as a failure — and a no-op records no event, because
+  nothing happened. Done/shelved/archived/pending are exit 4; an unknown id is
+  exit 3. `--pid` defaults to `$POGO_PID` then to the calling process's PID,
+  resolved by the same code path as `mg claim --pid` so the two cannot drift.
+  The transition is printed (`Reclaimed mg-7d6d: pid 32194 -> 40881`) so an
+  operator reading a transcript can tell which side of the handover they are
+  looking at. A re-stamp emits the same `work.claim` event a claim does, with
+  `prev_pid` added and both statuses `claimed`: `mg spend` pairs a claim with
+  the next release to attribute an actor's spend, so a *silent* handover would
+  bill the worker's entire run to whoever claimed on its behalf. **Additive —
+  no existing command changes behaviour.**
+
 ### Changed
 
 - **`mg list` fits its lines to the terminal, and the fields worth keeping are

@@ -11,6 +11,27 @@ import (
 
 var claimPID int
 
+// resolveOwnerPID resolves the PID to stamp on a claim from an explicit --pid,
+// falling back to $POGO_PID (the owning agent's PID, exported by pogo
+// automation) and finally to 0, which the workitem layer reads as "the calling
+// process". Shared by `mg claim` and `mg reclaim` so the two cannot drift: a
+// reclaim that resolved the PID differently from the claim it re-stamps would
+// re-stamp the wrong owner.
+func resolveOwnerPID(flagPID int) (int, error) {
+	if flagPID != 0 {
+		return flagPID, nil
+	}
+	envPID := os.Getenv("POGO_PID")
+	if envPID == "" {
+		return 0, nil
+	}
+	pid, err := strconv.Atoi(envPID)
+	if err != nil {
+		return 0, fmt.Errorf("invalid POGO_PID %q: %w", envPID, err)
+	}
+	return pid, nil
+}
+
 var claimCmd = &cobra.Command{
 	Use:   "claim ID",
 	Short: "Atomically claim a work item by ID",
@@ -21,15 +42,9 @@ var claimCmd = &cobra.Command{
 			return err
 		}
 
-		pid := claimPID
-		// Fall back to POGO_PID env var if --pid not explicitly set
-		if pid == 0 {
-			if envPID := os.Getenv("POGO_PID"); envPID != "" {
-				pid, err = strconv.Atoi(envPID)
-				if err != nil {
-					return fmt.Errorf("invalid POGO_PID %q: %w", envPID, err)
-				}
-			}
+		pid, err := resolveOwnerPID(claimPID)
+		if err != nil {
+			return err
 		}
 
 		item, err := workitem.Claim(root, args[0], pid)

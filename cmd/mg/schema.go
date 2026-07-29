@@ -111,8 +111,15 @@ var commandEffects = map[string]commandEffect{
 	"mg new":      {mutates: true, idempotent: false},
 	"mg claim":    {mutates: true, idempotent: false},
 	"mg unclaim":  {mutates: true, idempotent: false},
-	"mg done":     {mutates: true, idempotent: false},
-	"mg edit":     {mutates: true, idempotent: false}, // --add-tags/--rm-tags accumulate; flag-dependent idempotency takes the conservative false
+
+	// Re-stamping the PID already recorded is a no-op that exits 0, so a retry
+	// neither errors nor compounds — which is what a planner reads this hint
+	// for. (A bare re-run from a *different* process stamps that process's PID;
+	// the state differs, but "the caller's PID is on the claim" converges.)
+	"mg reclaim": {mutates: true, idempotent: true},
+
+	"mg done": {mutates: true, idempotent: false},
+	"mg edit": {mutates: true, idempotent: false}, // --add-tags/--rm-tags accumulate; flag-dependent idempotency takes the conservative false
 
 	// Re-running converges on the body, but each run SAVES the body it
 	// overwrites, so a second run consumes a backup slot and the second restore
