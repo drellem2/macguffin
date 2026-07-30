@@ -46,7 +46,13 @@ var showCmd = &cobra.Command{
 When two archived twins share a short ID across different month partitions the
 bare ID is ambiguous. Disambiguate with an @partition qualifier:
 
-  mg show mg-4fa7@2026-04   # the twin archived in partition 2026-04`,
+  mg show mg-4fa7@2026-04   # the twin archived in partition 2026-04
+
+'Creator' is whoever ran 'mg new' (MG_ACTOR, else POGO_AGENT_NAME, else the OS
+user). It is self-asserted and forgeable, so it is attribution and not
+authentication. On items filed before mg-ddf4 it records the unix user, which
+was the SAME STRING for every agent on this box — read 'daniel' on an older
+item as "unknown", not as Daniel.`,
 	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := resolveRoot()

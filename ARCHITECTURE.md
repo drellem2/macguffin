@@ -269,6 +269,14 @@ the refresh token itself has expired. Users see a 401 loop.
 - **Self-contained.** Everything needed to work on it is in the file.
 - **Diffable.** Git tracks changes naturally.
 
+`creator` is **whoever ran `mg new`** — `MG_ACTOR`, else `POGO_AGENT_NAME`, else
+the OS user — the same resolution the audit log's `actor` uses, so an item and
+the event log cannot disagree about a caller. It is **self-asserted**: every
+agent on this box authenticates as the same unix user, so the name is forgeable
+and must never gate access. Items filed before `mg-ddf4` recorded the unix user
+alone, which was the same string for all of them; read `creator: daniel` on such
+an item as "unknown". See the README's *Who did this: audit attribution*.
+
 ### Status is the directory, not a field
 
 **There is no `status` key in frontmatter and there never has been.** An item's

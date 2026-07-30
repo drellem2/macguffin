@@ -404,6 +404,79 @@ wrong answer is not. The same identity now appears in the mail audit log
 append-only; historical lines are not rewritten. Treat `actor` on a
 pre-`mg-3122` line as "the assignee at the time", not as the caller.
 
+#### `creator` is the filer, resolved the same way
+
+An item's `creator` is **whoever ran `mg new`**, resolved by the identical
+table above — `MG_ACTOR`, else `POGO_AGENT_NAME`, else the OS user, else
+`unknown`. One resolution, two fields, so the item and the event log never
+disagree about who a caller is.
+
+Until `mg-ddf4` it was the **unix user alone**. Measured across the live store
+on 2026-07-30: **2040 of 2041 items read `creator: daniel`.** Every agent on
+this box runs as the same unix user, so the field named that user for a ticket
+filed thirty seconds ago by a polecat exactly as it did for one filed last week
+by a human. It was constant across the whole store and carried zero
+information — while wearing a field name that promises authorship, which is the
+same defect as `mg-3122` one field over and from the same cause.
+
+The evidence that this is a property of the artifact rather than of careless
+readers: **two agents independently read the field and reached the same wrong
+conclusion, an hour apart, with no contact.** One derived a general mechanism
+from it ("every ticket Daniel files bypasses my filing path") and wrote it into
+durable memory as measurement; the other asserted a filing time and author off
+the same field on a different item. A field that produces the same error in two
+independent readers is not fixed by asking readers to be more careful.
+
+**Items filed before `mg-ddf4` still read `daniel`,** and nothing distinguishes
+those from an item a human really did file. Frontmatter is not rewritten. Treat
+`creator: daniel` on a pre-`mg-ddf4` item as **"unknown"**, not as Daniel.
+
+#### `creator` is attribution, not authentication
+
+`POGO_AGENT_NAME` is an ordinary environment variable and every agent on this
+box authenticates as the **same unix user**. Any agent can therefore file as any
+name, and process ancestry is the only unforgeable signal — one mg does not
+consult. So:
+
+- **`creator` is self-asserted and forgeable. Never gate access on it.** It
+  answers "who says they filed this", which is enough for routing, triage and
+  reading a history, and is not enough for authorization.
+- A mechanism that routes on "who filed this" is now *implementable*, where
+  before `mg-ddf4` it was not — but only on that self-asserted basis, and only
+  for items filed after the fix.
+
+The same caveat already applies to `mg mail send --from`, which is likewise a
+caller-supplied string.
+
+#### Every field that names an actor
+
+Audited in the `mg-ddf4` pass. The rule the table encodes: a field may be
+populated from the **caller's** identity or from an **explicit argument**, never
+from the item it acts on and never from a process property standing in for a
+name it cannot know.
+
+| Field | Where | Populated from | Status |
+|-------|-------|----------------|--------|
+| `actor` | `events.jsonl` | `MG_ACTOR` → `POGO_AGENT_NAME` → OS user | fixed in `mg-3122` |
+| `creator` | item frontmatter, `mg show` | same resolution | fixed in `mg-ddf4` |
+| `caller` | `log/mail-audit.log` | `POGO_AGENT_NAME`, else `-` | correct — degrades to `-`, not to a wrong name |
+| `from` | mail messages | the required `--from` flag | explicit; self-asserted, never inferred |
+| `assignee` | item frontmatter | the `--assignee` flag | a routing target, not a claim about who acted |
+
+Two near-misses that are **not** defects, recorded so the next audit does not
+re-open them: `mg list --assignee=human` and the blue `human` label resolve the
+literal token `human` against the OS user (`cmd/mg/list.go`) — that is
+deliberately a question about the unix user, not about who acted. And `mg spend
+--by=...` is a grouping axis whose `by` is a column name, not an identity.
+
+**The half with no field at all** is the social one — who wrote a memory note,
+who proposed a rule, who made a call in a mail thread. There is nothing there to
+correct, and the same inference-filling happens. The cheap remedy, no code
+required: **when attributing something, cite where you read it.** "You wrote X
+in your 04:11 mail" is checkable by the person being credited; "your framing" is
+not, and the second form is what decays into a wrong attribution a third agent
+then inherits.
+
 #### Metadata edits are logged
 
 `work.edited` used to fire only when the **body** changed. `mg edit <id>

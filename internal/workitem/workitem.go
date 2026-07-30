@@ -151,7 +151,31 @@ func generateID(prefix, title string, created time.Time, nonce int) string {
 // On either rejection the ID is reminted with an incremented nonce.
 func Create(root, prefix, typ, title string, depends []string, opts ...CreateOption) (*Item, error) {
 	now := nowFunc()
-	creator := currentUser()
+
+	// creator is the identity that RAN `mg new`, resolved exactly like the
+	// audit log's actor (events.go): MG_ACTOR, else POGO_AGENT_NAME, else the
+	// OS user, else "unknown".
+	//
+	// It used to be currentUser() alone. Measured across the live store on
+	// 2026-07-30: 2040 of 2041 items read `creator: daniel`. Every agent on
+	// this box runs as the same unix user, so the field named that user for a
+	// ticket filed thirty seconds ago by a polecat exactly as it did for one
+	// filed last week by a human. Constant across the store, it carried zero
+	// information — and did so while wearing a field name that promises
+	// authorship, which is worse than an absent field: a reader has no reason
+	// to distrust it. Two agents independently read it and concluded a ticket
+	// was Daniel-filed, an hour apart, with no contact (mg-ddf4).
+	//
+	// This is mg-3122's defect one field over — same cause, one unix identity
+	// for a dozen agents — and mg-3122 fixed only `actor`. Both fields now
+	// answer "who ran this" the same way, so the two logs agree about a caller.
+	//
+	// The answer is SELF-ASSERTED and therefore forgeable: POGO_AGENT_NAME is
+	// just an environment variable, and every agent authenticates as the same
+	// unix user, so nothing here distinguishes an agent from an agent claiming
+	// to be another. It is attribution, not authentication — never gate access
+	// on it.
+	creator := actor()
 
 	// Placement is decided against the RESOLVED state of every dependency, not
 	// against the mere presence of a depends list. Parking an item in pending/

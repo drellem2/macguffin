@@ -155,6 +155,43 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Fixed
 
+- **A work item's `creator` recorded the UNIX USER, not the filing agent, so it read
+  the same string for every item in the store (mg-ddf4).** Measured on 2026-07-30:
+  **2040 of 2041 items read `creator: daniel`.** Every agent on this box runs as the
+  same unix user, so the field named that user for a ticket a polecat filed thirty
+  seconds ago exactly as it did for one a human filed last week. Constant across the
+  whole store, it carried zero information — while wearing a field name that promises
+  authorship, which is strictly worse than an absent field because nothing in the
+  value tells a reader a substitution happened.
+
+  **This is `mg-3122`'s defect one field over**, from the identical cause — one unix
+  identity for a dozen agents — and `mg-3122` fixing `actor` did not cover `creator`,
+  which was never in its scope. `creator` now resolves through the **same function**
+  as the audit log's `actor`: `MG_ACTOR`, else `POGO_AGENT_NAME`, else the OS user,
+  else `unknown`. One resolution, two fields, so an item and the event log cannot
+  disagree about who a caller is.
+
+  **The evidence is about the artifact, not about careless readers.** Two agents
+  independently read this field and reached the same wrong conclusion, an hour apart,
+  with no contact: one derived a general mechanism from it and wrote it into durable
+  memory as measurement, the other asserted a filing author off the same field on a
+  different item. Both were retracted. A field that produces the same error in two
+  independent readers is not fixed by asking readers to be more careful.
+
+  **It is attribution, not authentication.** `POGO_AGENT_NAME` is an ordinary
+  environment variable and every agent authenticates as the same unix user, so any
+  agent can file as any name and process ancestry is the only unforgeable signal —
+  one `mg` does not consult. Routing on "who filed this" is now *implementable* where
+  before it was not, but only on that self-asserted basis. Never gate access on it.
+
+  **Items filed before this change still read `daniel`** — frontmatter is not
+  rewritten, and nothing distinguishes those from an item a human really did file.
+  Read `creator: daniel` on a pre-`mg-ddf4` item as **"unknown"**. The `mg new` and
+  `mg show` help text and the README's attribution section both say so, alongside a
+  full audit of every field that names an actor (`actor`, `creator`, `caller`,
+  `from`, `assignee`) — the two remaining self-asserted ones are flagged as such, and
+  no field is populated from the item it acts on.
+
 - **A body edit could silently rename a work item, or stack a second near-identical
   `# ` heading in its body, and exit 0 either way (mg-bac6).** A work item's title
   is not a stored field — there is no `title:` in the frontmatter. `Parse` derives

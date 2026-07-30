@@ -123,6 +123,14 @@ was created from, so the right path is a copy-paste rather than a lookup; mg
 does not substitute it silently. Pass --no-repo for an item that is not about a
 code repo, or --allow-ephemeral-repo to record the path anyway.
 
+The item's 'creator' is whoever RAN this command, resolved exactly like the
+audit log's actor: MG_ACTOR, else POGO_AGENT_NAME, else the OS user. It is
+SELF-ASSERTED and forgeable — POGO_AGENT_NAME is an ordinary environment
+variable and every agent on this box authenticates as the same unix user — so
+it answers "who says they filed this" and must never gate access. Items filed
+before mg-ddf4 record the unix user instead, which was the same string for
+every agent; read 'creator: daniel' on an older item as "unknown".
+
 The --prefix flag overrides the work item ID prefix for this call only.
 It is not persisted to workspace config (see 'mg init --prefix=...' for
 the workspace-wide default). Useful for filing items under a different
