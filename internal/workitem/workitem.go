@@ -252,16 +252,14 @@ func writeNew(path, content string) error {
 // form or it is checking a string that never hits disk. In particular the
 // gh-issue carrier block sits at the top of the body and the generated heading
 // is inserted above it — see reconcileWorkflowMarkers in workflowmarker.go.
+// The rule it applies lives in titleheading.go, in one function, keyed off the
+// body's FIRST heading exactly as Parse is. It used to ask
+// strings.Contains(body, "# "+title) instead — a substring match anywhere in the
+// body standing in for a positional read — and that mismatch is the whole of
+// mg-bac6: it let a body edit silently retitle an item in one shape and stack a
+// second near-identical H1 in another. Neither outcome is reachable now.
 func composeBody(item *Item) string {
-	body := item.Body
-	// If body is empty or doesn't start with the title heading, generate it
-	if body == "" || !strings.Contains(body, "# "+item.Title) {
-		body = fmt.Sprintf("\n# %s\n", item.Title)
-		if item.Body != "" {
-			body += item.Body
-		}
-	}
-	return body
+	return reconcileTitleHeading(item.Body, item.Title)
 }
 
 func Render(item *Item) string {

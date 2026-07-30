@@ -74,6 +74,37 @@ A prefix of 8 or more characters is accepted.
 every other byte of the body untouched. It is the one edit two agents can make
 to a live item without racing each other's prose.
 
+THE TITLE LIVES IN THE BODY. EDITING ONE EDITS THE OTHER.
+
+There is no 'title:' in an item's frontmatter. The title is read back, on every
+read, from the body's FIRST line beginning with "# " — that heading IS the
+title, and it is the only place the title is stored. Two consequences, and both
+of them bit (mg-bac6):
+
+  * A --body/--body-file whose first heading differs from the current title
+    RENAMES the item. That is refused (exit 4) unless you also pass --title, so
+    a field you did not name cannot move without you.
+  * --title rewrites that first heading in place. The heading is not preserved
+    alongside the new title; it is replaced, because two headings claiming to be
+    the item's name is the corrupted state — a reader only ever sees the first.
+
+So when both are passed, --title wins and the body's leading heading is
+rewritten to match it. When only a body is passed, the body's heading would win,
+and that is exactly the case mg refuses instead of performing silently.
+
+The direction-agnostic procedure, which does not care which field wins because
+it names both:
+
+  mg edit mg-1234 --title="the title I mean" --body-file ./body.md
+  # ...where body.md has NO leading "# " heading at all.
+
+mg writes the heading from --title, and writes exactly one. A body with no
+leading heading is the only shape that cannot surprise you: there is nothing for
+the two rules to disagree about. Headings BELOW the first are ordinary content
+and are left alone — mg counts them on stderr and never rewrites your prose to
+satisfy a count. A blockquoted "> # heading" is not a heading to either rule, so
+it can neither become nor displace the title.
+
 AND IF IT GOES WRONG ANYWAY, THE PRIOR BODY IS STILL THERE.
 
   mg restore-body mg-1234 --list
@@ -267,7 +298,33 @@ default build template; a carrier block IN the appended text is still refused
 		if change != nil && change.Changed {
 			note = fmt.Sprintf(" (body %d → %d lines)", change.LinesBefore, change.LinesAfter)
 		}
-		fmt.Printf("Updated %s: %s%s\n", item.ID, item.Title, note)
+
+		// The title as READ BACK from the body just written, and its transition
+		// when it moved. This line used to print the in-memory title, which in
+		// the retitle case was the value that had just been destroyed — the
+		// success line asserted a title that was already false as it printed
+		// (mg-bac6). An unrequested move is refused outright now, so reaching
+		// this with a transition means the caller passed --title and is being
+		// shown it took effect.
+		shown := item.Title
+		if change.TitleMoved() {
+			shown = fmt.Sprintf("%s (title was %q)", change.TitleAfter, change.TitleBefore)
+		}
+		fmt.Printf("Updated %s: %s%s\n", item.ID, shown, note)
+
+		// mg no longer stacks a heading of its own, so any extra H1 is the
+		// caller's own prose — but a body that came in with a near-duplicate of
+		// its title still reads as two titles to anyone skimming it, and 196
+		// stored bodies are in exactly that state. Counted on stderr, not
+		// refused: multi-section bodies are legitimate, and the caller who just
+		// wrote it is the one agent guaranteed to be looking.
+		if change.ExtraHeadings > 0 {
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"note: %s's body has %d '# ' heading(s) below the title heading. "+
+					"The title is read back from the FIRST one only (%q). If one of the "+
+					"others is a stale copy of the title, remove it — nothing else will.\n",
+				item.ID, change.ExtraHeadings, change.TitleAfter)
+		}
 
 		// The write succeeded on an item whose workflow tag and body still
 		// disagree — only an append can get here (mg-d878). Saying so is the

@@ -48,7 +48,26 @@ type BodyChange struct {
 	HashAfter   string
 	LinesBefore int
 	LinesAfter  int
+
+	// The title before and after, as READ BACK from the stored body — not as
+	// held in memory. The success line used to print the in-memory title, which
+	// in the retitle case was the value the write had just destroyed: the CLI
+	// asserted a title that was already false at the moment it printed it
+	// (mg-bac6). These two make the field's movement reportable instead.
+	TitleBefore string
+	TitleAfter  string
+
+	// Headings in the stored body beyond the title's own. mg never creates
+	// these now, but a caller's body can legitimately carry several H1 sections
+	// — and can equally carry a stacked near-duplicate of the title, which is
+	// what 196 stored bodies turned out to have. Counted, not refused: the
+	// difference between the two is editorial, and mg does not get to rewrite
+	// prose to satisfy a number.
+	ExtraHeadings int
 }
+
+// TitleMoved reports whether the stored title changed.
+func (c *BodyChange) TitleMoved() bool { return c != nil && c.TitleBefore != c.TitleAfter }
 
 // Update applies field changes to an existing work item and writes it back.
 // If dependency changes cause the item to have unmet deps, it is moved from
@@ -151,14 +170,19 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 		}
 	}
 
-	// Apply field updates
+	// The title as stored, i.e. as Parse derived it from the body's first
+	// heading. The guard below compares against this.
+	titleBefore := item.Title
+
+	// Apply field updates.
+	//
+	// The title needs no separate body rewrite here. It used to do a
+	// strings.Replace of "# "+oldTitle anywhere in the body; the coupling now
+	// lives in reconcileTitleHeading (titleheading.go), which rewrites the FIRST
+	// heading line positionally, on the way to disk, for every writer. Setting
+	// the field is the whole operation.
 	if fields.Title != nil {
-		oldTitle := item.Title
 		item.Title = *fields.Title
-		// Update title in body
-		if oldTitle != "" && strings.Contains(item.Body, "# "+oldTitle) {
-			item.Body = strings.Replace(item.Body, "# "+oldTitle, "# "+item.Title, 1)
-		}
 	}
 
 	if fields.Body != nil {
@@ -167,6 +191,54 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 
 	if fields.AppendBody != nil {
 		item.Body = appendToBody(item.Body, *fields.AppendBody)
+	}
+
+	// THE SILENT SIDE EFFECT, MADE LOUD (mg-bac6).
+	//
+	// A body edit whose new first heading says something other than the current
+	// title renames the item, because the title is read back from that heading
+	// and nowhere else. That is a write to a field the caller did not name, and
+	// it exited 0 with a success line for four months — long enough for two
+	// agents to each report a different half of it as the bug, and long enough
+	// to eat the titles of mg-2ce4 and mg-0418.
+	//
+	// Refused only when the caller did NOT name a title, so the refusal is
+	// precisely "you are about to change something you did not mention". Naming
+	// --title makes either outcome available and neither surprising, which is
+	// why the remedy in the hint is a field rather than a --force: the safe
+	// procedure and the way past the guard are the same procedure.
+	//
+	// Runs BEFORE the write, so a refusal leaves the stored item byte-identical,
+	// exactly like the --if-unchanged and backup refusals above.
+	//
+	// Bodies with no heading at all are not affected: the heading is synthesised
+	// from the title, which preserves it. Nor are appends, which land below the
+	// prose and cannot move the first heading — except on an item whose body was
+	// empty, where the appended text becomes the whole body, and where being
+	// asked to name the title is right.
+	if fields.Title == nil {
+		if se, isSideEffect := detectTitleSideEffect(titleBefore, item.Body); isSideEffect {
+			return nil, nil, errSilentRetitle(id, se)
+		}
+	}
+
+	// Normalise the in-memory body to the bytes that will actually be stored,
+	// so the Item handed back to the caller is the item on disk. composeBody is
+	// idempotent — the first heading now says the title, which is case 2 — so
+	// the later composeBody calls below are unaffected. Without this, callers
+	// (and the CLI's own success line) reason about a body that never existed.
+	item.Body = composeBody(item)
+
+	// The other door to the same defect. Rewriting a differing first heading in
+	// place cannot STACK a duplicate, but it can land on a title the supplied
+	// body already carries further down — and then the rewrite is what authored
+	// the duplicate. Refused when this write increases the count, never merely
+	// because the count is high, so the bodies already carrying a stacked title
+	// stay editable. Before the write, so the item is untouched.
+	if now := countTitleHeadings(item.Body, item.Title); now > 1 {
+		if was := countTitleHeadings(bodyBefore, item.Title); now > was {
+			return nil, nil, errDuplicateTitleHeading(id, item.Title, was, now)
+		}
 	}
 
 	if fields.Type != nil {
@@ -322,6 +394,17 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 		if backupPath != "" {
 			extra["body_backup"] = backupPath
 		}
+		// A title move is recorded with the same before/after shape as any
+		// other field, because it IS one — even though it has no frontmatter
+		// key and rides inside the body. Without this, the one field an agent
+		// searches an item by could change with nothing in events.jsonl saying
+		// so (mg-bac6); the 196 bodies already carrying a stacked title have no
+		// record of when it happened, which is why reconstructing this took two
+		// probes and nine days.
+		if change.TitleBefore != change.TitleAfter {
+			extra["title_before"] = change.TitleBefore
+			extra["title_after"] = change.TitleAfter
+		}
 		// `fields` names what moved so a reader can grep one key instead of
 		// diffing the whole object; the per-field pairs carry the values.
 		if len(metaChanges) > 0 {
@@ -406,6 +489,8 @@ func appendToBody(body, text string) string {
 // names which flag drove the change. "incidental" covers the case where no body
 // flag was passed at all but the body still moved — in practice a --title edit,
 // which rewrites the "# heading" line in place.
+// The titles are derived from the two bodies by the same rule Parse uses, so
+// they are what a re-read reports rather than what the caller intended.
 func describeBodyChange(fields UpdateField, before, after string) *BodyChange {
 	mode := "incidental"
 	switch {
@@ -414,13 +499,22 @@ func describeBodyChange(fields UpdateField, before, after string) *BodyChange {
 	case fields.AppendBody != nil:
 		mode = "append"
 	}
+	_, titleBefore, _ := firstHeadingLine(before)
+	_, titleAfter, _ := firstHeadingLine(after)
+	extra := countHeadings(after) - 1
+	if extra < 0 {
+		extra = 0
+	}
 	return &BodyChange{
-		Changed:     before != after,
-		Mode:        mode,
-		HashBefore:  BodyHash(before),
-		HashAfter:   BodyHash(after),
-		LinesBefore: countBodyLines(before),
-		LinesAfter:  countBodyLines(after),
+		Changed:       before != after,
+		Mode:          mode,
+		HashBefore:    BodyHash(before),
+		HashAfter:     BodyHash(after),
+		LinesBefore:   countBodyLines(before),
+		LinesAfter:    countBodyLines(after),
+		TitleBefore:   titleBefore,
+		TitleAfter:    titleAfter,
+		ExtraHeadings: extra,
 	}
 }
 

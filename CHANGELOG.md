@@ -155,6 +155,60 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Fixed
 
+- **A body edit could silently rename a work item, or stack a second near-identical
+  `# ` heading in its body, and exit 0 either way (mg-bac6).** A work item's title
+  is not a stored field — there is no `title:` in the frontmatter. `Parse` derives
+  it, on every read, from the body's **first** line beginning with `# `. The write
+  side asked a different question: `composeBody` prepended `# <title>` unless
+  `strings.Contains(body, "# "+title)` — anywhere in the body, as a substring, at
+  any depth. **A position-insensitive write guard in front of a position-sensitive
+  read is the whole defect**, and it failed in both directions depending only on
+  the shape of the incoming body. A body carrying `# <title>` below a *different*
+  first heading satisfied `Contains`, so nothing was synthesised and the read then
+  took the first heading — the item was silently retitled (this ate the titles of
+  mg-2ce4 and mg-0418). A body whose heading had been **reworded by one character**
+  failed `Contains`, so the stored title was prepended above the caller's heading —
+  two near-identical H1s, title unchanged, and a reported line count that *grew* on
+  an input file that was smaller.
+
+  The two failure modes are why two agents produced careful, correctly-measured,
+  mutually contradictory rules for this coupling nine days apart: they ran one arm
+  each, on different shapes. **The behaviour never changed** — `git log -S` puts
+  both the derivation and the write guard untouched from 2026-03-21 to 2026-07-30.
+  The nastiest cell is that the defensive move disarmed the defence: passing
+  `--title "<the title I am trying to keep>"` *guaranteed* `Contains` matched the
+  old heading still sitting below the prepended one, so the flag that looked
+  protective was the one ensuring the clobber — and the success line then printed
+  the title the write had just destroyed. 196 of 2009 stored bodies carry the
+  stacked-title signature; the deltas are overwhelmingly stripped backticks and
+  changed quote style, i.e. one sentence authored through a shell as `--title` and
+  verbatim as `--body-file`. Four existing tests were manufacturing the same state
+  on every run and passing.
+
+  **The duplicate is now unrepresentable rather than warned about.**
+  `reconcileTitleHeading` is the single place the coupling is decided and it keys
+  off the body's first heading positionally, exactly as the read does: no heading →
+  synthesise one; heading already says the title → leave it; heading says something
+  else → rewrite it **in place**. No input makes mg author a second heading of its
+  own. On top of that, a body edit that would rename the item is **refused** (exit
+  4, `title_side_effect`) unless the caller also passed `--title` — a silent write
+  to a field the caller did not name is the defect, and the refusal's remedy *is*
+  the safe procedure, so it is a field rather than a `--force`. Rewriting in place
+  can also land on a title the supplied body already carries lower down; that is
+  refused as `duplicate_title_heading`, but only when the write *increases* the
+  count, so the 196 already-stacked bodies stay editable. Stored bodies are not
+  repaired: mg-c8d5 is preserved as the specimen.
+
+  The instruments stopped lying too. The success line reports the title as read
+  back from the body just written plus its transition (`Updated mg-1234: new (title
+  was "old")`), `work.edited` carries `title_before`/`title_after`, extra headings
+  are counted on stderr, and `mg edit --help` states which field wins and that the
+  other is rewritten. The full shape × `--title` matrix and the mechanism are in
+  `docs/title-body-coupling.md`. Tests assert the round-trip invariant
+  (`Parse(Render(item)).Title == item.Title`) rather than a heading count, and the
+  two positive controls — proving the guard *can* fail, on both reported shapes —
+  run before anything that shows ordinary edits pass.
+
 - **`mg schedule` named a snoozed item it could not promote and stayed silent
   about a dependency-gated one (mg-765a).** One pending item held by a closed
   dependency gate produced exactly one line — `No items promoted.` — while the

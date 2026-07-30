@@ -10,9 +10,18 @@ import (
 // seedWithBody creates an item and gives it a real body via a replace-mode
 // edit, returning the ID. The edit is the point: it is what makes the generated
 // body the first thing worth saving.
+//
+// The title is passed as --title, not as a positional. It used to be
+// ("new", "task", title), where "task" was NOT the type — mg new joins its
+// positionals into the title, so the item was titled "task Real body" while the
+// body it was then given led with "# Real body". Under the old title coupling
+// that mismatch silently stacked a second H1 above the caller's, so this helper
+// was manufacturing mg-bac6's corruption on every run and every assertion still
+// passed. Naming both fields is the same discipline the coupling guard now
+// enforces on real callers.
 func seedWithBody(t *testing.T, bin, root, title, body string) string {
 	t.Helper()
-	out, code := mgArchive(t, bin, root, "new", "task", title)
+	out, code := mgArchive(t, bin, root, "new", "--type", "task", "--title", title)
 	if code != 0 {
 		t.Fatalf("mg new: exit %d\n%s", code, out)
 	}
