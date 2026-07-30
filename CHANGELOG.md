@@ -16,6 +16,79 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Added
 
+- **`mg shelve` is guarded, and the cascade it hides is now recorded and printed
+  (mg-2cf0).** Three operations take a work item out of the queue for good:
+  `mg done`, `mg archive`, `mg shelve`. `mg archive` carried two guards plus a
+  recorded `--force`; `mg done` carried one. **`mg shelve` carried none** — no
+  declaration check, no `blocked-on-*` check, no successor requirement, no
+  override — and it is the cheapest of the three to reach: one command, no
+  claim, no status precondition beyond "not already gone".
+
+  It is also the only one of the three that **moves other people's items**.
+  Shelving a target recursively shelves every open item that depends on it, so
+  it hides every audit, follow-up and remainder filed *at* that target. pogo's
+  mg-2530 named the hazard exactly — *"shelved is a pair somebody dropped, and if
+  shelving counted then abandoning an audit would discharge the obligation it
+  exists to create"* — and stopped `shelved/` counting for the dispatch scan.
+  Nothing stopped shelve from **creating** that state.
+
+  **The two archive guards are ported.** `mg shelve <id>` is refused when the
+  item is tagged `blocked-on-*`, or when it declares a remainder — it carries
+  `declares-remainder`, *or* its type is one whose output IS a recommendation
+  (`design`, `scoping`, `audit`, `idea`), *or* its body's leading carrier block
+  says `stage: triage` — and names no `successor:` tag resolving to an item that
+  still exists. The **predicates** are shared with `mg archive` and `mg done`
+  rather than copied; only the prose differs, because a refusal that tells an
+  operator to archive something they asked to shelve names the wrong remedy. A
+  successor does **not** answer the `blocked-on-*` arm, exactly as it does not at
+  archive time: naming a tracker says nothing about whether a person still owes
+  something. `--tag` applies the same guards item by item, skips what it refuses
+  and names each on stderr with the reason — a bulk shelve that skipped them
+  would be the targeted form's refusal one flag away.
+
+  The type and carrier-block arms are here and not at `mg done`, and that is the
+  point: `mg new` only started writing the declaration on 2026-07-29, so a
+  tag-only predicate reaches almost nothing that already exists. Read at shelve
+  time they say *"this item would have declared a remainder had it been filed
+  today"*, which is the only such property available on an older item.
+  `requireRemainderDischarged` at `mg done` is untouched and still reads the tag
+  and nothing else — mg-8970's rejection of a type-keyed guard at completion
+  time stands.
+
+  **Measured, before and after, against a copy of the live store** (2026-07-30,
+  181 shelved items, up from the 175 the finding was written against): the guard
+  refuses exactly **3** — `mg-e925` (`blocked-on-daniel`), `mg-a08c` (design +
+  `declares-remainder`), `mg-a661` (a `stage: triage` body) — and the other
+  **178 are unchanged**. That is the same three items predicted before the code
+  was written. None of the 181 names a successor, so this is not an already-met
+  bar; and there is no healthy case among the three, so it is not a false-positive
+  tax either. Across the live active queue it reaches 1 of 25.
+
+  **The override is a string, not a boolean.** `mg shelve <id> --override "<why>"`
+  takes it anyway and emits a `work.shelve_forced` event carrying **both** halves:
+  `guard` (the code of the refusal bypassed) and `reason` (what the operator
+  knew that the guard did not). A bare `--force` records only that somebody
+  insisted, which is the half a later reader can already infer. Whitespace is not
+  a reason (`empty_override`, exit 2), and `--override` is refused with `--tag` —
+  an override is a claim about an item the operator looked at, a bulk one is a
+  claim about items they did not. As with `mg archive --force`, the refusals
+  themselves never mention it: a guard whose own failure text teaches the bypass
+  is decorative.
+
+  **The cascade is a field, not a gate.** It is deliberately not guarded —
+  refusing the operator's shelve on the strength of an item they never named, and
+  stranding a dependent in `available/` with its dependency gone, are both worse
+  than the move. What was wrong is that it was **invisible**: 32 of the 175 items
+  on the shelf got there as a dependent with nothing recording it, and the call
+  site had computed the list all along and thrown it away. `mg shelve` now prints
+  `Also shelved N dependent item(s)`, names each, and says how to get them back;
+  `work.shelve` carries a `dependents` field with the ids it hid transitively —
+  always present, empty when it hid nothing, so absence means "written before this
+  shipped" and nothing else — and each cascaded item's own event carries
+  `cascaded_from`. New error slugs: `shelve_blocked_on_tag`,
+  `shelve_without_successor`, `shelve_dangling_successor` (exit 4),
+  `empty_override` (exit 2).
+
 - **`mg reclaim <id> [--pid N]` re-stamps the owner PID on a claim without the
   item leaving `claimed/` (mg-bb43).** A claim is often taken on a worker's
   behalf: pogod claims a work item at spawn under its own PID, *before* the

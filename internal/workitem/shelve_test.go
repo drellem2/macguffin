@@ -184,7 +184,7 @@ func TestShelveByTag(t *testing.T) {
 	Create(root, "mg-", "task", "tagged item two", nil, WithTags([]string{"pogo-darwin", "other"}))
 	Create(root, "mg-", "task", "untagged item", nil)
 
-	shelved, err := ShelveByTag(root, "pogo-darwin")
+	shelved, _, err := ShelveByTag(root, "pogo-darwin")
 	if err != nil {
 		t.Fatalf("ShelveByTag: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestShelveByTagNotFound(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)
 
-	_, err := ShelveByTag(root, "nonexistent")
+	_, _, err := ShelveByTag(root, "nonexistent")
 	if err == nil {
 		t.Error("expected error for nonexistent tag")
 	}
