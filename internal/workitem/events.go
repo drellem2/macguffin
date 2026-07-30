@@ -23,10 +23,12 @@ import (
 //  1. MG_ACTOR — an explicit override, for a caller that knows its own
 //     identity but is not a pogo agent (a wrapper script, a test asserting
 //     attribution).
+//
 //  2. POGO_AGENT_NAME — pogod sets this on every agent it spawns, and it is
 //     the only string that separates the dozen agents sharing this box's one
 //     unix user. The mail audit log already attributes by it
 //     (internal/mail/audit.go), so both logs now name a caller the same way.
+//
 //  3. The OS user. Weak on a single-user box — every agent is `daniel` — but
 //     weak is not wrong. It is the honest answer to "who ran this" when
 //     nothing more specific is on offer, and it degrades to vagueness rather
@@ -41,6 +43,7 @@ import (
 //     "pogod, or unknown". The durable fix is pogo-side: give pogod an
 //     identity (MG_ACTOR=pogod on its own mg invocations) and step 3 stops
 //     being reachable on the dispatch path.
+//
 //  4. "unknown". An empty answer is recoverable; a confident wrong one is not.
 //
 // The item is not consulted at ANY step, and the parameter is gone rather than
