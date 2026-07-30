@@ -392,13 +392,39 @@ reader a substitution happened.
 |---|--------|------|
 | 1 | `MG_ACTOR` | explicit override — a wrapper script or test that knows its identity |
 | 2 | `POGO_AGENT_NAME` | set by pogod on every agent it spawns; the one string separating the agents that share this box's unix user |
-| 3 | the OS user | a human at a terminal |
+| 3 | the OS user | nothing more specific is set — **in practice this is pogod**, not a human |
 | 4 | `unknown` | nothing else resolved |
 
 Steps 3 and 4 are weak, deliberately. On a single-user box every agent is
 `daniel`, so the OS user is vague — but vague is recoverable and a confident
 wrong answer is not. The same identity now appears in the mail audit log
 (`log/mail-audit.log`), so both logs name a caller the same way.
+
+**Read `actor: daniel` as "pogod, or unknown" — not as Daniel.** pogod spawns
+agents with `POGO_AGENT_NAME` set but runs itself with neither that nor
+`MG_ACTOR`, so the daemon's own `mg` invocations land on step 3. Measured
+2026-07-30 across the live log: **every** `daniel` line was a `work.claim` or
+`work.done` written by the daemon's pid — including a `work.claim` on `mg-cb71`
+taken while that item had **no assignee at all**, twenty seconds before the
+polecat's own re-claim recorded `actor: cb71` correctly.
+
+Those two event types are the dispatch and the completion path, which is exactly
+where a reader wants to know who acted. The misreading is not hypothetical in
+its `creator` form: on 2026-07-30 the mayor read `creator: daniel` off `mg-75f0`,
+concluded a RED finding had already reached Daniel through his own ticket, and
+stopped considering escalation until another agent caught it. `actor: daniel` on
+a `work.claim` supports the same inference, and pogod having no actor identity of
+its own is why the fallback is reachable on that path at all — giving the daemon
+one would close it at the source.
+
+**This is not the pre-`mg-3122` assignee behaviour.** A characterization that
+circulated in the fleet after `mg-3122` — "the audit log's `actor` records the
+item's ASSIGNEE, not whoever acted" — describes lines written *before* that fix
+and is wrong about the field now. The `mg-cb71` claim above is the discriminating
+case: an assignee-sourced field would have been empty there, and it read
+`daniel`. The defect that remains is narrower than that claim and differently
+shaped — the field records who acted, and degrades to the OS user when the actor
+is pogod.
 
 **Events written before `mg-3122` still carry the old meaning.** The log is
 append-only; historical lines are not rewritten. Treat `actor` on a
@@ -457,7 +483,7 @@ name it cannot know.
 
 | Field | Where | Populated from | Status |
 |-------|-------|----------------|--------|
-| `actor` | `events.jsonl` | `MG_ACTOR` → `POGO_AGENT_NAME` → OS user | fixed in `mg-3122` |
+| `actor` | `events.jsonl` | `MG_ACTOR` → `POGO_AGENT_NAME` → OS user | fixed in `mg-3122`; still degrades to `daniel` when the caller is **pogod**, on `work.claim` / `work.done` |
 | `creator` | item frontmatter, `mg show` | same resolution | fixed in `mg-ddf4` |
 | `caller` | `log/mail-audit.log` | `POGO_AGENT_NAME`, else `-` | correct — degrades to `-`, not to a wrong name |
 | `from` | mail messages | the required `--from` flag | explicit; self-asserted, never inferred |

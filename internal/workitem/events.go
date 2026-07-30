@@ -31,6 +31,16 @@ import (
 //     weak is not wrong. It is the honest answer to "who ran this" when
 //     nothing more specific is on offer, and it degrades to vagueness rather
 //     than to a different question's answer.
+//
+//     Measured 2026-07-30 (mg-35fc), the occupant of this step is not a human
+//     at a terminal: it is POGOD. The daemon spawns agents with
+//     POGO_AGENT_NAME set but runs itself with neither env var, so its own
+//     claim-at-spawn and done-on-merge calls resolve here — every `daniel`
+//     line in the live log was a work.claim or work.done written by pogod's
+//     pid. `mg event list --help` tells the reader to read that value as
+//     "pogod, or unknown". The durable fix is pogo-side: give pogod an
+//     identity (MG_ACTOR=pogod on its own mg invocations) and step 3 stops
+//     being reachable on the dispatch path.
 //  4. "unknown". An empty answer is recoverable; a confident wrong one is not.
 //
 // The item is not consulted at ANY step, and the parameter is gone rather than

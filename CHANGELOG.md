@@ -74,6 +74,44 @@ The tag *is* the version bump; this file is the prep artifact that accompanies i
 
 ### Changed
 
+- **`mg event list --help` now documents `actor`, and says that `actor: daniel`
+  means pogod (mg-35fc).** The field was undocumented at the only place it can
+  be read: it appeared 0 times in the help for `show`, `event list`, `log`,
+  `list`, `done` and `claim`, while every `work.*` line in `events.jsonl` carries
+  it and `mg show --json` does not expose it. `mg show --help` already documents
+  `creator` honestly — self-asserted, attribution not authentication, read
+  `daniel` on an old item as "unknown" — and its twin had no such text anywhere.
+  The parity is now enforced by a test rather than by intent.
+
+  **The substance is the second half.** A characterization that circulated in
+  this fleet — "the audit log's `actor` records the item's ASSIGNEE, not whoever
+  acted" — describes lines written *before* `mg-3122` and is wrong about the
+  field now; it had nonetheless reached at least two agents' durable notes, where
+  an implementer would have documented or "fixed" the wrong thing. Measured
+  2026-07-30 across the live log, `actor` carries a real agent identity where one
+  is set, and reads `daniel` in exactly one population: **`work.claim` and
+  `work.done` written by pogod's own pid.** The discriminating case against the
+  assignee reading is `mg-cb71`, whose `work.claim` recorded `actor: daniel`
+  while the item was **unassigned** — an assignee-sourced field would have been
+  empty — and whose polecat re-claim twenty seconds later recorded `actor: cb71`
+  correctly.
+
+  So the defect that remains is narrower than advertised and differently shaped:
+  the field records who acted and degrades to the OS user when the actor is the
+  **daemon**, which spawns agents with `POGO_AGENT_NAME` set but runs itself with
+  neither that nor `MG_ACTOR`. That is the same failure as `creator`'s one field
+  over, on precisely the dispatch and completion paths, and reading `creator:
+  daniel` as Daniel already stalled an escalation once (the mayor on `mg-75f0`,
+  2026-07-30). Nothing in the value distinguishes the daemon from the human, so
+  the help now tells the reader to read it as **"pogod, or unknown"**.
+
+  Events with no `actor` at all are `mail.read` and `mail.sent`, which attribute
+  with `from`/`to`; every `work.*` type carries one. That population is the shape
+  of the event, not a dropped value, and the help says so. The durable fix for
+  the fallback itself is **pogo-side** — give pogod an identity on its own `mg`
+  invocations — and is out of this repo's reach; `internal/workitem/events.go`
+  records it at the resolution step it would close.
+
 - **`mg list` fits its lines to the terminal, and the fields worth keeping are
   the ones it keeps (mg-73ee).** A listing line ran to whatever length the
   longest title happened to be and wrapped off the right-hand edge. The obvious

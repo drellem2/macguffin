@@ -23,6 +23,11 @@ var eventAppendCmd = &cobra.Command{
 Auto-adds 'ts' field with RFC3339 timestamp.
 Event type is positional arg, all other fields are --key=value flags.
 
+Only 'ts' is added for you. In particular 'actor' is NOT — mg's own state
+changes resolve and stamp it themselves, but a hand-appended event carries only
+what you pass, so pass --actor=<who> if the line should attribute to anyone. See
+'mg event list --help' for what the field means and how to read it.
+
 Example:
   mg event append agent.start --agent=crew-arch --type=crew
   mg event append work.claim --agent=cat-a3f --item=gt-a3f`,
@@ -90,7 +95,36 @@ Examples:
   mg event list
   mg event list --type=agent.start
   mg event list --tail=10
-  mg event list --since=2026-01-01T00:00:00Z`,
+  mg event list --since=2026-01-01T00:00:00Z
+
+READING 'actor'
+
+This log is the ONLY read surface for 'actor' — 'mg show --json' does not expose
+it — so the caveats live here rather than somewhere a reader of the field has no
+reason to look.
+
+'actor' is whoever RAN the command: MG_ACTOR, else POGO_AGENT_NAME, else the OS
+user, else "unknown". It is never a property of the item acted on. Like
+'creator' (see 'mg show --help') it is SELF-ASSERTED and forgeable, so it is
+attribution and not authentication.
+
+Read 'actor: daniel' as "pogod, or unknown" — NOT as Daniel. pogod runs with
+neither MG_ACTOR nor POGO_AGENT_NAME set, so its own actions fall through to the
+OS user, and every agent on this box IS that OS user. Measured 2026-07-30 over
+the live log: every 'daniel' line was a work.claim or work.done written by the
+daemon (pid = pogod's), including a work.claim on an item that had no assignee
+at all. Those two types are the dispatch and completion path, so the reading
+that matters most is the one the field cannot support.
+
+Events written before mg-3122 carry the OLD meaning, in which 'actor' resolved
+to the item's ASSIGNEE first, then its creator, and only then the OS user. The
+log is append-only and history is not rewritten: treat 'actor' on a pre-mg-3122
+line as "the assignee at the time", not as the caller. That is a statement about
+old lines only — it is not what the field does now.
+
+mail.read and mail.sent carry no 'actor' at all; they attribute with 'from' and
+'to'. Every work.* type carries one. An absent 'actor' is therefore the shape of
+the event, not a dropped value.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := resolveRoot()
 		if err != nil {
