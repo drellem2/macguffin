@@ -97,6 +97,13 @@ if (cd "$cmpdir" && GOFLAGS=-mod=mod go get golang.org/x/mod/semver >/dev/null 2
     [ "$got" = "1" ] || fail "derived '$derived' should sort NEWER than v0.3.0 (got compare=$got)"
     got=$(cd "$cmpdir" && go run . "$derived" v0.3.1)
     [ "$got" = "-1" ] || fail "derived '$derived' should sort OLDER than v0.3.1 (got compare=$got)"
+    # The 'pat + 1' is not a prediction that v0.3.1 ships next. Pin that the
+    # scheme holds when the next release is a minor or a major instead, so
+    # nobody "fixes" the patch bump into something cleverer.
+    got=$(cd "$cmpdir" && go run . "$derived" v0.4.0)
+    [ "$got" = "-1" ] || fail "derived '$derived' should sort OLDER than v0.4.0 (got compare=$got)"
+    got=$(cd "$cmpdir" && go run . "$derived" v1.0.0)
+    [ "$got" = "-1" ] || fail "derived '$derived' should sort OLDER than v1.0.0 (got compare=$got)"
     # The regression being prevented: raw describe output sorts the wrong way.
     got=$(cd "$cmpdir" && go run . "$describe" v0.3.0)
     [ "$got" = "-1" ] || fail "expected raw describe '$describe' to sort OLDER than v0.3.0 (the bug); got compare=$got"
@@ -117,14 +124,16 @@ echo "  PASS"
 echo "=== Test: untagged repo derives nothing (caller builds unstamped) ==="
 repo="${tmpdir}/untagged"
 mkrepo "$repo"
-got=$(derive_version "$repo")
+# '|| got=' on the fallback cases: derive_version returns non-zero when it
+# derives nothing, which would otherwise trip this script's `set -e`.
+got=$(derive_version "$repo") || got=
 [ -z "$got" ] || fail "expected empty for untagged repo, got '$got'"
 echo "  PASS"
 
 echo "=== Test: non-repo derives nothing ==="
 repo="${tmpdir}/plain"
 mkdir -p "$repo"
-got=$(derive_version "$repo")
+got=$(derive_version "$repo") || got=
 [ -z "$got" ] || fail "expected empty for non-repo, got '$got'"
 echo "  PASS"
 
@@ -132,7 +141,7 @@ echo "=== Test: a non-vN.N.N tag derives nothing rather than guessing ==="
 repo="${tmpdir}/oddtag"
 mkrepo "$repo" v0.3.0-rc1
 commit_more "$repo" 2
-got=$(derive_version "$repo")
+got=$(derive_version "$repo") || got=
 [ -z "$got" ] || fail "expected empty for pre-release tag, got '$got'"
 echo "  PASS"
 
@@ -155,6 +164,21 @@ sha=$(git -C "$wt" rev-parse --short HEAD)
 case "$got" in
     *9.9.9*) fail "derived version leaked the ENCLOSING repo's tag: $got" ;;
 esac
+echo "  PASS"
+
+echo "=== Test: failure is signalled by EXIT CODE, not only by empty output ==="
+# So that a future `if derive_version .; then` is correct instead of silently
+# taking the success branch when nothing was derived.
+repo="${tmpdir}/exitcode-bad"
+mkrepo "$repo"          # no tags
+if derive_version "$repo" >/dev/null 2>&1; then
+    fail "derive_version returned 0 for an untagged repo; failure must be non-zero"
+fi
+repo="${tmpdir}/exitcode-good"
+mkrepo "$repo" v1.2.3
+if ! derive_version "$repo" >/dev/null 2>&1; then
+    fail "derive_version returned non-zero for a tagged repo; success must be 0"
+fi
 echo "  PASS"
 
 echo ""

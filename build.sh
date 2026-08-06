@@ -20,6 +20,13 @@ cd "$(dirname "$0")"
 #
 # which sorts after v0.3.0 and before v0.3.1 -- correct in both directions.
 #
+# The `pat + 1` is NOT a prediction that v0.3.1 is the next release, and must not
+# be "corrected" into one. It only has to land the build after the tag it
+# descends from and before whatever ships next, which it does regardless of the
+# next release's number: v0.3.1-dev.11+g0bbe682 sorts older than v0.4.0 and older
+# than v1.0.0, as well as older than v0.3.1. Any bump would do; the patch is
+# simply the smallest.
+#
 # This does not reintroduce the version constant that bc23153 deleted: nothing
 # here is hand-maintained, the value is derived from the tag at build time. The
 # tag is still the version.
@@ -29,16 +36,21 @@ cd "$(dirname "$0")"
 # git worktree to the ENCLOSING repository (mg-b7fe). `git -C` is correct inside
 # a worktree; the toolchain's guess is not, and it does not warn.
 #
-# Prints nothing when a version cannot be derived -- no git, not a repo, no tags,
-# or a tag that is not a plain vN.N.N. The caller then builds unstamped and mg
-# reports `dev`, exactly as it always has.
+# CONTRACT: prints the version and returns 0 on success; prints NOTHING and
+# returns NON-ZERO when no version can be derived -- no git, not a repo, no tags,
+# or a tag that is not a plain vN.N.N. Failure is signalled by the exit code, not
+# only by empty output, so that `if derive_version .; then` is correct rather
+# than silently taking the success branch on an empty result. Deriving nothing is
+# a normal outcome, not an error: the caller builds unstamped and mg reports
+# `dev` exactly as it always has, so the call site suppresses the status
+# deliberately.
 derive_version() {
     dir="${1:-.}"
 
-    command -v git >/dev/null 2>&1 || return 0
-    git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || return 0
+    command -v git >/dev/null 2>&1 || return 1
+    git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || return 1
 
-    desc=$(git -C "$dir" describe --tags --long 2>/dev/null) || return 0
+    desc=$(git -C "$dir" describe --tags --long 2>/dev/null) || return 1
 
     # --long always yields <tag>-<distance>-g<sha>, even when distance is 0.
     tag=${desc%-*-*}
@@ -49,8 +61,8 @@ derive_version() {
     # Only plain vN.N.N tags can have their patch bumped meaningfully. Anything
     # else (a pre-release tag, a non-version tag) falls back to unstamped rather
     # than guessing at semantics it does not have.
-    printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || return 0
-    printf '%s' "$dist" | grep -Eq '^[0-9]+$' || return 0
+    printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || return 1
+    printf '%s' "$dist" | grep -Eq '^[0-9]+$' || return 1
 
     dirty=
     if [ -n "$(git -C "$dir" status --porcelain 2>/dev/null)" ]; then
@@ -92,7 +104,9 @@ main() {
         exit 1
     fi
 
-    version=$(derive_version .)
+    # Deriving nothing is a normal outcome (tarball, no tags), so the non-zero
+    # status is suppressed on purpose rather than tripping `set -e`.
+    version=$(derive_version .) || version=
 
     # go install honours GOBIN over GOPATH/bin; report where it actually went.
     dest="${GOBIN:-$(go env GOPATH)/bin}"
