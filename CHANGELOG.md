@@ -46,15 +46,25 @@ derived at all — no git, no tags, or a build from a source tarball.
   rather than warns because README documents `curl -sSfL ... | sh` as the entry
   point, where a warning scrolls past unread.
 
-- **An unreadable version warns; it does not refuse (mg-0466).** The two cases
-  are deliberately not treated alike. *Newer* is a positive determination that
-  the install is a downgrade, and is refused. *Unparseable* — the `dev` sentinel
-  — is the **absence** of a determination, not evidence of one, and `build.sh`
-  falls back to it by design when there is no tagged checkout to derive from (a
-  source tarball, a clone with no tags). Refusing on it would block installs on
-  the strength of no evidence, at a false-positive rate that never reaches zero.
-  Splitting the cases this way also leaves this change independent of mg-24dc
-  rather than sequenced behind it.
+- **An unreadable version asks on a terminal and refuses down a pipe (mg-0466).**
+  The two cases are deliberately not treated alike. *Newer* is a positive
+  determination that the install is a downgrade, and is refused outright.
+  *Unparseable* — the `dev` sentinel — is the **absence** of a determination, not
+  evidence of one, so it gets neither the hard refusal nor a free pass: on a
+  terminal the installer names what it found and asks; down a pipe it refuses and
+  names the flag that proceeds. A warning nobody reads is not a weaker refusal,
+  it is no refusal, and `curl -sSfL ... | sh` is precisely the automated setting
+  where a silent downgrade does the most damage. It bites narrowly — nothing
+  installed at all still proceeds silently, so a fresh or CI install is
+  unaffected.
+
+  The unparseable path is **permanent**, not a state to be waited out: `build.sh`
+  falls back to `dev` by design when there is no tagged checkout to derive from
+  (a source tarball, a clone with no tags), so `dev` keeps being produced
+  deliberately even after mg-24dc. It is a supported outcome of the build
+  contract, which is why the two verdicts must not be collapsed back together.
+  Splitting them this way also leaves this change independent of mg-24dc rather
+  than sequenced behind it.
 
   Version comparison is semver core ordering plus one precedence rule — a
   pre-release sorts before the release with the same core, so `v0.3.1-dev.11` is

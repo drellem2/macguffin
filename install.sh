@@ -248,13 +248,47 @@ existing_state() {
 #                --force / MG_FORCE=1 is there for the deliberate downgrade.
 #
 #   unparseable  The ABSENCE of a determination, not a determination of danger.
-#                Warned, not refused. build.sh derives a version only when it has
-#                a git checkout with a vN.N.N tag to derive it from, and falls
-#                back to the unstamped `dev` sentinel BY DESIGN otherwise — a
-#                source tarball, a checkout with no tags. So `dev` is a supported
-#                outcome rather than evidence of anything, and refusing on it
-#                would block installs on the strength of no evidence at a
-#                false-positive rate that never reaches zero.
+#                So it does not get the same hard refusal — but it does not get a
+#                free pass either, because WHICH of those is right depends on
+#                whether anyone is there to read the warning:
+#
+#                  a terminal   warn, name what was found, and ask
+#                  a pipe       refuse, and name the flag that proceeds
+#
+#                A warning nobody reads is not a weaker refusal, it is no refusal:
+#                under `curl -sSfL ... | sh` — the entry point README documents —
+#                proceeding on an unreadable version would reproduce the silent
+#                downgrade in precisely the automated setting where it does the
+#                most damage, which is the defect this guard exists to fix.
+#
+#                It bites narrowly. Nothing installed at all still proceeds
+#                silently, so a fresh CI install is unaffected; this stops only
+#                when there IS a binary present that cannot be compared, which is
+#                a genuine ambiguity worth stopping for.
+#
+#                Note that the unparseable path is PERMANENT and has to be
+#                liveable. build.sh derives a version only when it has a git
+#                checkout with a vN.N.N tag to derive it from, and its own
+#                contract says deriving nothing is a NORMAL outcome — a source
+#                tarball, a checkout with no tags. `dev` keeps being produced
+#                deliberately even after mg-24dc, so it is a supported outcome of
+#                the build contract rather than a transitional state to be waited
+#                out. That is why these two verdicts must not be collapsed back
+#                together.
+
+# Is there a human on the other end of stdin?
+#
+# stdin specifically, and deliberately NOT /dev/tty: under `curl -sSfL ... | sh`
+# stdin is the pipe carrying this script, so this is false in exactly the case
+# that must refuse rather than ask. Reaching around to /dev/tty would let the
+# pipe prompt after all, which is the opposite of what this is for.
+#
+# A function rather than an inline `[ -t 0 ]` so the tests can stand in for it
+# without allocating a pty.
+stdin_is_tty() {
+    [ -t 0 ]
+}
+
 check_existing_mg() {
     latest="$1"
 
@@ -342,9 +376,37 @@ check_existing_mg() {
         echo "" >&2
         echo "An unstamped source build reports 'dev', which is not orderable against a" >&2
         echo "release, so this installer cannot tell whether ${latest} is an upgrade or a" >&2
-        echo "downgrade for it. Installing anyway. Build from a tagged checkout with" >&2
-        echo "./build.sh to get a version that can be compared." >&2
+        echo "downgrade for it. Build from a tagged checkout with ./build.sh to get a" >&2
+        echo "version that can be compared." >&2
         echo "" >&2
+
+        if [ "$FORCE" = "1" ]; then
+            echo "Installing anyway because --force was given." >&2
+            echo "" >&2
+        elif stdin_is_tty; then
+            printf 'Install %s over it anyway? [y/N] ' "$latest" >&2
+            _reply=""
+            read _reply || _reply=""
+            case "$_reply" in
+                y|Y|yes|YES|Yes) ;;
+                *)
+                    echo "Aborted." >&2
+                    return 1
+                    ;;
+            esac
+        else
+            # Nobody is reading this, so it cannot be a warning.
+            echo "Refusing to install non-interactively over a version that cannot be" >&2
+            echo "compared. Re-run with --force to install anyway:" >&2
+            echo "" >&2
+            echo "    sh install.sh --force" >&2
+            echo "    curl -sSfL https://raw.githubusercontent.com/${REPO}/main/install.sh | sh -s -- --force" >&2
+            echo "" >&2
+            echo "or set MG_FORCE=1 in the environment. Run it from a terminal to be asked" >&2
+            echo "instead of refused." >&2
+            echo "" >&2
+            return 1
+        fi
     fi
 
     return 0

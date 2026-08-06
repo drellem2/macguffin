@@ -188,30 +188,92 @@ grep -q "v0.4.0" "${tmpdir}/err" || fail "forced downgrade must name what it is 
 FORCE="$saved_force"
 echo "  PASS"
 
-echo "=== Test: an UNPARSEABLE version warns and PROCEEDS (it is not a refusal) ==="
-# 'dev' is what an unstamped build reports, and build.sh falls back to it by
-# design (no git, no tags, a source tarball). It is the absence of a
-# determination, not a determination that this install is a downgrade — so it
-# does not refuse. Asserted on the exit status, because the whole point of the
-# split is that this case does not block.
+# --- the UNPARSEABLE cases ------------------------------------------------
+#
+# 'dev' is what an unstamped build reports, and build.sh falls back to it BY
+# DESIGN (no git, no tags, a source tarball) — so this path is permanent, not a
+# state to be waited out. It is the ABSENCE of a determination rather than a
+# determination that this install is a downgrade, so it does not get the hard
+# refusal that `newer` gets. It does not get a free pass either: whether warning
+# is enough depends entirely on whether anyone is there to read it.
+#
+# stdin_is_tty is stubbed rather than a pty being allocated. Both stubs are
+# restored immediately, because leaving one in place would quietly rewrite every
+# test after it.
+
+echo "=== Test: UNPARSEABLE down a PIPE refuses — a warning nobody reads is no refusal ==="
 rm_all
 mkmg "${INSTALL_DIR}/mg" dev
-check_existing_mg "$LATEST" 2>"${tmpdir}/err" || fail "unparseable version must NOT refuse: $(cat "${tmpdir}/err")"
-grep -q "cannot be compared" "${tmpdir}/err" || fail "unparseable version must warn: $(cat "${tmpdir}/err")"
-grep -q "${INSTALL_DIR}/mg" "${tmpdir}/err" || fail "warning must name the path"
-grep -q "'dev'" "${tmpdir}/err" || fail "warning must name what it read"
+stdin_is_tty() { return 1; }        # a pipe: `curl ... | sh`
+if check_existing_mg "$LATEST" 2>"${tmpdir}/err"; then
+    fail "unparseable version must refuse non-interactively: $(cat "${tmpdir}/err")"
+fi
+grep -q "cannot be compared" "${tmpdir}/err" || fail "must say what is wrong: $(cat "${tmpdir}/err")"
+grep -q "${INSTALL_DIR}/mg" "${tmpdir}/err" || fail "must name the path"
+grep -q "'dev'" "${tmpdir}/err" || fail "must name what it read"
+grep -q "non-interactively" "${tmpdir}/err" || fail "must say WHY it refused rather than asked"
+grep -q -- "--force" "${tmpdir}/err" || fail "must name the flag that proceeds"
+grep -q "MG_FORCE=1" "${tmpdir}/err" || fail "must name the env var that proceeds"
 echo "  PASS"
 
-echo "=== Test: a binary that will not answer \`version\` warns and proceeds ==="
+echo "=== Test: UNPARSEABLE on a TERMINAL asks, and 'y' proceeds ==="
+rm_all
+mkmg "${INSTALL_DIR}/mg" dev
+stdin_is_tty() { return 0; }        # a human is watching
+check_existing_mg "$LATEST" 2>"${tmpdir}/err" <<'ANSWER' || fail "answering yes must proceed: $(cat "${tmpdir}/err")"
+y
+ANSWER
+grep -q "anyway?" "${tmpdir}/err" || fail "must actually prompt: $(cat "${tmpdir}/err")"
+echo "  PASS"
+
+echo "=== Test: UNPARSEABLE on a TERMINAL asks, and anything else ABORTS ==="
+for answer in n N "" junk; do
+    rm_all
+    mkmg "${INSTALL_DIR}/mg" dev
+    if printf '%s\n' "$answer" | check_existing_mg "$LATEST" 2>"${tmpdir}/err"; then
+        fail "answer '${answer}' should have aborted: $(cat "${tmpdir}/err")"
+    fi
+    grep -q "Aborted" "${tmpdir}/err" || fail "answer '${answer}': no abort message"
+done
+# The default is NO: a bare Enter must not install. [y/N] has to mean what it says.
+echo "  PASS"
+
+echo "=== Test: --force gets past the UNPARSEABLE refusal too ==="
+rm_all
+mkmg "${INSTALL_DIR}/mg" dev
+stdin_is_tty() { return 1; }        # the pipe case, which would otherwise refuse
+saved_force="$FORCE"
+FORCE=1
+check_existing_mg "$LATEST" 2>"${tmpdir}/err" || fail "--force must get past it: $(cat "${tmpdir}/err")"
+grep -q "Installing anyway because --force" "${tmpdir}/err" || fail "must say it proceeded on --force"
+FORCE="$saved_force"
+echo "  PASS"
+
+echo "=== Test: a binary that will not answer \`version\` is treated as unparseable ==="
 rm_all
 cat > "${INSTALL_DIR}/mg" <<'EOF'
 #!/bin/sh
 echo "this is not macguffin"
 EOF
 chmod +x "${INSTALL_DIR}/mg"
-check_existing_mg "$LATEST" 2>"${tmpdir}/err" || fail "unreadable version must NOT refuse"
-grep -q "cannot be compared" "${tmpdir}/err" || fail "should warn about the unreadable binary"
+stdin_is_tty() { return 1; }
+if check_existing_mg "$LATEST" 2>"${tmpdir}/err"; then
+    fail "an unreadable binary must refuse non-interactively"
+fi
+grep -q "cannot be compared" "${tmpdir}/err" || fail "should say the version could not be compared"
 echo "  PASS"
+
+echo "=== Test: NOTHING installed still proceeds silently down a pipe ==="
+# The narrowness that makes the above liveable: a fresh CI install has no binary
+# to be ambiguous about, so it is untouched by any of this.
+rm_all
+stdin_is_tty() { return 1; }
+check_existing_mg "$LATEST" 2>"${tmpdir}/err" || fail "a fresh install must not be blocked"
+[ ! -s "${tmpdir}/err" ] || fail "a fresh install must be silent, got: $(cat "${tmpdir}/err")"
+echo "  PASS"
+
+# Back to the real thing for everything below.
+stdin_is_tty() { [ -t 0 ]; }
 
 echo "=== Test: a NEWER binary is refused even when the other path is unparseable ==="
 # A refusal outranks a warning; the operator has to be told about the downgrade.
