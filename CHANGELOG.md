@@ -21,6 +21,72 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ## [Unreleased]
 
+### Added
+
+- **`install.sh` refuses to install over a newer `mg`, on either path (mg-0466).**
+  Across its 201 lines the installer never read the version of any existing `mg`.
+  It resolved the latest release, downloaded it, and `mv`'d it over
+  `$INSTALL_DIR/mg`. The only pre-existing binary it ever inspected was
+  `/usr/bin/mg` — microemacs, not its own. Reproduced: it installed `v0.3.0` with
+  no prompt and no warning onto a host running a build eleven commits ahead, and
+  the loss surfaced later as `mg reclaim` answering `unknown command` — step 1 of
+  the polecat protocol, gone silently.
+
+  **Both candidate paths are checked, because they are not the same file.** On
+  the affected host the default target `~/.local/bin/mg` did not exist while `mg`
+  resolved to `~/go/bin/mg`, so the install would not have overwritten the newer
+  build at all: it would have written a second, older binary at a
+  lower-precedence path and repointed the shadow symlink at it, after which which
+  `mg` a consumer got was PATH-dependent per consumer. So `$INSTALL_DIR/mg` (the
+  overwrite target) and `command -v mg` (what consumers resolve) are both read,
+  and the refusal names both paths and both versions.
+
+  **`--force` / `MG_FORCE=1`** performs the deliberate downgrade, and the refusal
+  names the flag so an operator who wants it is not left guessing. It refuses
+  rather than warns because README documents `curl -sSfL ... | sh` as the entry
+  point, where a warning scrolls past unread.
+
+- **An unreadable version warns; it does not refuse (mg-0466).** The two cases
+  are deliberately not treated alike. *Newer* is a positive determination that
+  the install is a downgrade, and is refused. *Unparseable* — the `dev` sentinel
+  — is the **absence** of a determination, not evidence of one, and `build.sh`
+  falls back to it by design when there is no tagged checkout to derive from (a
+  source tarball, a clone with no tags). Refusing on it would block installs on
+  the strength of no evidence, at a false-positive rate that never reaches zero.
+  Splitting the cases this way also leaves this change independent of mg-24dc
+  rather than sequenced behind it.
+
+  Version comparison is semver core ordering plus one precedence rule — a
+  pre-release sorts before the release with the same core, so `v0.3.1-dev.11` is
+  correctly older than `0.3.1`. The leading `v` is stripped on both sides, since
+  goreleaser stamps `{{.Version}}` without it (a release prints `mg 0.3.0`) while
+  the release *tag* carries it. Fields are compared as numbers rather than via
+  `sort -V`, which is not dependable across the Linux, macOS and FreeBSD the
+  installer claims to support.
+
+### Fixed
+
+- **The install test suite ran nowhere, and could not have failed if it had
+  (mg-0466).** Two separate defects, either of which alone made the other
+  invisible. `scripts/test-install.sh` was in no runner: not `test.sh`, not
+  `ci.yml`. And every assertion in it was written `test ... && echo "PASS"` — a
+  failing AND-list is not an error under `set -e`, so a false assertion printed
+  nothing and the script went on to announce "All install tests passed" and exit
+  `0`. Its `grep -q "^mg v"` check had in fact stopped matching, because releases
+  print `mg 0.3.0`, and nothing anywhere could tell. Assertions now go through
+  `fail()`, and a new `install` CI job runs the suite on Linux and macOS.
+
+  The new guard gets a positive control in both directions and on both paths —
+  newer refuses, older proceeds — driven end-to-end through `main()` in
+  `scripts/test-install.sh` and hermetically in a new
+  `scripts/test-install-guard.sh`, which `test.sh` runs.
+
+- **`scripts/test-install.sh` no longer leaves a dangling symlink on the host
+  that runs it (mg-0466).** It invoked the real `install.sh` without
+  `SHADOW_MG=0`, so it repointed `/usr/local/bin/mg` at a temp directory and then
+  deleted the directory — the same silent-replacement class of bug as the one
+  above, in the test for it.
+
 ### Changed
 
 - **`build.sh` stamps a real version, so a source build is orderable against a

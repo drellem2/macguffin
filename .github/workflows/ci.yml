@@ -34,6 +34,21 @@ jobs:
           go-version-file: go.mod
       - run: go test -race -count=1 ./...
 
+  # The shell suites. These were previously run by nothing: test.sh covered only
+  # `go test ./...` and test-shadow.sh, and scripts/test-install.sh was in no
+  # runner at all — so its assertions could rot (and had) with nothing to notice.
+  install:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      # test-install-guard.sh needs no network; test-install.sh downloads the
+      # latest release, which is why it is here rather than in ./test.sh.
+      - run: sh scripts/test-install-guard.sh
+      - run: sh scripts/test-install.sh
+
   lint:
     runs-on: ubuntu-latest
     steps:

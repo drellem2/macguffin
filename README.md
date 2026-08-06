@@ -44,9 +44,28 @@ Or manually:
 sh install.sh                          # installs to ~/.local/bin
 INSTALL_DIR=/usr/local/bin sh install.sh  # custom location
 SHADOW_MG=0 sh install.sh              # skip the /usr/local/bin/mg symlink
+sh install.sh --force                  # install even over a newer mg
 ```
 
 Supports Linux (amd64, arm64), macOS (amd64, arm64), and FreeBSD (amd64).
+
+The installer only ever installs **releases**, so running it on a host that
+already has a newer `mg` would be a downgrade. It refuses to do that. Both
+candidate binaries are checked, because they are not always the same file:
+`$INSTALL_DIR/mg`, which is what gets overwritten, and whatever `command -v mg`
+resolves to, which is what your shells actually run. The refusal names both
+paths and both versions, so you can tell which one triggered it.
+
+To downgrade deliberately, pass `--force` (or set `MG_FORCE=1`):
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/drellem2/macguffin/main/install.sh | sh -s -- --force
+```
+
+A binary whose version cannot be read at all — an unstamped source build reports
+`dev` — is *warned* about rather than refused. That is the absence of a
+comparison, not evidence of a downgrade, and `build.sh` falls back to `dev` by
+design when there is no tagged checkout to derive a version from.
 
 On macOS and Linux, the installer also drops a symlink at `/usr/local/bin/mg`
 pointing to the installed binary. `/usr/local/bin` precedes `/usr/bin` in the
