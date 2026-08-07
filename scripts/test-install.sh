@@ -117,26 +117,15 @@ sh "$INSTALL_SCRIPT" >"${tmpdir}/out" 2>"${tmpdir}/err" \
 if "${INSTALL_DIR}/mg" version | grep -q "v0.0.1"; then fail "the older binary was not replaced"; fi
 echo "   PASS: proceeded and replaced it"
 
-echo "10. An UNPARSEABLE installed version refuses NON-INTERACTIVELY:"
-# stdin here is not a terminal, which is the `curl ... | sh` case: nobody can
-# read a warning and nobody can answer a prompt, so it must stop.
+echo "10. An UNPARSEABLE installed version warns but does not block:"
 mkmg "${INSTALL_DIR}/mg" dev
-if sh "$INSTALL_SCRIPT" </dev/null >"${tmpdir}/out" 2>"${tmpdir}/err"; then
-    fail "install.sh proceeded over an unreadable version in a pipe: $(cat "${tmpdir}/err")"
-fi
-grep -q "cannot be compared" "${tmpdir}/err" || fail "no explanation for the 'dev' binary"
-grep -q "non-interactively" "${tmpdir}/err" || fail "should say why it refused rather than asked"
-grep -q -- "--force" "${tmpdir}/err" || fail "should name the flag that proceeds"
-"${INSTALL_DIR}/mg" version | grep -q "^mg dev" || fail "the 'dev' binary was replaced anyway"
-echo "   PASS: refused and left it alone"
-
-echo "11. ...and --force gets past that too:"
-sh "$INSTALL_SCRIPT" --force </dev/null >"${tmpdir}/out" 2>"${tmpdir}/err" \
-    || fail "--force did not get past the unparseable refusal: $(cat "${tmpdir}/err")"
+sh "$INSTALL_SCRIPT" >"${tmpdir}/out" 2>"${tmpdir}/err" \
+    || fail "install.sh refused on an unparseable version: $(cat "${tmpdir}/err")"
+grep -q "cannot be compared" "${tmpdir}/err" || fail "no warning for the 'dev' binary"
 if "${INSTALL_DIR}/mg" version | grep -q "^mg dev"; then fail "the 'dev' binary was not replaced"; fi
-echo "   PASS"
+echo "   PASS: warned and installed"
 
-echo "12. The host's shadow symlink was left alone:"
+echo "11. The host's shadow symlink was left alone:"
 # The bug this file used to have. Nothing under SHADOW_DIR should have been touched.
 [ ! -L /usr/local/bin/mg ] || [ -e /usr/local/bin/mg ] \
     || fail "/usr/local/bin/mg is now a DANGLING symlink — SHADOW_MG=0 did not hold"

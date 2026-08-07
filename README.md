@@ -63,17 +63,9 @@ curl -sSfL https://raw.githubusercontent.com/drellem2/macguffin/main/install.sh 
 ```
 
 A binary whose version cannot be read at all — an unstamped source build reports
-`dev` — is a different case: that is the absence of a comparison, not evidence of
-a downgrade, and `build.sh` falls back to `dev` by design when there is no tagged
-checkout to derive a version from. So it is not refused outright, but it is not
-waved through either:
-
-- **From a terminal**, the installer says what it found and asks.
-- **From a pipe** (`curl ... | sh`), it refuses, because nobody is there to read
-  a warning or answer a prompt. `--force` installs anyway.
-
-Nothing installed at all still proceeds silently, so a first-time or CI install
-is unaffected.
+`dev` — is *warned* about rather than refused. That is the absence of a
+comparison, not evidence of a downgrade, and `build.sh` falls back to `dev` by
+design when there is no tagged checkout to derive a version from.
 
 On macOS and Linux, the installer also drops a symlink at `/usr/local/bin/mg`
 pointing to the installed binary. `/usr/local/bin` precedes `/usr/bin` in the
