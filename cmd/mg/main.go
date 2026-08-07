@@ -13,6 +13,14 @@ import (
 // and build timestamp so a binary in the wild can be traced back to its source.
 // The sentinels below are what a plain `go install`/`go build` (no ldflags)
 // produces — a dev build.
+//
+// The Go toolchain also stamps vcs.revision into the binary by itself, and
+// reading that back would look like a free way to fill `commit` in. It is not:
+// built from a linked git worktree it reports the ENCLOSING repository's HEAD,
+// silently and confidently (mg-b7fe). Every agent that builds mg builds from
+// exactly that layout. The values here come from git via build.sh's
+// derive_version instead, and buildprovenance_test.go fails the suite if anyone
+// reaches for the toolchain stamp again.
 var (
 	version = "dev"
 	commit  = "none"
