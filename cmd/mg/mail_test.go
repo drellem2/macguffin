@@ -24,6 +24,22 @@ func runMail(t *testing.T, bin string, env []string, args ...string) (string, st
 	return stdout.String(), stderr.String(), err
 }
 
+// mailRegisterBoxes registers mailboxes so `mg mail send`/`reply` will accept
+// them as recipients (mg-d639). A workspace that has never seen a name refuses
+// mail to it, which is the point — but tests about bodies, subjects, threading
+// and read state are not about address validation, and they get their fixtures
+// provisioned up front rather than carrying --create on every send. Sends that
+// go through a raw shell line (runSh) have no convenient place to put a flag at
+// all, so this is the only spelling available to them.
+func mailRegisterBoxes(t *testing.T, bin string, env []string, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if out, _, err := runMail(t, bin, env, "register", name); err != nil {
+			t.Fatalf("registering mailbox %s failed: %v\n%s", name, err, out)
+		}
+	}
+}
+
 // mailInit builds the binary, sets up a temp HOME, and runs `mg init`.
 func mailInit(t *testing.T) (bin string, env []string) {
 	t.Helper()
@@ -44,7 +60,7 @@ func mailInit(t *testing.T) (bin string, env []string) {
 func TestCLI_MailSendUnknownRecipientSoftWarn(t *testing.T) {
 	bin, env := mailInit(t)
 
-	out, _, err := runMail(t, bin, env, "send", "typoo", "--from=mayor", "--subject=s", "--body=b")
+	out, _, err := runMail(t, bin, env, "send", "--create", "typoo", "--from=mayor", "--subject=s", "--body=b")
 	if err != nil {
 		t.Fatalf("first send should succeed (exit 0), got err: %v\n%s", err, out)
 	}
@@ -52,7 +68,7 @@ func TestCLI_MailSendUnknownRecipientSoftWarn(t *testing.T) {
 		t.Errorf("first send to unknown recipient should note new mailbox, got: %s", out)
 	}
 
-	out, _, err = runMail(t, bin, env, "send", "typoo", "--from=mayor", "--subject=s2", "--body=b2")
+	out, _, err = runMail(t, bin, env, "send", "--create", "typoo", "--from=mayor", "--subject=s2", "--body=b2")
 	if err != nil {
 		t.Fatalf("second send failed: %v\n%s", err, out)
 	}
@@ -71,12 +87,12 @@ func TestCLI_MailListNeverExistedVsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list of never-existed mailbox should exit 0, got: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "No mailbox for ghost") {
+	if !strings.Contains(out, "No such mailbox: ghost") {
 		t.Errorf("never-existed mailbox should be called out distinctly, got: %s", out)
 	}
 
 	// Existing but empty: send then read the only message.
-	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=s", "--body=b"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "arch", "--from=mayor", "--subject=s", "--body=b"); err != nil {
 		t.Fatalf("send failed: %v", err)
 	}
 	// Grab the msg id from list, then read it so new/ empties.
@@ -103,7 +119,7 @@ func TestCLI_MailListNeverExistedVsEmpty(t *testing.T) {
 	if !strings.Contains(out, "No unread messages for arch") {
 		t.Errorf("existing-empty mailbox should say 'No unread messages', got: %s", out)
 	}
-	if strings.Contains(out, "No mailbox for") {
+	if strings.Contains(out, "No such mailbox") {
 		t.Errorf("existing-empty mailbox must not be reported as never-existed, got: %s", out)
 	}
 }
@@ -118,10 +134,10 @@ func TestCLI_MailListNoArgEnumeratesMailboxes(t *testing.T) {
 		t.Fatalf("no-arg list on fresh workspace failed: %v", err)
 	}
 
-	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=s", "--body=b"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "arch", "--from=mayor", "--subject=s", "--body=b"); err != nil {
 		t.Fatalf("send failed: %v", err)
 	}
-	if _, _, err := runMail(t, bin, env, "send", "witness", "--from=mayor", "--subject=s", "--body=b"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "witness", "--from=mayor", "--subject=s", "--body=b"); err != nil {
 		t.Fatalf("send failed: %v", err)
 	}
 
@@ -149,7 +165,7 @@ func TestCLI_MailListNoArgEnumeratesMailboxes(t *testing.T) {
 func TestCLI_MailListJSON(t *testing.T) {
 	bin, env := mailInit(t)
 
-	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=Hello", "--body=world"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "arch", "--from=mayor", "--subject=Hello", "--body=world"); err != nil {
 		t.Fatalf("send failed: %v", err)
 	}
 
@@ -197,7 +213,7 @@ func TestCLI_MailListJSON(t *testing.T) {
 func TestCLI_MailSendJSONMailboxCreated(t *testing.T) {
 	bin, env := mailInit(t)
 
-	out, _, err := runMail(t, bin, env, "send", "fresh", "--from=mayor", "--subject=s", "--body=b", "--json")
+	out, _, err := runMail(t, bin, env, "send", "--create", "fresh", "--from=mayor", "--subject=s", "--body=b", "--json")
 	if err != nil {
 		t.Fatalf("send --json failed: %v\n%s", err, out)
 	}
@@ -212,7 +228,7 @@ func TestCLI_MailSendJSONMailboxCreated(t *testing.T) {
 		t.Errorf("unexpected send json: %+v", first)
 	}
 
-	out, _, err = runMail(t, bin, env, "send", "fresh", "--from=mayor", "--subject=s2", "--body=b2", "--json")
+	out, _, err = runMail(t, bin, env, "send", "--create", "fresh", "--from=mayor", "--subject=s2", "--body=b2", "--json")
 	if err != nil {
 		t.Fatalf("second send --json failed: %v\n%s", err, out)
 	}
@@ -230,7 +246,7 @@ func TestCLI_MailSendJSONMailboxCreated(t *testing.T) {
 func TestCLI_MailReadArchiveJSON(t *testing.T) {
 	bin, env := mailInit(t)
 
-	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=Subj", "--body=Body text"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "arch", "--from=mayor", "--subject=Subj", "--body=Body text"); err != nil {
 		t.Fatalf("send failed: %v", err)
 	}
 	entries, err := os.ReadDir(filepath.Join(homeFromEnv(env), ".macguffin", "mail", "arch", "new"))
@@ -287,7 +303,7 @@ func TestCLI_MailListMalformedWarning(t *testing.T) {
 		t.Fatalf("mg init failed: %v\n%s", err, out)
 	}
 
-	cmd = exec.Command(bin, "mail", "send", "arch", "--from=mayor", "--subject=Good one", "--body=intact")
+	cmd = exec.Command(bin, "mail", "send", "--create", "arch", "--from=mayor", "--subject=Good one", "--body=intact")
 	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("mg mail send failed: %v\n%s", err, out)
@@ -343,7 +359,7 @@ func TestCLI_MailLifecycleEvents(t *testing.T) {
 		t.Fatalf("mg init failed: %v\n%s", err, out)
 	}
 
-	cmd = exec.Command(bin, "mail", "send", "arch", "--from=mayor", "--subject=Trace me", "--body=body")
+	cmd = exec.Command(bin, "mail", "send", "--create", "arch", "--from=mayor", "--subject=Trace me", "--body=body")
 	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("mg mail send failed: %v\n%s", err, out)
@@ -398,7 +414,7 @@ func TestCLI_MailReadRejectsTraversalMsgID(t *testing.T) {
 	}
 
 	// Give the agent a real mailbox so only the MSG-ID is at fault.
-	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=s", "--body=b"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "arch", "--from=mayor", "--subject=s", "--body=b"); err != nil {
 		t.Fatalf("seed send failed: %v", err)
 	}
 
@@ -488,7 +504,7 @@ func asAgent(env []string, agent string) []string {
 func TestCLI_MailSendStampsMessageID(t *testing.T) {
 	bin, env := mailInit(t)
 
-	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=s", "--body=b"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "arch", "--from=mayor", "--subject=s", "--body=b"); err != nil {
 		t.Fatalf("send failed: %v", err)
 	}
 
@@ -509,10 +525,10 @@ func TestCLI_MailSendRejectsHeaderInjection(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"subject", []string{"send", "victim", "--from=mayor", "--subject=" + injected, "--body=b"}},
-		{"from", []string{"send", "victim", "--from=" + injected, "--subject=s", "--body=b"}},
-		{"in-reply-to", []string{"send", "victim", "--from=mayor", "--subject=s", "--body=b", "--in-reply-to=a\nX-Evil: yes"}},
-		{"in-reply-to traversal", []string{"send", "victim", "--from=mayor", "--subject=s", "--body=b", "--in-reply-to=../../../etc/passwd"}},
+		{"subject", []string{"send", "--create", "victim", "--from=mayor", "--subject=" + injected, "--body=b"}},
+		{"from", []string{"send", "--create", "victim", "--from=" + injected, "--subject=s", "--body=b"}},
+		{"in-reply-to", []string{"send", "--create", "victim", "--from=mayor", "--subject=s", "--body=b", "--in-reply-to=a\nX-Evil: yes"}},
+		{"in-reply-to traversal", []string{"send", "--create", "victim", "--from=mayor", "--subject=s", "--body=b", "--in-reply-to=../../../etc/passwd"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bin, env := mailInit(t)
@@ -542,12 +558,12 @@ func TestCLI_MailSendRejectsHeaderInjection(t *testing.T) {
 func TestCLI_MailSendInReplyTo(t *testing.T) {
 	bin, env := mailInit(t)
 
-	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=first", "--body=b"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "arch", "--from=mayor", "--subject=first", "--body=b"); err != nil {
 		t.Fatalf("seed send failed: %v", err)
 	}
 	parent := soleMsgID(t, env, "arch")
 
-	out, _, err := runMail(t, bin, env, "send", "mayor", "--from=arch", "--subject=answer", "--body=b2",
+	out, _, err := runMail(t, bin, env, "send", "--create", "mayor", "--from=arch", "--subject=answer", "--body=b2",
 		"--in-reply-to="+parent, "--json")
 	if err != nil {
 		t.Fatalf("send --in-reply-to failed: %v\n%s", err, out)
@@ -580,8 +596,9 @@ func TestCLI_MailSendInReplyTo(t *testing.T) {
 // un-archived.
 func TestCLI_MailReply(t *testing.T) {
 	bin, env := mailInit(t)
+	mailRegisterBoxes(t, bin, env, "mayor")
 
-	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=Review needed", "--body=please review"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "arch", "--from=mayor", "--subject=Review needed", "--body=please review"); err != nil {
 		t.Fatalf("seed send failed: %v", err)
 	}
 	orig := soleMsgID(t, env, "arch")
@@ -633,8 +650,9 @@ func TestCLI_MailReply(t *testing.T) {
 // owner, exactly as 'mail read' does, so it inherits the same --force guard.
 func TestCLI_MailReplyRejectsCrossBox(t *testing.T) {
 	bin, env := mailInit(t)
+	mailRegisterBoxes(t, bin, env, "mayor")
 
-	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=s", "--body=b"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "arch", "--from=mayor", "--subject=s", "--body=b"); err != nil {
 		t.Fatalf("seed send failed: %v", err)
 	}
 	orig := soleMsgID(t, env, "arch")
@@ -662,10 +680,11 @@ func TestCLI_MailReplyRejectsCrossBox(t *testing.T) {
 // is always retained — that is what threading reads.
 func TestCLI_MailReplyThreadCapsReferences(t *testing.T) {
 	bin, env := mailInit(t)
+	mailRegisterBoxes(t, bin, env, "mayor")
 
 	// Open the thread, then ping-pong replies between arch and mayor. Each
 	// reply extends References by exactly one id (its parent).
-	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=thread", "--body=0"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "arch", "--from=mayor", "--subject=thread", "--body=0"); err != nil {
 		t.Fatalf("seed send failed: %v", err)
 	}
 
@@ -702,8 +721,9 @@ func TestCLI_MailReplyThreadCapsReferences(t *testing.T) {
 // empty/[] for an unthreaded message.
 func TestCLI_MailReadJSONExposesCorrelation(t *testing.T) {
 	bin, env := mailInit(t)
+	mailRegisterBoxes(t, bin, env, "mayor")
 
-	if _, _, err := runMail(t, bin, env, "send", "arch", "--from=mayor", "--subject=s", "--body=b"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "arch", "--from=mayor", "--subject=s", "--body=b"); err != nil {
 		t.Fatalf("seed send failed: %v", err)
 	}
 	orig := soleMsgID(t, env, "arch")
@@ -730,7 +750,7 @@ func TestCLI_MailReadJSONExposesCorrelation(t *testing.T) {
 
 	// An unthreaded message reports empty correlation, and references is [] —
 	// never null — so consumers can index it without a nil check.
-	if _, _, err := runMail(t, bin, env, "send", "solo", "--from=mayor", "--subject=s", "--body=b"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "solo", "--from=mayor", "--subject=s", "--body=b"); err != nil {
 		t.Fatalf("send failed: %v", err)
 	}
 	soloID := soleMsgID(t, env, "solo")
@@ -750,10 +770,10 @@ func TestCLI_MailReadJSONExposesCorrelation(t *testing.T) {
 func TestCLI_MailCanonicalRecipient(t *testing.T) {
 	bin, env := mailInit(t)
 
-	if _, _, err := runMail(t, bin, env, "send", "mg-8bde", "--from=mayor", "--subject=viaAlias", "--body=b1"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "mg-8bde", "--from=mayor", "--subject=viaAlias", "--body=b1"); err != nil {
 		t.Fatalf("send to alias failed: %v", err)
 	}
-	if _, _, err := runMail(t, bin, env, "send", "8bde", "--from=mayor", "--subject=viaBare", "--body=b2"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "8bde", "--from=mayor", "--subject=viaBare", "--body=b2"); err != nil {
 		t.Fatalf("send to bare id failed: %v", err)
 	}
 
@@ -789,7 +809,7 @@ func TestCLI_MailCanonicalRecipient(t *testing.T) {
 func TestCLI_MailCanonicalReadArchive(t *testing.T) {
 	bin, env := mailInit(t)
 
-	if _, _, err := runMail(t, bin, env, "send", "8bde", "--from=mayor", "--subject=s", "--body=b"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "8bde", "--from=mayor", "--subject=s", "--body=b"); err != nil {
 		t.Fatalf("send failed: %v", err)
 	}
 	id := soleMsgID(t, env, "8bde")
@@ -830,7 +850,7 @@ func TestCLI_MailMigrate(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A crew mailbox with no prefix — must be left alone.
-	if _, _, err := runMail(t, bin, env, "send", "mayor", "--from=arch", "--subject=s", "--body=b"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "mayor", "--from=arch", "--subject=s", "--body=b"); err != nil {
 		t.Fatalf("seed mayor: %v", err)
 	}
 
@@ -912,7 +932,7 @@ func TestCLI_MailReadLengthHeaderMatchesBody(t *testing.T) {
 	// with no trailing newline at the end, and multi-byte runes (the header
 	// promises bytes, not characters — a reader budgets bytes).
 	sent := "first line\n\nthird after a blank\n\nfinal — no trailing newline"
-	if _, _, err := runMail(t, bin, env, "send", "mayor", "--from=pm-pogo", "--subject=ruling", "--body="+sent); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "mayor", "--from=pm-pogo", "--subject=ruling", "--body="+sent); err != nil {
 		t.Fatalf("seed send failed: %v", err)
 	}
 	id := soleMsgID(t, env, "mayor")
@@ -962,7 +982,7 @@ func TestCLI_MailReadLengthHeaderSurvivesHead(t *testing.T) {
 		fmt.Fprintf(&sb, "line %d of the ruling\n", i)
 	}
 	sb.WriteString("ASSIGNMENT: the part a head -N drops")
-	if _, _, err := runMail(t, bin, env, "send", "mayor", "--from=pm-pogo", "--subject=ruling", "--body="+sb.String()); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "mayor", "--from=pm-pogo", "--subject=ruling", "--body="+sb.String()); err != nil {
 		t.Fatalf("seed send failed: %v", err)
 	}
 	id := soleMsgID(t, env, "mayor")
@@ -1017,7 +1037,7 @@ func TestCLI_MailReadLengthHeaderEmptyBody(t *testing.T) {
 
 	// Seed a normal message to create the mailbox, then stage the body-less one
 	// beside it in new/.
-	if _, _, err := runMail(t, bin, env, "send", "mayor", "--from=pm-pogo", "--subject=seed", "--body=seed"); err != nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "mayor", "--from=pm-pogo", "--subject=seed", "--body=seed"); err != nil {
 		t.Fatalf("seed send failed: %v", err)
 	}
 	id := "1784266331800113000.1.1"

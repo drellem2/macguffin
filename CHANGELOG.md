@@ -23,6 +23,41 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- **`mg mail` has bad addresses (mg-d639).** A recipient mg has never seen is
+  now **refused** — exit 3, `no_such_mailbox` — and the refusal names the near
+  neighbours it might have meant (*"did you mean `v9ecf`?"*).
+
+  Before this, mail had no bad addresses at all. A mailbox was created by the act
+  of delivering to it, so every send exited 0 and reported `Delivered`, whether
+  or not anyone would ever read it. The `(new mailbox created)` note was not a
+  usable warning: it is equally true of the first legitimate mail to a new agent,
+  and the mayor saw it five times in one night, reasoned "normal for a first
+  mail", and moved on — while four mails addressed to `9ecf` (the reviewer is
+  `v9ecf`) piled up in a box nobody opens. The review loop stalled forty minutes
+  with BOTH ENDS HEALTHY, because both ends *were* healthy.
+
+  Refusing a bad address needs a notion of which addresses are good, and mg has
+  no agent registry. It has two facts on disk that amount to one: **a mailbox of
+  that name exists**, or **a work item of that name exists**. The second matters
+  as much as the first — polecat mailboxes are named for the work item their
+  agent is running, so a brand-new agent is addressable before its first mail
+  arrives. Without it the override flag would ride on every legitimate dispatch,
+  which is exactly where a flag stops being read.
+
+  `--create` is the explicit "this recipient really is new": it registers and
+  delivers. New **`mg mail register NAME`** performs the registration alone —
+  idempotent, creates an empty maildir, touches no mail — for provisioning an
+  agent ahead of any message. `mg mail reply` gets the same refusal: its
+  recipient comes from a `From` header the original's sender wrote, which is free
+  text mg never validated, so a reply is a send to an unchecked address.
+
+  Suggestions use Damerau-Levenshtein distance, scaled to name length — short
+  names are held to distance 1, because a store holding ~1200 four-hex mailboxes
+  puts a couple of dozen within distance 2 of any given id, and a list of two
+  dozen "did you mean"s is a haystack rather than a correction. Transpositions
+  cost 1 rather than 2, without which `mayro` would earn no suggestion while
+  `mayor` sat one swap away in the mailbox list.
+
 - **`install.sh` refuses to install over a newer `mg`, on either path (mg-0466).**
   Across its 201 lines the installer never read the version of any existing `mg`.
   It resolved the latest release, downloaded it, and `mv`'d it over
@@ -65,6 +100,51 @@ derived at all — no git, no tags, or a build from a source tarball.
   installer claims to support.
 
 ### Fixed
+
+- **"Never existed" and "real but empty" are different answers to
+  `mg mail list AGENT` (mg-d639).** The prose already differed; nothing
+  downstream could use the difference. Under `--json` **both emitted nothing at
+  all** — byte-identical empty output — so any programmatic consumer was blind.
+  And a human diagnosing a silent loop read `No mailbox for X yet` as `X has no
+  new mail`: the message ACTIVELY CONFIRMED the wrong hypothesis, which is
+  precisely how a stalled review stayed invisible.
+
+  A mailbox that never existed now reports **`No such mailbox: X`**, with near
+  neighbours suggested on their own line; an existing one that is merely quiet
+  says `(mailbox exists)`. Under `--json` an empty message stream is replaced by
+  exactly one object `{mailbox,unread,exists}` — the same shape the no-arg
+  mailbox enumeration emits, carrying no `id`, so a consumer reading messages can
+  tell the two apart. `--archived` on a mailbox that never existed reports the
+  *mailbox*, not the archive: "no archived messages" for a fictional box is the
+  same false reassurance in a different subdirectory.
+
+  Exit status stays **0** for both, deliberately. A mailbox nobody has mailed yet
+  is the normal state of a new agent, and the polecat mail-check loop polls
+  exactly that; making it an error would report every idle agent as a failure
+  every ten minutes.
+
+- **The cross-box read guard stopped firing on your OWN inbox (mg-d639).**
+  `mg mail read 4f8c/<msg-id>` as agent `p4f8c` was refused, in wording that
+  reads like a permissions error and is not one. The guard compared
+  `$POGO_AGENT_NAME` against the mailbox name — but mailboxes have **no
+  registration**, so an agent's inbox is whichever name its *senders* used, and
+  it is routinely not the agent name. When the box holding your mail is named for
+  your work item, the refusal fired on your own inbox; an agent meeting it
+  concludes it is not allowed to read its own mail and leaves the mail unread —
+  the exact outcome the guard exists to prevent.
+
+  Ownership is now asserted on **two pieces of evidence together**: the mailbox
+  name appears inside the caller's own name (`d639` in `pd639`, which is how the
+  harness derives one from the other), *and* that name is a real work item in
+  this store. Either alone is far too loose — the first would hand `639` to
+  `pd639`, the second would open every work-item box to every agent. Together
+  they say: this box is named for a work item, and the caller is named for that
+  same work item. A mayor reading `d639` still trips the guard, correctly.
+
+  When the guard does fire on a work-item-named box it now says the box belongs
+  to whoever is running that item and that `--force` is the right answer, rather
+  than framing it purely as an intrusion on somebody else. The refusal also
+  carries its proper taxonomy (`conflict`, exit 4) instead of a bare exit 1.
 
 - **The install test suite ran nowhere, and could not have failed if it had
   (mg-0466).** Two separate defects, either of which alone made the other

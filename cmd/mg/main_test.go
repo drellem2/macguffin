@@ -1626,7 +1626,7 @@ func TestCLI_MailE2E(t *testing.T) {
 	}
 
 	// Send a message
-	cmd = exec.Command(bin, "mail", "send", "arch",
+	cmd = exec.Command(bin, "mail", "send", "--create", "arch",
 		"--from=mayor", "--subject=Review needed", "--body=Please review the auth refactor.")
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
@@ -1736,7 +1736,7 @@ func TestCLI_MailReadCrossBoxGuard(t *testing.T) {
 
 	sendTo := func(box string) string {
 		t.Helper()
-		cmd := exec.Command(bin, "mail", "send", box,
+		cmd := exec.Command(bin, "mail", "send", "--create", box,
 			"--from=pm-pogo", "--subject=Directive", "--body=Important.")
 		cmd.Env = env
 		if out, err := cmd.CombinedOutput(); err != nil {

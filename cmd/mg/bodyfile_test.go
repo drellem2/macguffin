@@ -65,6 +65,7 @@ func readBodyJSON(t *testing.T, bin string, env []string, agent, msgID string) s
 // happened to be inert. Remove the file-reading path and this test goes red.
 func TestCLI_MailSendBodyFileVerbatimThroughShell(t *testing.T) {
 	bin, env := mailInit(t)
+	mailRegisterBoxes(t, bin, env, "mayor")
 	dir := t.TempDir()
 	path := writeBodyFile(t, dir, "msg.md", hazardBody)
 
@@ -114,13 +115,14 @@ func lastMsgID(t *testing.T, out string) string {
 // the disease this ticket exists to cure.
 func TestCLI_BodyFileMissingPathFailsLoudly(t *testing.T) {
 	bin, env := mailInit(t)
+	mailRegisterBoxes(t, bin, env, "mayor")
 	missing := filepath.Join(t.TempDir(), "nope.md")
 
 	cases := []struct {
 		name string
 		args []string
 	}{
-		{"mail send", []string{"mail", "send", "mayor", "--from=me", "--subject=s", "--body-file=" + missing}},
+		{"mail send", []string{"mail", "send", "--create", "mayor", "--from=me", "--subject=s", "--body-file=" + missing}},
 		{"new", []string{"new", "--title=t", "--body-file=" + missing}},
 	}
 	for _, tc := range cases {
@@ -139,7 +141,7 @@ func TestCLI_BodyFileMissingPathFailsLoudly(t *testing.T) {
 
 	// A directory is unreadable-as-a-file and must fail the same way, rather
 	// than yielding an empty body.
-	cmd := exec.Command(bin, "mail", "send", "mayor", "--from=me", "--subject=s", "--body-file="+t.TempDir())
+	cmd := exec.Command(bin, "mail", "send", "--create", "mayor", "--from=me", "--subject=s", "--body-file="+t.TempDir())
 	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err == nil {
 		t.Errorf("--body-file naming a directory must fail, got exit 0:\n%s", out)
@@ -150,10 +152,11 @@ func TestCLI_BodyFileMissingPathFailsLoudly(t *testing.T) {
 // every command that takes the pair.
 func TestCLI_BodyFileMutuallyExclusiveWithBody(t *testing.T) {
 	bin, env := mailInit(t)
+	mailRegisterBoxes(t, bin, env, "mayor")
 	path := writeBodyFile(t, t.TempDir(), "msg.md", "from a file\n")
 
 	cases := [][]string{
-		{"mail", "send", "mayor", "--from=me", "--subject=s", "--body=inline", "--body-file=" + path},
+		{"mail", "send", "--create", "mayor", "--from=me", "--subject=s", "--body=inline", "--body-file=" + path},
 		{"new", "--title=t", "--body=inline", "--body-file=" + path},
 	}
 	for _, args := range cases {
@@ -176,8 +179,9 @@ func TestCLI_BodyFileMutuallyExclusiveWithBody(t *testing.T) {
 // send an empty body.
 func TestCLI_MailSendBodyStillWorksUnchanged(t *testing.T) {
 	bin, env := mailInit(t)
+	mailRegisterBoxes(t, bin, env, "mayor")
 
-	out, _, err := runMail(t, bin, env, "send", "mayor", "--from=me", "--subject=s", "--body=plain inline body")
+	out, _, err := runMail(t, bin, env, "send", "--create", "mayor", "--from=me", "--subject=s", "--body=plain inline body")
 	if err != nil {
 		t.Fatalf("--body must still work: %v\n%s", err, out)
 	}
@@ -186,13 +190,13 @@ func TestCLI_MailSendBodyStillWorksUnchanged(t *testing.T) {
 	}
 
 	// No body at all still fails, as before.
-	if _, _, err := runMail(t, bin, env, "send", "mayor", "--from=me", "--subject=s"); err == nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "mayor", "--from=me", "--subject=s"); err == nil {
 		t.Error("send with no body must still fail")
 	}
 	// An EMPTY --body-file must fail the same way --body='' does, so the file
 	// path cannot deliver nothing and report Delivered.
 	empty := writeBodyFile(t, t.TempDir(), "empty.md", "")
-	if _, _, err := runMail(t, bin, env, "send", "mayor", "--from=me", "--subject=s", "--body-file="+empty); err == nil {
+	if _, _, err := runMail(t, bin, env, "send", "--create", "mayor", "--from=me", "--subject=s", "--body-file="+empty); err == nil {
 		t.Error("send with an empty --body-file must fail, not deliver an empty body")
 	}
 }
@@ -201,6 +205,7 @@ func TestCLI_MailSendBodyStillWorksUnchanged(t *testing.T) {
 // incident was 'mg new', not mail — hence the scope.
 func TestCLI_NewAndEditBodyFile(t *testing.T) {
 	bin, env := mailInit(t)
+	mailRegisterBoxes(t, bin, env, "mayor")
 	path := writeBodyFile(t, t.TempDir(), "body.md", hazardBody)
 
 	// mg new --body-file, through a real shell.

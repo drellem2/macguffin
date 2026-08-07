@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
@@ -344,4 +345,49 @@ func errNoSuchPartition(id, partition string, matches []Match) *mgerr.Error {
 		hint = fmt.Sprintf("%s has no archived twin to qualify; drop the @%s.", id, partition)
 	}
 	return mgerr.NotFound("no_such_partition", msg, hint)
+}
+
+// LiveIDs returns the ids of every LIVE work item in the store (available,
+// claimed, pending, shelved), sorted. Terminal records — done and archived —
+// are excluded on purpose: this feeds "did you mean ...?" for a mistyped
+// mailbox name, and the name a sender meant to type is an agent still working,
+// not an id retired months ago.
+//
+// It reads directory entries only, never file contents: the id is the file name
+// up to ".md" (claimed items carry a "<id>.md.<pid>" suffix), so parsing every
+// item to recover an id already spelled on disk would make a suggestion cost a
+// full store walk. Unreadable state directories are skipped rather than
+// failing — a suggestion is a courtesy, and half of one beats an error.
+func LiveIDs(root string) []string {
+	var ids []string
+	seen := map[string]bool{}
+	for _, state := range activeStates {
+		if !liveStates[state] {
+			continue
+		}
+		entries, err := os.ReadDir(filepath.Join(root, "work", state))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			name := e.Name()
+			idx := strings.Index(name, ".md")
+			if idx <= 0 {
+				continue
+			}
+			// Only "<id>.md" and "<id>.md.<pid>" name an item; a sidecar
+			// ("<id>.result.json") has no ".md" and is skipped above.
+			rest := name[idx:]
+			if rest != ".md" && !strings.HasPrefix(rest, ".md.") {
+				continue
+			}
+			id := name[:idx]
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }

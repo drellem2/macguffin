@@ -173,7 +173,7 @@ func TestCLI_ErrorMessages(t *testing.T) {
 				if err := os.WriteFile(box, []byte("x"), 0o644); err != nil {
 					t.Fatal(err)
 				}
-				return []string{"mail", "send", "bob", "--from=alice", "--subject=hi", "--body=yo"}
+				return []string{"mail", "send", "--create", "bob", "--from=alice", "--subject=hi", "--body=yo"}
 			},
 			want: []string{"could not deliver message to bob"},
 		},

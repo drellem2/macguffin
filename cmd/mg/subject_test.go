@@ -78,6 +78,7 @@ func sendDerived(t *testing.T, bin string, env []string, subjectLine string) mai
 // fixture, do not delete the arm.
 func TestCLI_MailSendDerivedSubjectVerbatimThroughShell(t *testing.T) {
 	bin, env := mailInit(t)
+	mailRegisterBoxes(t, bin, env, "mayor")
 
 	cases := []struct {
 		name    string
@@ -136,6 +137,7 @@ func TestCLI_MailSendDerivedSubjectVerbatimThroughShell(t *testing.T) {
 // it specifically.
 func TestCLI_MailSendDerivedSubjectSilentLossIsExitZero(t *testing.T) {
 	bin, env := mailInit(t)
+	mailRegisterBoxes(t, bin, env, "mayor")
 
 	out, stderr, err := runSh(t, env,
 		bin+" mail send mayor --from=me --body=b --subject='"+hazardApostrophes+"'")
@@ -170,8 +172,9 @@ func TestCLI_MailSendDerivedSubjectSilentLossIsExitZero(t *testing.T) {
 // adopted.
 func TestCLI_MailSendDerivedSubjectIsEchoed(t *testing.T) {
 	bin, env := mailInit(t)
+	mailRegisterBoxes(t, bin, env, "mayor")
 
-	out, stderr, err := runMail(t, bin, env, "send", "mayor", "--from=me",
+	out, stderr, err := runMail(t, bin, env, "send", "--create", "mayor", "--from=me",
 		"--body=derived subject line\n\nrest of the body")
 	if err != nil {
 		t.Fatalf("send failed: %v\n%s\n%s", err, out, stderr)
@@ -184,7 +187,7 @@ func TestCLI_MailSendDerivedSubjectIsEchoed(t *testing.T) {
 	}
 
 	// --json carries the same signal for scripted callers.
-	out, stderr, err = runMail(t, bin, env, "send", "mayor", "--from=me",
+	out, stderr, err = runMail(t, bin, env, "send", "--create", "mayor", "--from=me",
 		"--body=json derived line\n\nrest", "--json")
 	if err != nil {
 		t.Fatalf("send --json failed: %v\n%s\n%s", err, out, stderr)
@@ -202,7 +205,7 @@ func TestCLI_MailSendDerivedSubjectIsEchoed(t *testing.T) {
 
 	// An explicitly supplied subject is NOT echoed — the caller typed it — and
 	// is reported as not derived.
-	out, stderr, err = runMail(t, bin, env, "send", "mayor", "--from=me",
+	out, stderr, err = runMail(t, bin, env, "send", "--create", "mayor", "--from=me",
 		"--subject=typed by hand", "--body=first body line\n\nrest", "--json")
 	if err != nil {
 		t.Fatalf("send with --subject failed: %v\n%s\n%s", err, out, stderr)
@@ -222,8 +225,9 @@ func TestCLI_MailSendDerivedSubjectIsEchoed(t *testing.T) {
 // not make the unsafe spelling quieter.
 func TestCLI_MailSendExplicitSubjectUnchanged(t *testing.T) {
 	bin, env := mailInit(t)
+	mailRegisterBoxes(t, bin, env, "mayor")
 
-	out, stderr, err := runMail(t, bin, env, "send", "mayor", "--from=me",
+	out, stderr, err := runMail(t, bin, env, "send", "--create", "mayor", "--from=me",
 		"--subject=explicit wins", "--body=a different first line\n\nbody")
 	if err != nil {
 		t.Fatalf("send failed: %v\n%s\n%s", err, out, stderr)
@@ -234,7 +238,7 @@ func TestCLI_MailSendExplicitSubjectUnchanged(t *testing.T) {
 
 	// --subject= (given but empty) stays a refusal, and the error points at the
 	// cheaper spelling rather than just complaining.
-	cmd := exec.Command(bin, "mail", "send", "mayor", "--from=me", "--subject=", "--body=b")
+	cmd := exec.Command(bin, "mail", "send", "--create", "mayor", "--from=me", "--subject=", "--body=b")
 	cmd.Env = env
 	combined, err := cmd.CombinedOutput()
 	if err == nil {
@@ -245,14 +249,14 @@ func TestCLI_MailSendExplicitSubjectUnchanged(t *testing.T) {
 	}
 
 	// A missing --from is still required; only --subject became optional.
-	cmd = exec.Command(bin, "mail", "send", "mayor", "--body=b")
+	cmd = exec.Command(bin, "mail", "send", "--create", "mayor", "--body=b")
 	cmd.Env = env
 	if combined, err := cmd.CombinedOutput(); err == nil {
 		t.Errorf("send with no --from must still fail, got exit 0:\n%s", combined)
 	}
 	// A missing body is still required, and now that --subject is optional a
 	// bare recipient must not become a valid send.
-	cmd = exec.Command(bin, "mail", "send", "mayor", "--from=me")
+	cmd = exec.Command(bin, "mail", "send", "--create", "mayor", "--from=me")
 	cmd.Env = env
 	if combined, err := cmd.CombinedOutput(); err == nil {
 		t.Errorf("send with no body must still fail, got exit 0:\n%s", combined)
@@ -267,9 +271,10 @@ func TestCLI_MailSendExplicitSubjectUnchanged(t *testing.T) {
 // one is the disease.
 func TestCLI_MailSendDerivationCopiesTheLine(t *testing.T) {
 	bin, env := mailInit(t)
+	mailRegisterBoxes(t, bin, env, "mayor")
 
 	body := "the first line\n\nthe second paragraph\nand a third line"
-	out, stderr, err := runMail(t, bin, env, "send", "mayor", "--from=me", "--body="+body)
+	out, stderr, err := runMail(t, bin, env, "send", "--create", "mayor", "--from=me", "--body="+body)
 	if err != nil {
 		t.Fatalf("send failed: %v\n%s\n%s", err, out, stderr)
 	}
@@ -289,18 +294,19 @@ func TestCLI_MailSendDerivationCopiesTheLine(t *testing.T) {
 // dropped a message for four days.
 func TestCLI_MailSendDerivationRefusesLoudly(t *testing.T) {
 	bin, env := mailInit(t)
+	mailRegisterBoxes(t, bin, env, "mayor")
 
 	cases := []struct {
 		name string
 		args []string
 	}{
 		// Whitespace-only body: there is no first line to take.
-		{"blank body", []string{"mail", "send", "mayor", "--from=me", "--body=   \n\n  "}},
+		{"blank body", []string{"mail", "send", "--create", "mayor", "--from=me", "--body=   \n\n  "}},
 		// A bare CR inside the first line — the mg-b5d3 shape.
-		{"control character in the first line", []string{"mail", "send", "mayor", "--from=me", "--body=sub\rject\n\nbody"}},
+		{"control character in the first line", []string{"mail", "send", "--create", "mayor", "--from=me", "--body=sub\rject\n\nbody"}},
 		// A tab inside the line is a control character too; only the margins
 		// are trimmed.
-		{"tab inside the first line", []string{"mail", "send", "mayor", "--from=me", "--body=sub\tject\n\nbody"}},
+		{"tab inside the first line", []string{"mail", "send", "--create", "mayor", "--from=me", "--body=sub\tject\n\nbody"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -321,7 +327,10 @@ func TestCLI_MailSendDerivationRefusesLoudly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mail list failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "No mailbox for mayor yet") {
+	// The mailbox is registered (see the fixture above), so "no unread" here is
+	// the empty-but-real answer, not the never-existed one — which is exactly
+	// the distinction mg-d639 made legible.
+	if !strings.Contains(out, "No unread messages for mayor") {
 		t.Errorf("a refused derivation must not deliver anything, got:\n%s", out)
 	}
 }
@@ -394,6 +403,7 @@ func TestDeriveSubject(t *testing.T) {
 // come from the same bytes, read once, with no shell in either path.
 func TestCLI_MailSendDerivedSubjectFromBodyFile(t *testing.T) {
 	bin, env := mailInit(t)
+	mailRegisterBoxes(t, bin, env, "mayor")
 	content := hazardApostrophes + " " + hazardMetachars + "\n\n" + hazardBody
 	path := writeBodyFile(t, t.TempDir(), "msg.md", content)
 

@@ -98,6 +98,14 @@ type (
 		From    string `json:"from"`
 		Subject string `json:"subject"`
 	}
+
+	// mailRegisterJSON is the single object emitted by
+	// `mg mail register --json`. created is false when the mailbox already
+	// existed, which is a successful no-op rather than an error.
+	mailRegisterJSON struct {
+		Mailbox string `json:"mailbox"`
+		Created bool   `json:"created"`
+	}
 )
 
 // encodeJSON writes v as a single JSON object followed by a newline. Used for
@@ -112,6 +120,7 @@ var (
 	mailSendBody      string
 	mailSendBodyFile  string
 	mailSendInReplyTo string
+	mailSendCreate    bool
 	mailListAll       bool
 	mailListArchived  bool
 	mailReadForce     bool
@@ -176,11 +185,26 @@ the first line is blank or carries control characters, the send is REFUSED and
 names --subject rather than writing a malformed header. Passing --subject is
 unchanged, including its refusal of an empty value.
 
-The recipient's mailbox is created lazily on first delivery, so sending to a
-brand-new agent always succeeds (exit 0). When the recipient's mailbox did not
-previously exist the message notes "(new mailbox created)" — under --json the
-same signal is the boolean "mailbox_created" field — so a typo'd or unknown
-recipient is visible rather than silently swallowed.
+RECIPIENTS. A recipient mg has never seen is REFUSED (exit 3), and the refusal
+names the near neighbours it might have meant ("did you mean v9ecf?"). mg has no
+agent registry, so a recipient counts as known when either of two things on disk
+says so:
+
+  - a mailbox of that name already exists; or
+  - a work item of that name exists — polecat mailboxes are named for the work
+    item their agent is running, so a brand-new agent is addressable before its
+    first mail arrives.
+
+Neither holds for a typo, which is the whole point. Before this, every send
+succeeded: a mistyped name minted a dead drop and reported "Delivered", and the
+"(new mailbox created)" note could not separate that from the first legitimate
+mail to a new agent — it is equally true of both.
+
+Pass --create when the recipient really is new and neither test can see it yet;
+it registers the mailbox and delivers. 'mg mail register NAME' does the same
+registration without sending. The mailbox is still created lazily, and a first
+delivery still notes "(new mailbox created)" — under --json the same signal is
+the boolean "mailbox_created" field.
 
 --from is free-text and intentionally unvalidated: a brand-new agent must be
 able to send its first message before it has a mailbox. Run 'mg mail list' with
@@ -230,6 +254,10 @@ filled in for you, use 'mg mail reply' instead.`,
 				"omit --subject entirely to take the subject from the body's first line, or pass a non-empty value")
 		}
 
+		root, err := resolveRoot()
+		if err != nil {
+			return err
+		}
 		mr, err := mailRoot()
 		if err != nil {
 			return err
@@ -238,6 +266,13 @@ filled in for you, use 'mg mail reply' instead.`,
 		// Capture existence BEFORE Send creates the mailbox, so we can
 		// report first-delivery to a never-before-seen recipient.
 		existed := mail.MailboxExists(mr, recipient)
+
+		// Refuse a recipient nothing on disk knows about, unless the caller
+		// says explicitly that it is new. Checked BEFORE SendWithOpts, so a
+		// refused address leaves no mailbox, no tmp file and no message.
+		if !mailSendCreate && !knownRecipient(mr, root, recipient) {
+			return unknownRecipientError(mr, root, recipient)
+		}
 
 		// send takes an id, not a message: it cannot read the parent's own
 		// References (the parent may live in another agent's mailbox, or
@@ -300,10 +335,24 @@ never existed is simply absent. Under --json each mailbox is one NDJSON object
 {mailbox,unread,exists}.
 
 With an AGENT, list that agent's unread messages (or, with --all, read messages
-too; with --archived, archived messages). If the agent's mailbox never existed
-this is called out distinctly from an existing-but-empty mailbox. Under --json
-each message is one NDJSON object {id,from,subject,date,read}; the MSG-ID it
-prints is the token 'mg mail read'/'mg mail archive' accept.`,
+too; with --archived, archived messages). Under --json each message is one
+NDJSON object {id,from,subject,date,read}; the MSG-ID it prints is the token
+'mg mail read'/'mg mail archive' accept.
+
+A mailbox that NEVER EXISTED is reported as "No such mailbox", not as an empty
+one, and near neighbours are suggested ("did you mean bf3ae?"). The two used to
+differ in prose alone and nothing downstream could use the difference: a human
+diagnosing a silent loop read "No mailbox for X yet" as "X has no new mail",
+which is how a stalled review stayed invisible for forty minutes.
+
+So the distinction survives into tooling: when there are NO messages to list,
+--json emits exactly one object {mailbox,unread,exists} in place of the empty
+stream it used to emit, which was byte-identical for a real mailbox and a
+fictional one. It is the same shape the no-arg mailbox enumeration emits, and it
+carries no "id" field, so a consumer reading messages can tell the two apart.
+Exit status stays 0 in both cases: a mailbox that does not exist yet is the
+normal state of an agent nobody has mailed, and a poller asking after one is
+asking a fair question, not making an error.`,
 	Args: usageArgs(cobra.MaximumNArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		mr, err := mailRoot()
@@ -342,6 +391,8 @@ prints is the token 'mg mail read'/'mg mail archive' accept.`,
 			return err
 		}
 
+		exists := mail.MailboxExists(mr, agent)
+
 		if mailJSON {
 			for _, m := range msgs {
 				if err := encodeJSON(mailMsgJSON{
@@ -354,6 +405,17 @@ prints is the token 'mg mail read'/'mg mail archive' accept.`,
 					return err
 				}
 			}
+			// An empty stream used to be the ONLY output for both a mailbox
+			// with nothing in it and a mailbox that never existed, so no
+			// scripted consumer could tell a quiet inbox from a misdelivery.
+			// Emit the box's own state instead of nothing.
+			if len(msgs) == 0 {
+				return encodeJSON(mailboxJSON{
+					Mailbox: agent,
+					Unread:  unreadCount(mr, agent),
+					Exists:  exists,
+				})
+			}
 			// malformed count is still surfaced per-file on stderr by the
 			// mail package; json stdout stays pure message NDJSON.
 			return nil
@@ -363,14 +425,19 @@ prints is the token 'mg mail read'/'mg mail archive' accept.`,
 			// Distinguish an existing-but-empty mailbox from one that
 			// never existed (#49), keeping exit 0 in both cases.
 			switch {
+			case !exists:
+				root, err := resolveRoot()
+				if err != nil {
+					return err
+				}
+				fmt.Printf("No such mailbox: %s — it has never existed, so no mail has ever been delivered to it\n%s",
+					agent, suggestionLine(mr, root, agent))
 			case mailListArchived:
-				fmt.Printf("No archived messages for %s\n", agent)
-			case !mail.MailboxExists(mr, agent):
-				fmt.Printf("No mailbox for %s yet — no mail has ever been delivered to it\n", agent)
+				fmt.Printf("No archived messages for %s (mailbox exists)\n", agent)
 			case mailListAll:
-				fmt.Printf("No messages for %s\n", agent)
+				fmt.Printf("No messages for %s (mailbox exists)\n", agent)
 			default:
-				fmt.Printf("No unread messages for %s\n", agent)
+				fmt.Printf("No unread messages for %s (mailbox exists)\n", agent)
 			}
 		} else {
 			for _, m := range msgs {
@@ -387,6 +454,19 @@ prints is the token 'mg mail read'/'mg mail archive' accept.`,
 		}
 		return nil
 	},
+}
+
+// unreadCount reports how many unread messages sit in an agent's mailbox,
+// reporting 0 for a mailbox that does not exist. It is the "unread" half of the
+// --json status object, and it is computed independently of the listing mode so
+// that `mg mail list X --archived --json` still answers "how much unread mail is
+// waiting" rather than reporting the archive's emptiness as the inbox's.
+func unreadCount(mailRootDir, agent string) int {
+	msgs, _, err := mail.List(mailRootDir, agent)
+	if err != nil {
+		return 0
+	}
+	return len(msgs)
 }
 
 // runMailboxList implements the no-arg `mg mail list` mailbox enumeration (#53).
@@ -520,15 +600,40 @@ func jsonRefs(refs []string) []string {
 // (new/ -> cur/): a cross-box read silently drops the message from the owner's
 // unread list (the mg-6ae0 incident). Both 'mail read' and 'mail reply' perform
 // that transition, so both go through here.
+//
+// "Another agent's" is decided by callerOwnsMailbox, not by name equality. A
+// mailbox has no registration — it is created by whoever first delivers to it —
+// so an agent's inbox is whichever name its senders used, routinely the work
+// item it is running rather than its agent name. Comparing names alone fired
+// this refusal on people's OWN inboxes, in wording that reads like a permissions
+// error; an agent meeting it concludes it may not read its own mail and leaves
+// the mail unread, which is the exact outcome the guard exists to prevent.
 func guardCrossBoxRead(mr, agent, msgID string, force bool) error {
 	caller := os.Getenv("POGO_AGENT_NAME")
-	crossBox := caller != "" && canonicalAgent(caller) != canonicalAgent(agent)
-	if !crossBox {
+	if caller == "" {
+		return nil
+	}
+	root, err := resolveRoot()
+	if err != nil {
+		return err
+	}
+	if callerOwnsMailbox(root, caller, agent) {
 		return nil
 	}
 	if !force {
 		mail.Audit(mr, "read-denied", agent, msgID, map[string]string{"reason": "cross-box"})
-		return fmt.Errorf("refusing to read %s's mail as agent %q: reading marks the message read and hides it from %s's unread list. Re-run with --force if this cross-box read is intentional", agent, caller, agent)
+		// When the box is named for a real work item, say so. The guard cannot
+		// prove the caller owns it (the names are unrelated), but a work-item
+		// box belongs to whoever is running that item, and framing the refusal
+		// purely as an intrusion on somebody else is what makes an agent
+		// abandon its own mail rather than pass --force.
+		hint := "re-run with --force if this cross-box read is intentional"
+		if workItemNamed(root, canonicalAgent(agent)) {
+			hint = fmt.Sprintf("%q is a WORK ITEM id, so this mailbox belongs to whoever is running that item — if that is you, mail addressed to your work item lands here rather than under your agent name, and --force is the right answer", agent)
+		}
+		return mgerr.Conflict("cross_box_read",
+			fmt.Sprintf("refusing to read %s's mail as agent %q: reading marks the message read and hides it from %s's unread list", agent, caller, agent),
+			hint)
 	}
 	mail.Audit(mr, "read-forced", agent, msgID, nil)
 	return nil
@@ -601,7 +706,12 @@ required.
 
 Like 'mail read', reply marks the original read (new/ -> cur/), so replying out
 of another agent's mailbox needs --force. It does NOT archive the original;
-archive it yourself with 'mg mail archive' when you are done with it.`,
+archive it yourself with 'mg mail archive' when you are done with it.
+
+The recipient is taken from a From header the original's sender wrote, which is
+free text mg never validated, so a reply is a send to an unchecked address. It
+gets the same treatment: a From naming nobody mg has seen is refused rather than
+answered into a phantom mailbox, and --create is the override.`,
 	Args: usageArgs(cobra.RangeArgs(1, 2)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		agent, msgID, err := parseAgentMsgID(args)
@@ -657,6 +767,18 @@ archive it yourself with 'mg mail archive' when you are done with it.`,
 		recipient := canonicalAgent(orig.From)
 		existed := mail.MailboxExists(mr, recipient)
 
+		// A From header is free text the sender wrote, so a reply is a send to
+		// an unvalidated address and carries the same phantom-box risk. Same
+		// refusal, same --create escape: replying to mail from a name nobody
+		// can receive at should say so rather than answer into a dead drop.
+		root, err := resolveRoot()
+		if err != nil {
+			return err
+		}
+		if !mailSendCreate && !knownRecipient(mr, root, recipient) {
+			return unknownRecipientError(mr, root, recipient)
+		}
+
 		newID, err := mail.SendWithOpts(mr, recipient, from, subject, mailSendBody, opts)
 		if err != nil {
 			return err
@@ -690,6 +812,57 @@ archive it yourself with 'mg mail archive' when you are done with it.`,
 			note = "  (new mailbox created)"
 		}
 		fmt.Printf("Replied: %s → %s/new/%s  (in-reply-to %s/%s)%s\n", from, recipient, newID, agent, orig.ID, note)
+		return nil
+	},
+}
+
+var mailRegisterCmd = &cobra.Command{
+	Use:   "register AGENT",
+	Short: "Register a mailbox so mail can be addressed to it",
+	Long: `Register a mailbox, making the name addressable by 'mg mail send'.
+
+'mg mail send' refuses a recipient mg has never seen, because before that
+refusal existed every send succeeded and a typo'd name minted a dead drop that
+reported "Delivered". A recipient counts as seen when a mailbox of that name
+exists, or when a work item is called that. This command supplies the first of
+those directly: it creates the empty Maildir (tmp/, new/, cur/) and nothing
+else, so a new crew agent can be addressed before anyone has mailed it.
+
+It is IDEMPOTENT — registering an existing mailbox is exit 0 and changes
+nothing, so it is safe in setup scripts. It never touches mail, which is why
+registering a mailbox someone already uses cannot lose anything.
+
+'mg mail send AGENT --create' is the inline spelling: it registers and delivers
+in one step. Use this command when the registration should happen ahead of any
+message — provisioning an agent, or reserving the name it will be reached by.
+
+With --json the result is a single object {mailbox,created}, where created is
+false for a mailbox that already existed.`,
+	Args: usageArgs(cobra.ExactArgs(1)),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Canonicalize exactly as send/list do, so registering the alias
+		// "mg-<id>" reserves the same box a "<id>" send lands in rather than
+		// minting the stray twin 'mg mail migrate' exists to clean up.
+		agent := canonicalAgent(args[0])
+
+		mr, err := mailRoot()
+		if err != nil {
+			return err
+		}
+
+		existed := mail.MailboxExists(mr, agent)
+		if err := mail.EnsureMaildir(mr, agent); err != nil {
+			return err
+		}
+
+		if mailJSON {
+			return encodeJSON(mailRegisterJSON{Mailbox: agent, Created: !existed})
+		}
+		if existed {
+			fmt.Printf("Mailbox %s is already registered\n", agent)
+		} else {
+			fmt.Printf("Registered mailbox: %s\n", agent)
+		}
 		return nil
 	},
 }
@@ -783,12 +956,14 @@ func init() {
 	mailSendCmd.Flags().StringVar(&mailSendBody, "body", "", "message body (required unless --body-file)")
 	mailSendCmd.Flags().StringVar(&mailSendBodyFile, "body-file", "", "read the message body verbatim from a file (\"-\" for stdin); mutually exclusive with --body")
 	mailSendCmd.Flags().StringVar(&mailSendInReplyTo, "in-reply-to", "", "MSG-ID this message replies to (sets In-Reply-To and seeds References)")
+	mailSendCmd.Flags().BoolVar(&mailSendCreate, "create", false, "deliver to a recipient mg has never seen, registering the mailbox (without this, an unknown recipient is refused)")
 	mailSendCmd.Flags().BoolVar(&mailJSON, "json", false, "emit a single JSON object instead of human-formatted output")
 
 	mailReplyCmd.Flags().StringVar(&mailSendFrom, "from", "", "sender name (defaults to AGENT, the mailbox replied from)")
 	mailReplyCmd.Flags().StringVar(&mailSendSubject, "subject", "", `subject (defaults to "Re: " + the original's)`)
 	mailReplyCmd.Flags().StringVar(&mailSendBody, "body", "", "message body (required)")
 	mailReplyCmd.Flags().BoolVar(&mailReplyForce, "force", false, "allow replying out of another agent's mailbox (marks the original read for its owner)")
+	mailReplyCmd.Flags().BoolVar(&mailSendCreate, "create", false, "deliver to a sender mg has never seen, registering the mailbox (without this, an unknown recipient is refused)")
 	mailReplyCmd.Flags().BoolVar(&mailJSON, "json", false, "emit a single JSON object instead of human-formatted output")
 
 	mailReadCmd.Flags().BoolVar(&mailReadForce, "force", false, "allow reading another agent's mailbox (marks the message read for its owner)")
@@ -800,9 +975,12 @@ func init() {
 	mailListCmd.Flags().BoolVar(&mailListArchived, "archived", false, "list archived messages instead of the active mailbox")
 	mailListCmd.Flags().BoolVar(&mailJSON, "json", false, "emit one JSON object per line (NDJSON) instead of human-formatted output")
 
+	mailRegisterCmd.Flags().BoolVar(&mailJSON, "json", false, "emit a single JSON object instead of human-formatted output")
+
 	mailMigrateCmd.Flags().BoolVar(&mailMigrateDryRun, "dry-run", false, "report which stray mailboxes would be merged without moving any mail")
 
 	mailCmd.AddCommand(mailSendCmd)
+	mailCmd.AddCommand(mailRegisterCmd)
 	mailCmd.AddCommand(mailReplyCmd)
 	mailCmd.AddCommand(mailListCmd)
 	mailCmd.AddCommand(mailReadCmd)

@@ -142,13 +142,14 @@ var commandEffects = map[string]commandEffect{
 	"mg event append": {mutates: true, idempotent: false},
 	"mg event list":   {mutates: false, idempotent: true},
 
-	"mg mail":         {mutates: false, idempotent: true}, // group command (help only)
-	"mg mail send":    {mutates: true, idempotent: false},
-	"mg mail reply":   {mutates: true, idempotent: false}, // delivers a new message, like send
-	"mg mail list":    {mutates: false, idempotent: true},
-	"mg mail read":    {mutates: true, idempotent: true}, // marks read; re-read is a no-op
-	"mg mail archive": {mutates: true, idempotent: true}, // archiving an archived msg is a no-op
-	"mg mail migrate": {mutates: true, idempotent: true}, // merges stray mailboxes; re-run finds none
+	"mg mail":          {mutates: false, idempotent: true}, // group command (help only)
+	"mg mail send":     {mutates: true, idempotent: false},
+	"mg mail reply":    {mutates: true, idempotent: false}, // delivers a new message, like send
+	"mg mail list":     {mutates: false, idempotent: true},
+	"mg mail read":     {mutates: true, idempotent: true}, // marks read; re-read is a no-op
+	"mg mail archive":  {mutates: true, idempotent: true}, // archiving an archived msg is a no-op
+	"mg mail migrate":  {mutates: true, idempotent: true}, // merges stray mailboxes; re-run finds none
+	"mg mail register": {mutates: true, idempotent: true}, // creates an empty maildir; re-registering is a no-op
 }
 
 // effectFor returns the side-effect classification for a command path. Unknown
