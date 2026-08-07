@@ -170,6 +170,14 @@ version_is_newer() {
 # The version an mg binary reports, verbatim (leading `v` and all). Prints
 # nothing and returns non-zero when there is no runnable binary there, or when
 # what runs does not answer like mg does.
+#
+# KNOWN AND ACCEPTED: this exec is UNBOUNDED. If the binary it asks hangs —
+# wedged, or merely very slow on a box under heavy load — install.sh hangs with
+# it, possibly inside a `curl | sh`. There is no portable `timeout` (macOS ships
+# none), and bounding it by hand would mean backgrounding and polling a
+# subprocess in a script whose whole job is to be simple, so it is left
+# unbounded deliberately rather than by oversight. The /usr/bin/mg skip and the
+# </dev/null below remove the one case anybody has actually hit.
 installed_version() {
     _bin="$1"
     [ -n "$_bin" ] && [ -x "$_bin" ] || return 1
