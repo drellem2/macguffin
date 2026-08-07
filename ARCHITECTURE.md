@@ -110,7 +110,35 @@ proposal — has undone work by construction at the instant it completes, and a
 completed item cannot be the tracker for undone work. `mg done` refuses to make
 the move above until a `successor:<id>` tag names what carries the
 recommendation forward. The refusal happens before the rename, so a refused
-completion leaves the item claimed and the store untouched.
+completion leaves the item claimed.
+
+**The refusal comes after the result is written, and that ordering is the whole
+point.** The guard originally sat ahead of *every* mutation, which read as the
+conservative choice — a refused completion left the store exactly as it was. What
+it actually did was destroy the caller's `--result`, which existed nowhere but
+argv. And on the gh-issue track the successor build ticket is not filed until
+after the human gate, so at the moment a triage reports, *no id exists that can
+legally satisfy the guard*. The operator's real choice was "supply a successor or
+lose your work", with no correct value available, and the move that got the
+command through was a real id naming the wrong item. **A guard whose refusal
+costs the operator their payload does not buy safety; it buys a fabricated
+argument.** So the result is merged and written into the item's current directory
+first — every transition moves the sidecar with the `.md`, so it travels into
+`done/` on the retry — and the refusal states that the payload survived, because
+an operator who sees a non-zero exit assumes it did not.
+
+**A wrong-but-real successor is printed, not refused.** Existence is all
+`--successor` can cheaply check, so an id naming the wrong item is a legal
+argument; the defect was that it completed with exit 0 and *no output at all*.
+Both structural strengthenings were measured against the live store on
+2026-08-07, across 40 successor links: requiring the successor to name the item
+back via `depends:` would refuse **40 of 40** (that back-reference has never once
+been written), and refusing an already-terminal successor would refuse **29 of
+40**, most of them designs whose build has legitimately since landed. Those are
+over-fire counts, and the failure-direction argument below applies unchanged. So
+`mg done` prints `Successor <id> (<status>): <title>` and lets the operator read
+it. A title at the callsite is not a guard and is not offered as one — it is the
+difference between a mistake anyone reads and a mistake nobody can see.
 
 **The guard reads a DECLARATION, not an inference.** A `declares-remainder` tag
 on the item is the only thing that trips the guard. Two inferred predicates were

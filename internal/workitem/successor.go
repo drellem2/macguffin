@@ -67,6 +67,70 @@ func SuccessorIDs(item *Item) []string {
 	return ids
 }
 
+// SuccessorRef is what a successor: tag actually resolved to — the id, and the
+// title and status of the item wearing it.
+//
+// It exists so a caller can PRINT what it just linked. `--successor` validates
+// that the id EXISTS, and existence is the only thing it can cheaply check:
+// mg-9259 measured the two structural alternatives against the live store on
+// 2026-08-07 and both over-fire outright.
+//
+//	require the successor to name this item back (depends:)   0 of 40 links
+//	                                                          would pass — the
+//	                                                          back-reference has
+//	                                                          never once been
+//	                                                          written.
+//	refuse a successor that is itself done/archived          29 of 40 links
+//	                                                          would be refused.
+//	                                                          Most are old
+//	                                                          designs whose build
+//	                                                          has since landed,
+//	                                                          which is the
+//	                                                          LEGITIMATE case.
+//
+// That is an over-fire count, not an escape count, and remainder.go records
+// what a guard firing at that volume costs: mg self-installs on merge, so one
+// that blocks routine completions gets removed by whoever it inconveniences.
+//
+// So the remaining defect is not that the check is weak — it is that a wrong
+// successor is INVISIBLE. `mg done <id> --successor <real-but-wrong-id>` exited
+// 0 and printed nothing about what it had linked, which is what let a
+// fabricated id gate a live pending item on a ticket that can never complete.
+// A title on stdout at the callsite is not a guard and does not pretend to be
+// one; it is the difference between a mistake anyone reads and a mistake nobody
+// can see.
+type SuccessorRef struct {
+	ID     string // the id as recorded on the tag
+	Title  string // the successor's title, or empty if it could not be read
+	Status string // available | claimed | done | pending | shelved | archived
+}
+
+// DescribeSuccessors resolves every successor: tag on item and reports what
+// each one names, in tag order.
+//
+// A tag that resolves to nothing, or to an ambiguous pair, still yields a ref —
+// with an empty Status — because the caller's job here is to SHOW what is
+// recorded, and a pointer at nothing is exactly the thing worth showing. Read
+// errors are likewise reported as an empty Title rather than failing the
+// caller: this runs after a completion has already happened, and a display
+// helper must never turn a landed transition into an error.
+func DescribeSuccessors(root string, item *Item) []SuccessorRef {
+	ids := SuccessorIDs(item)
+	refs := make([]SuccessorRef, 0, len(ids))
+	for _, sid := range ids {
+		ref := SuccessorRef{ID: sid}
+		matches, err := Resolve(root, sid)
+		if err == nil && len(matches) == 1 {
+			ref.Status = matches[0].Status
+			if s, err := readFile(matches[0].Path); err == nil {
+				ref.Title = s.Title
+			}
+		}
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
 // requireSuccessor reports whether item may be archived: nil when it is not a
 // design, or when it carries a successor: tag naming an item that still exists.
 //

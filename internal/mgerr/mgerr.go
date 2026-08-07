@@ -21,7 +21,10 @@
 // See docs/error-taxonomy.md for the public contract.
 package mgerr
 
-import "errors"
+import (
+	"errors"
+	"strings"
+)
 
 // Category is the coarse error class. Each value maps to exactly one process
 // exit code (ExitCode) and one frozen JSON name (String). The zero value is
@@ -155,6 +158,31 @@ func Wrap(cat Category, code string, err error, hint string) *Error {
 func (e *Error) WithRetryable(v bool) *Error {
 	e.Retryable = v
 	return e
+}
+
+// AppendHint returns a COPY of e whose Hint carries extra as an additional
+// sentence. It is a copy and not a mutation because the refusals in workitem
+// are built by shared constructors — errRemainderWithoutSuccessor and friends
+// return a fresh *Error per call today, but a producer that ever hoists one to
+// a package-level var would otherwise find its hint growing a sentence per
+// call. The Category, Code, Message and Retryable are unchanged: appending a
+// hint must never alter what the error IS, only what it tells the reader to do.
+//
+// The caller decides what is worth saying; this is only the seam that keeps the
+// two levels (Message vs Hint) from being flattened together, which is the
+// separation the Error doc above exists to protect.
+func (e *Error) AppendHint(extra string) *Error {
+	extra = strings.TrimSpace(extra)
+	if extra == "" {
+		return e
+	}
+	c := *e
+	if h := strings.TrimSpace(c.Hint); h != "" {
+		c.Hint = h + " " + extra
+	} else {
+		c.Hint = extra
+	}
+	return &c
 }
 
 // Coerce turns any error into an *Error for the renderer at the single exit

@@ -37,6 +37,23 @@ completed record names its own tracker for any later reader. The successor must
 already exist and cannot be the item itself; a tag pointing at nothing tracks
 nothing.
 
+That is the ONLY thing mg can check about a successor. An id that exists but
+names the WRONG item is a legal argument, and it gates a live item on a ticket
+that will never carry the work. So mg prints what it linked:
+
+    Successor mg-4b01 (available): build the thing the triage recommended
+
+Read that line. It is the only place a wrong-but-real id is visible, and it is
+printed whenever the completed item carries a successor: tag — whether this run
+supplied it or an earlier edit did.
+
+--result IS NOT LOST WHEN THIS COMMAND REFUSES. The result sidecar is written
+before the guards run, beside the item where it currently sits, and travels
+with the item to wherever it goes next. A refusal costs you a retry, never the
+payload — so there is never a reason to invent a successor id to get a command
+through. Re-run once the real successor exists; the result is carried into
+done/ whether or not you pass --result again.
+
 If a triage concludes that nothing is owed after all — or the default was
 simply wrong for this item — the declaration is wrong and the right fix is to
 retract it, not to work around it:
@@ -75,6 +92,27 @@ before.`,
 		}
 
 		fmt.Printf("Done %s: %s\n", item.ID, item.Title)
+
+		// Say what the successor IS, not merely that there was one. `--successor`
+		// can only check that the id exists, so a real id naming the wrong item
+		// used to complete with exit 0 and no output at all — see SuccessorRef
+		// for why the two structural checks were measured and rejected. Printing
+		// the title puts the mistake in front of the operator who made it, at the
+		// callsite, while the intended item is still in mind.
+		//
+		// This reads the item's tags rather than the flag, so an item completing
+		// on a successor: tag recorded earlier (by `mg edit --add-tags`, or a
+		// previous run) is reported the same way. The flag is one route to the
+		// tag, not the thing being reported.
+		for _, s := range workitem.DescribeSuccessors(root, item) {
+			switch {
+			case s.Status == "":
+				fmt.Printf("Successor %s: UNRESOLVED\n", s.ID)
+			default:
+				fmt.Printf("Successor %s (%s): %s\n", s.ID, s.Status, s.Title)
+			}
+		}
+
 		if len(resultJSON) > 0 {
 			fmt.Printf("Result written to %s.result.json\n", item.ID)
 		}

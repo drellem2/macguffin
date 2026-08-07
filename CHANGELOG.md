@@ -146,6 +146,39 @@ derived at all — no git, no tags, or a build from a source tarball.
   than framing it purely as an intrusion on somebody else. The refusal also
   carries its proper taxonomy (`conflict`, exit 4) instead of a bare exit 1.
 
+- **`mg done` no longer discards `--result` when it refuses, and it names the
+  successor it linked (mg-9259).** Two faces of one defect. The
+  declared-remainder guard refused before the sidecar was written, so a refusal
+  destroyed the caller's `--result` — which existed nowhere but argv. On the
+  gh-issue track the successor build ticket is not filed until after the human
+  gate, so at the moment a triage reports, *no id can legally satisfy the
+  guard*. The operator's real choice was "supply a successor or lose your work"
+  with no correct value available, and the only move that got the command
+  through was a real id naming the wrong item — which `mg done` then accepted
+  with exit 0 and no output of any kind, silently gating a live pending item on
+  a ticket that can never carry the work.
+
+  The result is now merged and written **before** the guards run, beside the
+  item where it currently sits. Every transition moves the sidecar with the
+  `.md`, so it travels into `done/` on the retry or back to `available/` on an
+  unclaim; a refusal costs a retry and never the payload. The refusal says so
+  in its hint, because an operator who watches a command exit non-zero assumes
+  the payload went with it and acts on that assumption.
+
+  And `mg done` now prints what it linked —
+  `Successor mg-4b01 (available): build the thing the triage recommended` —
+  whenever the completed item carries a `successor:` tag, whether this run
+  supplied it or an earlier edit did. It is printed rather than enforced
+  because both structural checks were **measured over-firing** against the live
+  store (2026-08-07, 40 successor links across 36 items): requiring the
+  successor to name the item back via `depends:` would refuse 40 of 40, since
+  that back-reference has never once been written; refusing an already-terminal
+  successor would refuse 29 of 40, most of them designs whose build has
+  legitimately landed. `remainder.go` records what a guard firing at that
+  volume costs. The same audit found no mis-wired successor currently in the
+  store: 39 of 40 successors cite their predecessor in prose, and the exception
+  is a self-described throwaway probe.
+
 - **The install test suite ran nowhere, and could not have failed if it had
   (mg-0466).** Two separate defects, either of which alone made the other
   invisible. `scripts/test-install.sh` was in no runner: not `test.sh`, not
