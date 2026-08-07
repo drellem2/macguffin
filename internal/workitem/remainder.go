@@ -201,17 +201,34 @@ func requireRemainderDischarged(root string, item *Item) error {
 // the ITEM and the REASON, because an agent that hits it is mid-protocol and
 // the two questions it will ask are "which one?" and "why now?".
 //
-// The hint offers `--successor <id>` and nothing else. Retracting the
-// declaration (`mg edit <id> --rm-tags=declares-remainder`) is the correct move
-// when a triage concludes that nothing is owed after all, and it is documented
-// in `mg done --help` — where it is read deliberately. It is deliberately
-// ABSENT here for the reason errNoSuccessor gives: an agent that hits a refusal
-// at speed reaches for whatever the message hands it, and a guard whose own
+// The hint offers `--successor <id>`. Retracting the declaration
+// (`mg edit <id> --rm-tags=declares-remainder`) is the correct move when a
+// triage concludes that nothing is owed after all, and it is documented in
+// `mg done --help` — where it is read deliberately. It is deliberately ABSENT
+// here for the reason errNoSuccessor gives: an agent that hits a refusal at
+// speed reaches for whatever the message hands it, and a guard whose own
 // failure text teaches the retraction is decorative.
+//
+// IT ALSO NAMES THE WAY OUT THAT IS NOT A WAY OUT (mg-ed7b), and the two are
+// not the same kind of sentence. On the gh-issue track this refusal fires at a
+// moment when NO id can legally satisfy it: the successor build ticket is not
+// filed until after the human gate, so the agent standing here has finished its
+// work, cannot complete, and cannot name anything. Offering it only `--successor`
+// leaves it to improvise a hold, and what it improvises is holding the CLAIM —
+// which says someone took the item and says nothing about why, and which a
+// sweeper collecting claims from dead agents released five times over on
+// 2026-08-07. The pressure is the same shape mg-9259 found in this very guard:
+// a refusal that names no reachable move buys a fabricated one.
+//
+// Handing the item to whoever it waits on does not discharge anything. The item
+// stays open, keeps its declaration, and trips this guard again at the next
+// `mg done` — so unlike the retraction, naming it cannot make the guard
+// decorative. What it changes is where the item waits, and whether the waiting
+// is legible to anything but the protocol that invented it.
 func errRemainderWithoutSuccessor(item *Item) *mgerr.Error {
 	return mgerr.Conflict("remainder_without_successor",
 		fmt.Sprintf("%s declares a remainder (tag %q) and names no successor: completing it would discard the work it recommends, since a completed item cannot be the tracker for undone work.", item.ID, DeclaresRemainderTag),
-		fmt.Sprintf("File the item that carries the recommendation forward, then run 'mg done %s --successor <id>'.", item.ID))
+		fmt.Sprintf("File the item that carries the recommendation forward, then run 'mg done %s --successor <id>'. If the successor cannot exist yet because this item is waiting on someone, do not hold the claim to hold the item — a claim carries no reason and a sweeper cannot tell it from an abandoned one. Say who it waits on and release it: 'mg unclaim %s --assignee=human'.", item.ID, item.ID))
 }
 
 // errRemainderDanglingSuccessor is kept distinct from the bare refusal above

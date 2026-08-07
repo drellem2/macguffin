@@ -23,6 +23,84 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- **A claim is not a hold, and `mg unclaim` stops pretending otherwise
+  (mg-ed7b).** `mg unclaim <id> --assignee=<who>` records who the item is
+  waiting on **and then** releases the claim. `mg unclaim` also now says when it
+  is releasing an item that declares a remainder nothing tracks, and the
+  `work.unclaim` event records its **actor**.
+
+  A claimed item asserts exactly one thing — *someone took this* — and says
+  nothing about why. So a claim held deliberately, as a gate, is
+  indistinguishable to any sweeper from one left behind by a dead agent. On
+  2026-08-07 a daemon bounce left seven claims held by polecats that no longer
+  existed. A sweeper collected them, checked each one **individually** for a
+  pushed branch and a merged commit before touching it, and correctly held back
+  the two with salvageable state. It released five. All five were gh-issue
+  triages: the entire deliverable of a triage is a packet appended to the ticket
+  BODY, so a pushed branch and a merged commit do not exist for one **by
+  construction**, and under that test a finished triage awaiting a human ruling
+  and an abandoned claim are the same object. The five landed in `available/`
+  with their packets intact and nothing holding them; a priority-wake began
+  naming all five as *"ready and unclaimed — claim or dispatch now"*, and the
+  next dispatch onto one would have re-run the triage over the body carrying its
+  only copy. The procedure was right and applied with care. The instrument was
+  blind to a class of work, which is a property of the protocol and not a mistake
+  by the agent that used it.
+
+  **mg was not blind at that moment.** Every one of the five carried
+  `declares-remainder`; four named no successor. That is the same condition
+  `mg done` refuses to complete on — and it is the item's own declaration about
+  its output, never a stage, a type, or a grep of the body, so it sees work whose
+  deliverable is prose exactly as well as it sees a build ticket. mg had it in
+  hand at each release and said nothing. It now says it, and names the
+  correction:
+
+      $ mg unclaim mg-24d2
+      Unclaimed mg-24d2 (was claimed by PID 13012)
+      Note: mg-24d2 declares a remainder and nothing tracks it — the work it
+      recommends is still owed — and it lands in available/ with no assignee, so
+      nothing on it says who is waiting. If this claim was a HOLD rather than an
+      abandoned one, record that now: mg edit mg-24d2 --assignee=human
+
+  **It reports and does not refuse.** A sweep of genuinely stranded claims has to
+  stay one command that works, and a guard here would fire hardest on the
+  abandoned-triage case the sweep exists for. remainder.go records what a guard
+  firing at that volume costs: mg self-installs on merge, so one that blocks the
+  routine operation is removed by whoever it inconveniences. The caller keeps the
+  decision and stops making it blind. An item that declares nothing releases
+  silently, exactly as before — a note on the routine case is a note nobody reads
+  on the case that matters.
+
+  **`--assignee` writes before it releases, and the order is the entire flag.**
+  The `assignee` field already IS the gated state: `human`, `parked` and
+  `blocked:<agent>` are what pogo's dispatcher and its priority-wake both treat
+  as ungettable (one predicate, two enforcement points), so a hold recorded there is respected by a sweeper that knows
+  nothing about triage protocols — which is what `stage: gated` in the body could
+  never be. The two-command form gets the state right and the *window* wrong:
+  mg-24d2 was released at 18:24:18Z and did not get its assignee until
+  18:27:15Z, and it was dispatchable, ungated, and being named by the
+  priority-wake for those 2m57s. A single call cannot be run in the wrong order.
+  A failure to record the assignee **refuses the release outright**, because an
+  item that stays claimed is recovered by re-running while one that reaches
+  `available/` ungated is a live ticket nobody knows is unguarded.
+
+  **The refusal that invented the pattern now names the way out.** `mg done`
+  refuses a declared remainder that names no successor, and on the gh-issue track
+  it fires when no id can legally satisfy it — the build ticket is not filed
+  until after the human gate. An agent offered only `--successor` improvises a
+  hold, and what it improvises is the claim. The hint now also names
+  `mg unclaim <id> --assignee=human`. That discharges nothing: the item keeps its
+  declaration and trips the same guard at the next `mg done`, which is precisely
+  what separates it from the retraction (`--rm-tags=declares-remainder`) the
+  refusal still deliberately declines to teach.
+
+  **The `work.unclaim` event records its actor.** Every other transition records
+  who (mg-3122); the release did not. The five releases were afterwards described
+  as "attributed", and the log lines carry no actor at all — an honest belief
+  about a record nobody had re-read. The event also carries the landed
+  `assignee`, and `remainder_owed=true` when the released item owes one, so the
+  case is searchable after the fact and not only visible at the terminal.
+
 - **`mg mail` has bad addresses (mg-d639).** A recipient mg has never seen is
   now **refused** — exit 3, `no_such_mailbox` — and the refusal names the near
   neighbours it might have meant (*"did you mean `v9ecf`?"*).
