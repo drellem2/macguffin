@@ -347,6 +347,85 @@ func errNoSuchPartition(id, partition string, matches []Match) *mgerr.Error {
 	return mgerr.NotFound("no_such_partition", msg, hint)
 }
 
+// AllIDs returns the id of every work item in the store — live AND terminal,
+// including every archive partition — as a set.
+//
+// It exists because the same question asked per-name does not scale. Resolve
+// walks the whole store for ONE id, which is right for one id and ruinous for a
+// thousand: `mg mail list` enumerates 1361 mailboxes and asks of each whether a
+// work item vouches for the name, and 1361 total walks of a 4118-file archive
+// is seconds of work to answer a question one walk answers. Callers testing
+// many names build this once; callers testing a single name should keep using
+// Resolve, which is cheaper for that case and cannot go stale.
+//
+// Terminal ids are included, unlike LiveIDs. The two feed different questions:
+// LiveIDs answers "who might the sender have MEANT", where a months-retired id
+// is a wrong guess, while this answers "is this name a real work item at all",
+// where a finished item still explains a mailbox named after it.
+//
+// Unreadable directories are skipped rather than failing, matching Resolve: a
+// missing work/shelved/ must not turn every mailbox into an unvouched one.
+func AllIDs(root string) map[string]bool {
+	ids := map[string]bool{}
+
+	collect := func(dir string) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if id := idFromEntry(e.Name()); id != "" {
+				ids[id] = true
+			}
+		}
+	}
+
+	for _, state := range activeStates {
+		collect(filepath.Join(root, "work", state))
+	}
+
+	// Archive records live in a month partition or loose directly under
+	// work/archive/ — Resolve scans both, and so must this, or an id visible to
+	// a single-name lookup would be invisible to a bulk one and the two would
+	// disagree about the same store.
+	archiveRoot := filepath.Join(root, "work", "archive")
+	entries, err := os.ReadDir(archiveRoot)
+	if err != nil {
+		return ids
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			collect(filepath.Join(archiveRoot, e.Name()))
+			continue
+		}
+		// Loose entries match STRICTLY, exactly as matchesArchivedID does, so
+		// an editor backup ("<id>.md.bak") left beside the archive does not
+		// vouch for a name Resolve would call unknown. A bulk answer that is
+		// more permissive than the single-name one is a disagreement between
+		// two views of the same store, and the whole point of a standing is
+		// that it agrees with the refusal it explains.
+		if name := e.Name(); strings.HasSuffix(name, ".md") && len(name) > len(".md") {
+			ids[strings.TrimSuffix(name, ".md")] = true
+		}
+	}
+	return ids
+}
+
+// idFromEntry recovers the work-item id a directory entry names, or "" if it
+// names no item. Only "<id>.md" and the claimed form "<id>.md.<pid>" count;
+// sidecars ("<id>.result.json") and editor leavings ("<id>.md.bak") do not.
+func idFromEntry(name string) string {
+	idx := strings.Index(name, ".md")
+	if idx <= 0 {
+		return ""
+	}
+	rest := name[idx:]
+	if rest != ".md" && !strings.HasPrefix(rest, ".md.") {
+		return ""
+	}
+	return name[:idx]
+}
+
 // LiveIDs returns the ids of every LIVE work item in the store (available,
 // claimed, pending, shelved), sorted. Terminal records — done and archived —
 // are excluded on purpose: this feeds "did you mean ...?" for a mistyped
@@ -370,18 +449,12 @@ func LiveIDs(root string) []string {
 			continue
 		}
 		for _, e := range entries {
-			name := e.Name()
-			idx := strings.Index(name, ".md")
-			if idx <= 0 {
-				continue
-			}
 			// Only "<id>.md" and "<id>.md.<pid>" name an item; a sidecar
-			// ("<id>.result.json") has no ".md" and is skipped above.
-			rest := name[idx:]
-			if rest != ".md" && !strings.HasPrefix(rest, ".md.") {
+			// ("<id>.result.json") has no ".md" and yields "".
+			id := idFromEntry(e.Name())
+			if id == "" {
 				continue
 			}
-			id := name[:idx]
 			if !seen[id] {
 				seen[id] = true
 				ids = append(ids, id)

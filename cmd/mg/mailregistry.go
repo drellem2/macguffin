@@ -136,6 +136,74 @@ func unknownRecipientError(mailRootDir, root, recipient string) error {
 			"pass --create (or run 'mg mail register "+recipient+"' first) — that registers the mailbox and delivers.")
 }
 
+// A mailbox's STANDING is the after-the-fact answer to "what makes this name
+// addressable?" — the same question `mg mail send` asks before it delivers,
+// asked of a box that already exists.
+//
+// It has to be askable afterwards, not only at send time, because the send-time
+// refusal fires once per name and then never again: existence is what it
+// consults, so a name that got past it once (with --create, the documented and
+// therefore reachable escape) is a good address forever after, indistinguishable
+// from one somebody meant. The live example is `daniel` — in daily use, never
+// registered, and until now identical on disk to a box that was set up.
+//
+// Three values, because there are exactly three ways a name can stand:
+//
+//   - registered: a registration record is present. Somebody performed the
+//     deliberate act, and the record says who and when.
+//   - work-item: no record, but a work item is called that. Nothing was
+//     asserted, yet the name is not arbitrary — polecat boxes are named for the
+//     item their agent runs, and the item is still on disk to check. This is
+//     the bulk of the store and it is NOT a problem to report.
+//   - unregistered: neither. The box exists only because mail was delivered to
+//     it. Every phantom box ever minted is here, and so is `daniel`.
+//
+// The values apply to a box that does not exist yet, too, and stay meaningful:
+// "work-item" on a missing box means mail sent there will be accepted, and
+// "unregistered" on a missing box is precisely the address send refuses.
+const (
+	standingRegistered   = "registered"
+	standingWorkItem     = "work-item"
+	standingUnregistered = "unregistered"
+)
+
+// mailboxStanding answers for ONE name, resolving the work item directly. Use
+// mailboxStandingFunc when asking about many.
+func mailboxStanding(mailRootDir, root, name string) string {
+	if mail.IsRegistered(mailRootDir, name) {
+		return standingRegistered
+	}
+	if workItemNamed(root, name) {
+		return standingWorkItem
+	}
+	return standingUnregistered
+}
+
+// mailboxStandingFunc returns a standing lookup backed by ONE walk of the work
+// store, for callers asking about every mailbox at once. Resolve is a full walk
+// per name — right for one name, ruinous for 1361 — so the enumeration pays for
+// the store once and then answers from memory.
+//
+// The set is a snapshot: an item filed while the listing runs is not in it. That
+// is the honest trade for a listing that returns, and it can only ever
+// under-report a work item as an unregistered box, never invent standing a name
+// does not have.
+func mailboxStandingFunc(mailRootDir, root string) func(string) string {
+	ids := workitem.AllIDs(root)
+	prefix := workspace.Prefix(root)
+	return func(name string) string {
+		if mail.IsRegistered(mailRootDir, name) {
+			return standingRegistered
+		}
+		// Both spellings, exactly as workItemNamed tries them: the store
+		// writes "mg-d639" and a mailbox is named "d639".
+		if ids[prefix+name] || ids[name] {
+			return standingWorkItem
+		}
+		return standingUnregistered
+	}
+}
+
 // callerOwnsMailbox reports whether the caller may treat agent's mailbox as its
 // own even though the two names differ. It is the escape from a guard that was
 // firing on people's own inboxes.

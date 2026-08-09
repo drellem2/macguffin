@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/drellem2/macguffin/internal/mail"
 	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/internal/workitem"
 	"github.com/spf13/cobra"
 )
 
@@ -45,10 +47,21 @@ type (
 	// mailbox never existed. Combined with unread this lets a scripted
 	// consumer tell existing-but-empty (present, unread 0) from
 	// never-existed (absent).
+	//
+	// registration is the box's standing (mailregistry.go): "registered" —
+	// somebody performed the deliberate act and a record says who and when;
+	// "work-item" — no record, but a work item is named that, so the name is
+	// derivably legitimate; "unregistered" — neither, so the box exists only
+	// because mail was delivered to it. exists and registration are
+	// INDEPENDENT: a box can exist unregistered (the `daniel` case, in daily
+	// use and never set up) and a box can be absent yet vouched for by a work
+	// item, which is exactly the address a send accepts before any mail
+	// arrives.
 	mailboxJSON struct {
-		Mailbox string `json:"mailbox"`
-		Unread  int    `json:"unread"`
-		Exists  bool   `json:"exists"`
+		Mailbox      string `json:"mailbox"`
+		Unread       int    `json:"unread"`
+		Exists       bool   `json:"exists"`
+		Registration string `json:"registration"`
 	}
 
 	// mailFilterJSON is the trailing summary object emitted by
@@ -69,13 +82,14 @@ type (
 	// silently narrowed view. listed + suppressed is the size of the listing
 	// the filter was applied to.
 	mailFilterJSON struct {
-		Mailbox     string   `json:"mailbox"`
-		Unread      int      `json:"unread"`
-		Exists      bool     `json:"exists"`
-		Listed      int      `json:"listed"`
-		Suppressed  int      `json:"suppressed"`
-		From        []string `json:"from"`
-		ExcludeFrom []string `json:"exclude_from"`
+		Mailbox      string   `json:"mailbox"`
+		Unread       int      `json:"unread"`
+		Exists       bool     `json:"exists"`
+		Registration string   `json:"registration"`
+		Listed       int      `json:"listed"`
+		Suppressed   int      `json:"suppressed"`
+		From         []string `json:"from"`
+		ExcludeFrom  []string `json:"exclude_from"`
 	}
 
 	// mailSendJSON is the single object emitted by `mg mail send --json` and
@@ -127,11 +141,30 @@ type (
 	}
 
 	// mailRegisterJSON is the single object emitted by
-	// `mg mail register --json`. created is false when the mailbox already
-	// existed, which is a successful no-op rather than an error.
+	// `mg mail register --json`.
+	//
+	// created reports whether the MAILDIR was made by this call; registered
+	// reports whether the RECORD was. They are not the same question and used
+	// to be conflated: a box that already existed returned created=false and
+	// changed nothing, which reported "already registered" for 1361 boxes
+	// nobody had ever registered. adopted is the case that separates them —
+	// the box was already there, in use, and this call is the registration it
+	// never had. prior_messages is how much mail it inherited, which the record
+	// notes but does not vouch for.
+	//
+	// registered_at / registered_by / via describe the record that is now on
+	// disk, whether this call wrote it or an earlier one did, so a caller
+	// re-running register is told who actually holds the registration rather
+	// than being handed its own name.
 	mailRegisterJSON struct {
-		Mailbox string `json:"mailbox"`
-		Created bool   `json:"created"`
+		Mailbox       string `json:"mailbox"`
+		Created       bool   `json:"created"`
+		Registered    bool   `json:"registered"`
+		Adopted       bool   `json:"adopted"`
+		PriorMessages int    `json:"prior_messages"`
+		RegisteredAt  string `json:"registered_at,omitempty"`
+		RegisteredBy  string `json:"registered_by,omitempty"`
+		Via           string `json:"via,omitempty"`
 	}
 )
 
@@ -231,7 +264,12 @@ mail to a new agent — it is equally true of both.
 
 Pass --create when the recipient really is new and neither test can see it yet;
 it registers the mailbox and delivers. 'mg mail register NAME' does the same
-registration without sending. The mailbox is still created lazily, and a first
+registration without sending. Both leave a durable record of who registered the
+name and when: --create is an ASSERTION that this recipient is new, and without
+a record that assertion evaporates the moment the box exists — the escape hatch
+would quietly become the way every phantom box gets minted from here on. The
+record says "via":"send --create", so a box established that way stays findable
+as one. See 'mg mail list --help' for what the record is then used to report. The mailbox is still created lazily, and a first
 delivery still notes "(new mailbox created)" — under --json the same signal is
 the boolean "mailbox_created" field.
 
@@ -315,6 +353,22 @@ filled in for you, use 'mg mail reply' instead.`,
 		msgID, err := mail.SendWithOpts(mr, recipient, mailSendFrom, subject, body, opts)
 		if err != nil {
 			return err
+		}
+
+		// --create is an ASSERTION that this recipient is new, so it leaves a
+		// record saying who asserted it and when. Without one the assertion
+		// evaporates the moment the box exists, and the escape hatch quietly
+		// becomes the way every phantom box gets minted from here on.
+		//
+		// AFTER delivery, not before, and that ordering is load-bearing. Send
+		// validates its headers before it touches the filesystem, so a rejected
+		// --subject leaves no message and no lazily created mailbox; writing the
+		// record first put a mailbox on disk for a send that was then refused —
+		// the remedy minting the phantom box it exists to prevent. Registration
+		// is bookkeeping about a delivery that happened, so it belongs after the
+		// delivery happens.
+		if err := registerViaCreate(mr, recipient, existed, "send --create"); err != nil {
+			return deliveredButUnrecorded(recipient, msgID, err)
 		}
 
 		created := !existed
@@ -420,7 +474,31 @@ fictional one. It is the same shape the no-arg mailbox enumeration emits, and it
 carries no "id" field, so a consumer reading messages can tell the two apart.
 Exit status stays 0 in both cases: a mailbox that does not exist yet is the
 normal state of an agent nobody has mailed, and a poller asking after one is
-asking a fair question, not making an error.`,
+asking a fair question, not making an error.
+
+STANDING. The no-arg enumeration also says which boxes nobody established. A
+mailbox is created by delivering to it, so existence was never evidence that
+anyone MEANT the name: the send-time refusal fires once, and a name talked past
+it with --create was a good address forever after. Every box now reports one of
+three answers, as "registration" under --json:
+
+  registered    a registration record exists — somebody performed the
+                deliberate act, and the record names who and when
+  work-item     no record, but a work item is called that, so the name is
+                derivably legitimate. Most of the store; NOT flagged
+  unregistered  neither: the box exists only because mail was delivered to it
+
+Only the last is marked, and the footer counts them and says how many are
+holding mail right now — a marker on half the rows discriminates nothing
+without that. Nothing is refused on the basis of standing; run
+'mg mail register NAME' to adopt a box already in use.
+
+The per-box form stays quiet about standing on the human path, because agents
+poll their own box every few minutes and a line there would be a nag on the
+healthy path. Under --json the answer is on the per-box status object when
+there is nothing to list, and on every mailbox in the no-arg enumeration — so
+'mg mail list --json' is where to ask about a box that HAS mail, since that
+stream is the messages themselves.`,
 	Args: usageArgs(cobra.MaximumNArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		mr, err := mailRoot()
@@ -500,14 +578,19 @@ asking a fair question, not making an error.`,
 			// count of what was removed from it. It is a superset of the
 			// empty-mailbox sentinel, so it replaces rather than joins it.
 			if filter.active() {
+				standing, err := listStanding(mr, agent)
+				if err != nil {
+					return err
+				}
 				return encodeJSON(mailFilterJSON{
-					Mailbox:     agent,
-					Unread:      unreadCount(mr, agent),
-					Exists:      exists,
-					Listed:      len(shown),
-					Suppressed:  total - len(shown),
-					From:        jsonNames(mailListFrom),
-					ExcludeFrom: jsonNames(mailListExcludeFrom),
+					Mailbox:      agent,
+					Unread:       unreadCount(mr, agent),
+					Exists:       exists,
+					Registration: standing,
+					Listed:       len(shown),
+					Suppressed:   total - len(shown),
+					From:         jsonNames(mailListFrom),
+					ExcludeFrom:  jsonNames(mailListExcludeFrom),
 				})
 			}
 			// An empty stream used to be the ONLY output for both a mailbox
@@ -515,10 +598,15 @@ asking a fair question, not making an error.`,
 			// scripted consumer could tell a quiet inbox from a misdelivery.
 			// Emit the box's own state instead of nothing.
 			if len(shown) == 0 {
+				standing, err := listStanding(mr, agent)
+				if err != nil {
+					return err
+				}
 				return encodeJSON(mailboxJSON{
-					Mailbox: agent,
-					Unread:  unreadCount(mr, agent),
-					Exists:  exists,
+					Mailbox:      agent,
+					Unread:       unreadCount(mr, agent),
+					Exists:       exists,
+					Registration: standing,
 				})
 			}
 			// malformed count is still surfaced per-file on stderr by the
@@ -573,6 +661,17 @@ asking a fair question, not making an error.`,
 	},
 }
 
+// listStanding resolves one mailbox's standing for the --json status objects.
+// It resolves the workspace root itself so the caller is not forced to do so on
+// the paths that never need it.
+func listStanding(mailRootDir, agent string) (string, error) {
+	root, err := resolveRoot()
+	if err != nil {
+		return "", err
+	}
+	return mailboxStanding(mailRootDir, root, agent), nil
+}
+
 // unreadCount reports how many unread messages sit in an agent's mailbox,
 // reporting 0 for a mailbox that does not exist. It is the "unread" half of the
 // --json status object, and it is computed independently of the listing mode so
@@ -587,18 +686,39 @@ func unreadCount(mailRootDir, agent string) int {
 }
 
 // runMailboxList implements the no-arg `mg mail list` mailbox enumeration (#53).
+//
+// This is the diagnostic view — the one an operator opens to ask what the mail
+// store actually contains — so it is where a box's STANDING belongs. A box
+// nothing vouches for is marked, and only that case is: the store is mostly
+// polecat boxes named for their work item, and marking those too would bury the
+// handful that matter under a thousand rows of the ordinary, which is exactly
+// how "(new mailbox created)" stopped being read.
+//
+// The per-box view (`mg mail list AGENT`) stays silent about standing on
+// purpose. Polecats poll it every ten minutes and their own boxes are
+// work-item boxes; a line there would be a nag on the healthy path, and the
+// signal-to-noise the sender filter (mg-5168) bought back would go straight out
+// again. The answer is still available per box under --json.
 func runMailboxList(mr string) error {
 	boxes, err := mail.ListMailboxes(mr)
 	if err != nil {
 		return err
 	}
+	root, err := resolveRoot()
+	if err != nil {
+		return err
+	}
+	// One walk of the work store for the whole enumeration; see
+	// mailboxStandingFunc.
+	standingOf := mailboxStandingFunc(mr, root)
 
 	if mailJSON {
 		for _, b := range boxes {
 			if err := encodeJSON(mailboxJSON{
-				Mailbox: b.Name,
-				Unread:  b.Unread,
-				Exists:  true,
+				Mailbox:      b.Name,
+				Unread:       b.Unread,
+				Exists:       true,
+				Registration: standingOf(b.Name),
 			}); err != nil {
 				return err
 			}
@@ -611,10 +731,64 @@ func runMailboxList(mr string) error {
 		return nil
 	}
 
+	unregistered, inUse, strays := 0, 0, 0
 	for _, b := range boxes {
-		fmt.Printf("  %-16s  %d unread\n", b.Name, b.Unread)
+		mark := ""
+		if standingOf(b.Name) == standingUnregistered {
+			unregistered++
+			if b.Unread > 0 {
+				inUse++
+			}
+			// A box whose own name canonicalizes to something else is a
+			// STRAY: 'mg mail register' refuses it, because registering it
+			// would register the canonical twin and mint an empty box beside
+			// it. Counted here so the footer does not send a reader at a
+			// guaranteed refusal for 135 of the rows it just marked.
+			if b.Name != canonicalAgent(b.Name) {
+				strays++
+			}
+			mark = "  UNREGISTERED"
+		}
+		fmt.Printf("  %-16s  %d unread%s\n", b.Name, b.Unread, mark)
+	}
+
+	// The footer is the part that travels. A marked row is only seen by
+	// someone already reading that row; the count is what tells a reader
+	// scrolling past that the store has boxes nobody established, and names
+	// the one command that closes the gap.
+	//
+	// The in-use figure is what keeps the mark off the wallpaper. Measured on
+	// the live store, 666 of 1361 boxes are unregistered — half the rows — and
+	// a marker on half the rows discriminates nothing, which is precisely how
+	// "(new mailbox created)" stopped being read. Most of that half is dead:
+	// retired agents and the stray prefixed boxes 'mg mail migrate' exists to
+	// merge. The ones that MATTER are the boxes taking real mail right now with
+	// nothing vouching for them, and that is a number a reader can act on.
+	if unregistered > 0 {
+		verb := "are"
+		if unregistered == 1 {
+			verb = "is"
+		}
+		fmt.Printf("\n%d of %d mailboxes %s UNREGISTERED: the box exists only because mail was delivered to it, and no work item is named for it either.\n",
+			unregistered, len(boxes), verb)
+		if inUse > 0 {
+			fmt.Printf("%d of those %s holding mail: in use right now, with nothing recording who the name belongs to.\n",
+				inUse, pluralAre(inUse))
+		}
+		fmt.Printf("Nothing is refused — mail to them is delivered as always. Run 'mg mail register NAME' to adopt one, which records who vouches for the name.\n")
+		if strays > 0 {
+			fmt.Printf("%d of them carry a harness prefix (mg-/cat-) and are STRAYS, not names to adopt: their mail belongs in the canonical box. Run 'mg mail migrate --dry-run' for those — 'mg mail register' refuses them.\n", strays)
+		}
 	}
 	return nil
+}
+
+// pluralAre renders "is"/"are" for a count.
+func pluralAre(n int) string {
+	if n == 1 {
+		return "is"
+	}
+	return "are"
 }
 
 var mailReadCmd = &cobra.Command{
@@ -900,6 +1074,9 @@ answered into a phantom mailbox, and --create is the override.`,
 		if err != nil {
 			return err
 		}
+		if err := registerViaCreate(mr, recipient, existed, "reply --create"); err != nil {
+			return deliveredButUnrecorded(recipient, newID, err)
+		}
 
 		// The reply is delivered; now mark the original read. Ordering matters:
 		// a send that fails above must not consume the original's unread state.
@@ -942,19 +1119,48 @@ var mailRegisterCmd = &cobra.Command{
 refusal existed every send succeeded and a typo'd name minted a dead drop that
 reported "Delivered". A recipient counts as seen when a mailbox of that name
 exists, or when a work item is called that. This command supplies the first of
-those directly: it creates the empty Maildir (tmp/, new/, cur/) and nothing
-else, so a new crew agent can be addressed before anyone has mailed it.
+those directly: it creates the empty Maildir, so a new crew agent can be
+addressed before anyone has mailed it.
 
-It is IDEMPOTENT — registering an existing mailbox is exit 0 and changes
-nothing, so it is safe in setup scripts. It never touches mail, which is why
-registering a mailbox someone already uses cannot lose anything.
+It also writes a durable REGISTRATION RECORD naming who registered the box and
+when. Existence alone could never answer "was this name meant?" — a box is
+created by delivering to it, so a name talked past the refusal once is a good
+address forever after, identical on disk to one somebody set up deliberately.
+The 'daniel' mailbox is the live proof: in daily use, receiving real mail from
+several agents, and never registered. It works, and "it works" is exactly the
+evidence that was missing.
+
+Registering a box that ALREADY EXISTS adopts it: the record is written, marked
+adopted, and stamped with how much mail was already there. This is how a store
+full of boxes that predate the record is brought into compliance, one name at a
+time, and it is what 'mg mail list' points at when it marks a box unregistered.
+Adoption vouches for the NAME going forward; it makes no claim about the mail
+already in the box.
+
+A STRAY PREFIXED BOX is refused rather than adopted. Mailbox names are
+canonicalized, so registering an existing box named "cat-mg-01ce" would register
+"01ce" instead: it mints a new empty mailbox, reports success, and leaves the
+stray's mail exactly where it was. That is the phantom-box defect wearing a
+fresh hat, produced by following the advice 'mg mail list' prints — so it is a
+refusal (exit 4) naming 'mg mail migrate', which is the command that actually
+merges a stray into its canonical box.
+
+It is IDEMPOTENT — registering a box that already holds a record is exit 0 and
+changes nothing, and the existing record's who/when is reported rather than
+overwritten, because the record's value is naming the FIRST deliberate act. It
+never touches mail, which is why registering a mailbox someone already uses
+cannot lose anything.
 
 'mg mail send AGENT --create' is the inline spelling: it registers and delivers
-in one step. Use this command when the registration should happen ahead of any
-message — provisioning an agent, or reserving the name it will be reached by.
+in one step, and its record says so ("via":"send --create") — a box established
+in the act of talking past a refusal is worth being able to find later. Use this
+command when the registration should happen ahead of any message — provisioning
+an agent, or reserving the name it will be reached by.
 
-With --json the result is a single object {mailbox,created}, where created is
-false for a mailbox that already existed.`,
+With --json the result is a single object {mailbox,created,registered,adopted,
+prior_messages,registered_at,registered_by,via}: created is whether the maildir
+was made by this call, registered whether the record was, and the rest describe
+the record now on disk whoever wrote it.`,
 	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Canonicalize exactly as send/list do, so registering the alias
@@ -967,21 +1173,215 @@ false for a mailbox that already existed.`,
 			return err
 		}
 
+		// ...but when the alias is itself a real box on disk, canonicalizing
+		// silently retargets the command at a DIFFERENT mailbox. See
+		// strayMailboxError: this is the one shape where registering a name
+		// that `mg mail list` just marked creates a phantom box instead of
+		// accounting for one.
+		if raw := args[0]; raw != agent && mail.MailboxExists(mr, raw) {
+			return strayMailboxError(mr, raw, agent)
+		}
+
 		existed := mail.MailboxExists(mr, agent)
-		if err := mail.EnsureMaildir(mr, agent); err != nil {
+		// Counted BEFORE the record is written, and counted only when there is
+		// something to count: this is the size of what an adoption inherits
+		// without vouching for it.
+		prior := 0
+		if existed {
+			prior, err = mailboxMessageCount(mr, agent)
+			if err != nil {
+				return err
+			}
+		}
+
+		rec := mail.Registration{RegisteredBy: workitem.Actor(), Via: "register"}
+		wrote := true
+		switch err := mail.Register(mr, agent, rec, existed, prior); {
+		case errors.Is(err, mail.ErrAlreadyRegistered):
+			// Idempotent, and deliberately not a rewrite: the record already
+			// names a first deliberate act, and replacing it would erase the
+			// only copy of who and when.
+			wrote = false
+		case err != nil:
 			return err
 		}
 
+		// Report the record ON DISK, not the one just built. When this call did
+		// not write, the two differ, and printing our own would tell a caller
+		// its own name for a registration somebody else holds.
+		onDisk, registered := mail.ReadRegistration(mr, agent)
+
 		if mailJSON {
-			return encodeJSON(mailRegisterJSON{Mailbox: agent, Created: !existed})
+			out := mailRegisterJSON{
+				Mailbox:    agent,
+				Created:    !existed,
+				Registered: wrote,
+			}
+			if onDisk != nil {
+				out.Adopted = onDisk.Adopted
+				out.PriorMessages = onDisk.PriorMessages
+				out.RegisteredAt = onDisk.RegisteredAt
+				out.RegisteredBy = onDisk.RegisteredBy
+				out.Via = onDisk.Via
+			}
+			return encodeJSON(out)
 		}
-		if existed {
-			fmt.Printf("Mailbox %s is already registered\n", agent)
-		} else {
+
+		switch {
+		case !wrote:
+			fmt.Printf("Mailbox %s is already registered%s\n", agent, registrationDetail(onDisk, registered))
+		case existed:
+			// The adoption case says outright that the box was in use
+			// unregistered. "Registered mailbox: X" would be true and would
+			// hide the thing worth knowing — that this name has been
+			// receiving mail all along with nothing vouching for it.
+			fmt.Printf("Registered existing mailbox: %s — it was in use UNREGISTERED, with %s already delivered; this registration vouches for the name from now on, not for that mail\n",
+				agent, plural(prior, "message", "messages"))
+		default:
 			fmt.Printf("Registered mailbox: %s\n", agent)
 		}
 		return nil
 	},
+}
+
+// strayMailboxError refuses to register a name that is BOTH an existing mailbox
+// and an alias of a different one.
+//
+// Every mailbox argument is canonicalized, which is right for send and list —
+// mail addressed to "cat-mg-01ce" belongs in the live box "01ce". Applied to
+// register it is a trap: the caller names a box they can see in the listing,
+// and the command registers a different name, mints a brand-new empty mailbox
+// for it, and reports success while the box they pointed at keeps its mail and
+// keeps its UNREGISTERED mark.
+//
+// That is this change's own defect reproduced by its own remedy — the listing
+// says "run 'mg mail register NAME'", and for the 135-odd prefixed strays in
+// the live store, following that advice mints a phantom box. So it is refused,
+// and the refusal names 'mg mail migrate', which is the command that actually
+// merges a stray into its canonical box rather than creating a twin beside it.
+//
+// CatConflict (exit 4), not not_found: both names exist, and the objection is
+// to the state they are in, not to a name mg cannot see.
+func strayMailboxError(mailRootDir, raw, canonical string) error {
+	held := ""
+	switch n, err := mailboxMessageCount(mailRootDir, raw); {
+	case err != nil || n == 0:
+	case n == 1:
+		held = ", leaving its 1 message where it is"
+	default:
+		held = fmt.Sprintf(", leaving its %d messages where they are", n)
+	}
+	return mgerr.Conflict("stray_mailbox",
+		fmt.Sprintf("%q is a stray prefixed mailbox: mailbox names are canonicalized, so registering it would register %q instead — minting a new empty mailbox%s",
+			raw, canonical, held),
+		fmt.Sprintf("run 'mg mail migrate --dry-run' to see what would move, then 'mg mail migrate' to merge %s into %s. To register the canonical name on purpose, name it directly: 'mg mail register %s'.",
+			raw, canonical, canonical))
+}
+
+// registrationDetail renders " (registered by X at T, via Y)" for an existing
+// record, or a plain statement that the detail is unreadable.
+//
+// registered is passed separately from rec because the two answer different
+// questions and a damaged file separates them: presence is the registration,
+// and losing the contents must not be allowed to report the box as unregistered
+// — that would turn a corrupted file into a silent retraction of the fact it
+// was written to record.
+func registrationDetail(rec *mail.Registration, registered bool) string {
+	if !registered {
+		return ""
+	}
+	if rec == nil {
+		return " (its registration record is unreadable, so who and when are lost; the registration itself stands)"
+	}
+	detail := ""
+	if rec.RegisteredBy != "" {
+		detail += " by " + rec.RegisteredBy
+	}
+	if rec.RegisteredAt != "" {
+		detail += " at " + rec.RegisteredAt
+	}
+	if rec.Via != "" {
+		detail += ", via " + rec.Via
+	}
+	if rec.Adopted {
+		detail += " (adopted: the box already existed)"
+	}
+	if detail == "" {
+		return ""
+	}
+	return " —" + detail
+}
+
+// registerViaCreate writes the registration record for a box being established
+// by --create. It is a no-op without the flag, and a no-op for a box that
+// already exists.
+//
+// Both no-ops are deliberate. Without --create, nothing was asserted: a first
+// delivery to a name a work item vouches for is legitimate precisely BECAUSE
+// the work item vouches for it, and stamping a record there would manufacture
+// evidence of a step nobody took — the same lie, told the other way round, as
+// the "already registered" this change removes.
+//
+// And --create aimed at a box that already existed established nothing, so it
+// cannot vouch for it. The caller asserted the recipient was new and it was
+// not; leaving the box unregistered keeps `mg mail list` pointing at it, which
+// is the outcome that gets a human to look — and it stops --create silencing
+// the marker as well as the refusal.
+//
+// existedBefore is passed in rather than measured, because by the time this
+// runs the delivery has already created the box: asking the filesystem now
+// would answer "yes" for every recipient and register none of them.
+func registerViaCreate(mailRootDir, recipient string, existedBefore bool, via string) error {
+	if !mailSendCreate || existedBefore {
+		return nil
+	}
+	rec := mail.Registration{RegisteredBy: workitem.Actor(), Via: via}
+	if err := mail.Register(mailRootDir, recipient, rec, false, 0); err != nil &&
+		!errors.Is(err, mail.ErrAlreadyRegistered) {
+		return err
+	}
+	return nil
+}
+
+// deliveredButUnrecorded reports a registration that failed AFTER its message
+// was delivered. It leads with the delivery, because that is the part the
+// caller must not repeat: a sender told only "registration failed" re-sends,
+// and the recipient gets the message twice.
+//
+// The state left behind is degraded but not silent — the box exists, holds the
+// mail, and carries no record, so `mg mail list` marks it UNREGISTERED and
+// names the command that finishes the job. That is the same shape as the reply
+// path's "delivered, but marking read failed": the durable half succeeded, and
+// the caller is told exactly which half did not.
+func deliveredButUnrecorded(recipient, msgID string, err error) error {
+	return mgerr.Wrap(mgerr.CatInternal, "registration_failed", err,
+		fmt.Sprintf("the message WAS delivered as %s/new/%s — do not re-send it. Only the registration record failed, so %s will show as UNREGISTERED in 'mg mail list'; run 'mg mail register %s' to record it.",
+			recipient, msgID, recipient, recipient))
+}
+
+// mailboxMessageCount reports how much mail a box holds ALTOGETHER — unread,
+// read and archived. It is the figure an adoption records, so it counts the
+// archive too: mail somebody already filed is still mail the registration does
+// not vouch for, and a count that quietly excluded it would understate exactly
+// the history worth noticing.
+func mailboxMessageCount(mailRootDir, agent string) (int, error) {
+	msgs, _, err := mail.ListAll(mailRootDir, agent)
+	if err != nil {
+		return 0, err
+	}
+	archived, _, err := mail.ListArchived(mailRootDir, agent)
+	if err != nil {
+		return 0, err
+	}
+	return len(msgs) + len(archived), nil
+}
+
+// plural renders "1 message" / "3 messages".
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 var mailMigrateCmd = &cobra.Command{

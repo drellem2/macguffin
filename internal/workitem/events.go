@@ -48,6 +48,17 @@ import (
 //
 // The item is not consulted at ANY step, and the parameter is gone rather than
 // ignored, so the assignee cannot quietly become the answer again.
+// Actor exposes the resolution above to callers outside this package that must
+// attribute an action to whoever ran it — `mg mail register`, which stamps the
+// registering agent into a mailbox's durable record.
+//
+// It is exported rather than reimplemented so there stays exactly ONE answer to
+// "who ran this mg command". A second implementation would drift: the mail audit
+// log already reads POGO_AGENT_NAME alone (internal/mail/audit.go), and two logs
+// naming the same caller differently is how an operator ends up correlating two
+// records that are about the same agent and cannot tell.
+func Actor() string { return actor() }
+
 func actor() string {
 	if a := strings.TrimSpace(os.Getenv("MG_ACTOR")); a != "" {
 		return a

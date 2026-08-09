@@ -23,6 +23,58 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- **A mailbox registration is now a durable record, so an unregistered box is
+  distinguishable after the fact (mg-d639).** `mg mail send` already refuses a
+  recipient mg has never seen — but that refusal fires **once per name**.
+  Existence is what it consults, and a mailbox is created by delivering to it,
+  so a name talked past the refusal once with `--create` became a good address
+  forever after, indistinguishable on disk from one somebody deliberately
+  established. The live proof was the `daniel` mailbox: in daily use, receiving
+  real mail from several agents, never registered. It *works*, and "it works" is
+  exactly the evidence that was missing.
+
+  `mg mail register` and `send`/`reply --create` now write
+  `.registration.json` inside the mailbox, naming **who** registered it,
+  **when**, and **via which spelling** — so a box established while talking past
+  a refusal stays findable as one. A box's **standing** is one of three answers,
+  reported as `registration` on every `mg mail list --json` mailbox object:
+
+  - `registered` — a record exists; somebody performed the deliberate act.
+  - `work-item` — no record, but a work item is named that, so the name is
+    derivably legitimate. This is most of the store and is **not** flagged.
+  - `unregistered` — neither: the box exists only because mail was delivered to
+    it.
+
+  `mg mail list` marks unregistered boxes and counts them, including how many
+  are **holding mail right now** — measured on the live store, 666 of 1365 boxes
+  are unregistered and 567 of those are in use, and a marker on half the rows
+  discriminates nothing without that second figure.
+
+  Registering a box that already exists now **adopts** it rather than reporting
+  `Mailbox X is already registered`, which was a false statement about every box
+  that merely existed. The record is marked `adopted` and stamped with how much
+  mail was already there, which it explicitly does not vouch for. Re-registering
+  never rewrites an existing record — its value is naming the *first* deliberate
+  act — and reports the record's real owner rather than the caller's own name.
+
+  **Nothing is refused on the basis of standing.** 1361 boxes predate the
+  record, and a store-wide refusal would break every one of them to punish a
+  bookkeeping gap they had no way to close. The record makes the gap visible and
+  closable; enforcement is a separate decision that needed the record first.
+
+  Three failure modes are handled rather than assumed away. A record that cannot
+  be parsed still counts as registered — presence is the fact, contents are
+  detail, otherwise a corrupted file becomes a silent retraction of what it was
+  written to record. `mg mail migrate` carries a stray box's registration to the
+  canonical box rather than deleting it with the directory. And registering a
+  **stray prefixed box** is now refused (exit 4, `stray_mailbox`): mailbox names
+  are canonicalized, so `mg mail register cat-mg-01ce` registered `01ce`
+  instead — minting a new empty mailbox, reporting success, and leaving the box
+  the caller pointed at holding its mail and still marked. That was a phantom
+  mailbox produced by following the advice the new listing prints, so the
+  refusal names `mg mail migrate` and the footer separates strays (463 of the
+  667) from the names actually worth adopting.
+
 - **`mg mail list AGENT` takes a sender predicate, and always says what it hid
   (mg-5168).** `--from=NAME` lists only mail from those senders;
   `--exclude-from=NAME` hides them. Both are repeatable and comma-separated, and

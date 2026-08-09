@@ -692,6 +692,31 @@ func MergeMailbox(mailRoot, from, to string) (MergeResult, error) {
 		}
 	}
 
+	// Carry the stray's registration to the canonical box when that box has
+	// none. RemoveAll below takes the whole directory, record included, so
+	// without this a migration would silently retract a registration somebody
+	// performed — turning a vouched-for name into an unregistered one as a side
+	// effect of tidying, which is the same disappearing-evidence the record
+	// exists to stop. An existing record on the destination WINS: it names the
+	// first deliberate act for the name that survives, and the stray's is about
+	// a spelling that is going away.
+	if srcRec, registered := ReadRegistration(mailRoot, from); registered && !IsRegistered(mailRoot, to) {
+		rec := Registration{Via: "migrate"}
+		if srcRec != nil {
+			rec = *srcRec
+		}
+		// The stray's record described the alias; the surviving box may
+		// already hold mail this registration never vouched for, so it is
+		// recorded as the adoption it is.
+		prior := res.Moved
+		if all, _, err := ListAll(mailRoot, to); err == nil {
+			prior = len(all)
+		}
+		if err := Register(mailRoot, to, rec, true, prior); err != nil && !errors.Is(err, ErrAlreadyRegistered) {
+			return res, fmt.Errorf("carrying registration from %s to %s: %w", from, to, err)
+		}
+	}
+
 	// The messages are rescued; drop the emptied stray mailbox (including any
 	// abandoned tmp/ files) so it no longer clutters the mailbox enumeration.
 	if err := os.RemoveAll(fromBox); err != nil {
