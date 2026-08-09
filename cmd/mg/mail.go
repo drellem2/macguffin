@@ -51,6 +51,33 @@ type (
 		Exists  bool   `json:"exists"`
 	}
 
+	// mailFilterJSON is the trailing summary object emitted by
+	// `mg mail list AGENT --json` when — and only when — a sender predicate
+	// (--from / --exclude-from) is active. It is a superset of mailboxJSON, so
+	// it also answers the existing-vs-never-existed question, and it carries
+	// NO "id" field, which is what lets the documented consumer guard
+	//
+	//   jq 'select(.id and .from != "scheduler")'
+	//
+	// skip it exactly as it already skips the empty-mailbox sentinel.
+	//
+	// It is emitted even when messages were listed, because the scripted
+	// reader is the one this has to be safest for: the coordinator's inbox hit
+	// 1,582 unread and a bulk archive of 1,451 noise rows came within a
+	// re-listing of destroying two real messages. A filtered stream that
+	// carried no count of what it removed would let that sweep run against a
+	// silently narrowed view. listed + suppressed is the size of the listing
+	// the filter was applied to.
+	mailFilterJSON struct {
+		Mailbox     string   `json:"mailbox"`
+		Unread      int      `json:"unread"`
+		Exists      bool     `json:"exists"`
+		Listed      int      `json:"listed"`
+		Suppressed  int      `json:"suppressed"`
+		From        []string `json:"from"`
+		ExcludeFrom []string `json:"exclude_from"`
+	}
+
 	// mailSendJSON is the single object emitted by `mg mail send --json` and
 	// `mg mail reply --json`. mailbox_created is true when the recipient's
 	// mailbox did not exist before this delivery, so a scripted caller can
@@ -115,18 +142,20 @@ func encodeJSON(v any) error {
 }
 
 var (
-	mailSendFrom      string
-	mailSendSubject   string
-	mailSendBody      string
-	mailSendBodyFile  string
-	mailSendInReplyTo string
-	mailSendCreate    bool
-	mailListAll       bool
-	mailListArchived  bool
-	mailReadForce     bool
-	mailReplyForce    bool
-	mailMigrateDryRun bool
-	mailJSON          bool
+	mailSendFrom        string
+	mailSendSubject     string
+	mailSendBody        string
+	mailSendBodyFile    string
+	mailSendInReplyTo   string
+	mailSendCreate      bool
+	mailListAll         bool
+	mailListArchived    bool
+	mailListFrom        []string
+	mailListExcludeFrom []string
+	mailReadForce       bool
+	mailReplyForce      bool
+	mailMigrateDryRun   bool
+	mailJSON            bool
 )
 
 // canonicalAgent strips the harness prefixes pogo puts on agent names so
@@ -339,6 +368,45 @@ too; with --archived, archived messages). Under --json each message is one
 NDJSON object {id,from,subject,date,read}; the MSG-ID it prints is the token
 'mg mail read'/'mg mail archive' accept.
 
+SENDER PREDICATE. --from=NAME lists only mail from those senders;
+--exclude-from=NAME hides them. Both are repeatable and comma-separated:
+
+  mg mail list architect --exclude-from=scheduler,stall-watch
+  mg mail list mayor --from=pm-pogo
+
+Both match the From FIELD, exactly — case-insensitively, and with the same
+mg-/cat- prefix stripping every mailbox argument gets, so --from=mg-5168 matches
+a From of "5168". Neither is ever a substring match: --exclude-from=scheduler
+does NOT hide a message from "scheduler-v2", and does not hide a message from a
+real agent whose SUBJECT happens to say "scheduler".
+
+That last property is the reason these flags exist rather than a documentation
+note. The escape agents reached for — 'mg mail list X | grep -v scheduler' — is
+RETRACTED, and these flags are its replacement rather than its shorthand. It
+matches the rendered LINE and therefore discards any real message whose subject
+mentions the scheduler, exactly the correspondence about the noise it was
+introduced to escape. The bug is not a bad pattern but a category error: a
+text filter over a field-structured listing cannot see which column it landed
+in, so no better pattern fixes it. It also self-validates, staying correct until
+the first message that mentions the term, which is correlated with the topic and
+so arrives when the traffic matters most.
+
+A sender name given to BOTH flags is refused: nothing could match, so the empty
+listing would say nothing about the mailbox.
+
+WHAT THE FILTER HID IS ALWAYS REPORTED. A filter is another bounded read, and a
+bounded read that says nothing manufactures absence — the defect these flags
+address. So whenever a predicate is active the listing is preceded by
+
+  sender filter: --exclude-from=scheduler — 1 of 265 shown, 264 hidden
+
+and a predicate that removes EVERYTHING says outright that the mailbox is not
+empty, instead of borrowing the wording of a quiet inbox. Under --json the same
+figures arrive as one trailing object {mailbox,unread,exists,listed,suppressed,
+from,exclude_from}, emitted whether or not any message matched; like the
+empty-mailbox sentinel it carries no "id", so a consumer selecting on .id skips
+it. "unread" is always the mailbox's true unread count, never the filtered one.
+
 A mailbox that NEVER EXISTED is reported as "No such mailbox", not as an empty
 one, and near neighbours are suggested ("did you mean bf3ae?"). The two used to
 differ in prose alone and nothing downstream could use the difference: a human
@@ -360,10 +428,25 @@ asking a fair question, not making an error.`,
 			return err
 		}
 
+		filter, err := newSenderFilter(mailListFrom, mailListExcludeFrom,
+			cmd.Flags().Changed("from"), cmd.Flags().Changed("exclude-from"))
+		if err != nil {
+			return err
+		}
+
 		// No-arg form: enumerate mailboxes (#53).
 		if len(args) == 0 {
 			if mailListAll || mailListArchived {
 				return fmt.Errorf("--all/--archived require an AGENT; run 'mg mail list AGENT --archived'")
+			}
+			// The sender predicate filters MESSAGES; the no-arg form lists
+			// mailboxes, which have no sender. Refusing says so, where
+			// silently ignoring the flag would return a full enumeration that
+			// looks filtered.
+			if filter.active() {
+				return mgerr.Usage("invalid_value",
+					"--from/--exclude-from require an AGENT: they filter messages by sender, and the no-arg form lists mailboxes",
+					"run 'mg mail list AGENT --exclude-from=NAME'")
 			}
 			return runMailboxList(mr)
 		}
@@ -393,8 +476,15 @@ asking a fair question, not making an error.`,
 
 		exists := mail.MailboxExists(mr, agent)
 
+		// total is the size of the listing the predicate was applied to;
+		// shown is what survived it. Both are needed to say what was hidden,
+		// and saying that is what keeps a filtered listing from reading like
+		// an empty mailbox.
+		total := len(msgs)
+		shown := filter.apply(msgs)
+
 		if mailJSON {
-			for _, m := range msgs {
+			for _, m := range shown {
 				if err := encodeJSON(mailMsgJSON{
 					ID:      m.ID,
 					From:    m.From,
@@ -405,11 +495,26 @@ asking a fair question, not making an error.`,
 					return err
 				}
 			}
+			// A trailing summary whenever a predicate is active, so no
+			// scripted consumer can be handed a narrowed stream without the
+			// count of what was removed from it. It is a superset of the
+			// empty-mailbox sentinel, so it replaces rather than joins it.
+			if filter.active() {
+				return encodeJSON(mailFilterJSON{
+					Mailbox:     agent,
+					Unread:      unreadCount(mr, agent),
+					Exists:      exists,
+					Listed:      len(shown),
+					Suppressed:  total - len(shown),
+					From:        jsonNames(mailListFrom),
+					ExcludeFrom: jsonNames(mailListExcludeFrom),
+				})
+			}
 			// An empty stream used to be the ONLY output for both a mailbox
 			// with nothing in it and a mailbox that never existed, so no
 			// scripted consumer could tell a quiet inbox from a misdelivery.
 			// Emit the box's own state instead of nothing.
-			if len(msgs) == 0 {
+			if len(shown) == 0 {
 				return encodeJSON(mailboxJSON{
 					Mailbox: agent,
 					Unread:  unreadCount(mr, agent),
@@ -421,7 +526,12 @@ asking a fair question, not making an error.`,
 			return nil
 		}
 
-		if len(msgs) == 0 {
+		// Above the rows, not below them: see senderFilter.report.
+		if filter.active() {
+			fmt.Print(filter.report(len(shown), total))
+		}
+
+		if len(shown) == 0 {
 			// Distinguish an existing-but-empty mailbox from one that
 			// never existed (#49), keeping exit 0 in both cases.
 			switch {
@@ -432,6 +542,13 @@ asking a fair question, not making an error.`,
 				}
 				fmt.Printf("No such mailbox: %s — it has never existed, so no mail has ever been delivered to it\n%s",
 					agent, suggestionLine(mr, root, agent))
+			case total > 0:
+				// The filter emptied a listing that was NOT empty. Saying
+				// "No unread messages (mailbox exists)" here would be the
+				// defect this flag exists to remove, reproduced by its own
+				// remedy: a bounded read reporting absence it manufactured.
+				fmt.Printf("No %s for %s match the sender filter — the mailbox is NOT empty: all %d %s were hidden by %s\n",
+					listingNoun(), agent, total, listingNoun(), filter.desc)
 			case mailListArchived:
 				fmt.Printf("No archived messages for %s (mailbox exists)\n", agent)
 			case mailListAll:
@@ -440,7 +557,7 @@ asking a fair question, not making an error.`,
 				fmt.Printf("No unread messages for %s (mailbox exists)\n", agent)
 			}
 		} else {
-			for _, m := range msgs {
+			for _, m := range shown {
 				status := "●"
 				if m.Read {
 					status = " "
@@ -973,6 +1090,8 @@ func init() {
 
 	mailListCmd.Flags().BoolVarP(&mailListAll, "all", "a", false, "include read messages from cur/")
 	mailListCmd.Flags().BoolVar(&mailListArchived, "archived", false, "list archived messages instead of the active mailbox")
+	mailListCmd.Flags().StringSliceVar(&mailListFrom, "from", nil, "list only mail from these senders (repeatable, comma-separated); exact match on the From field, never a substring")
+	mailListCmd.Flags().StringSliceVar(&mailListExcludeFrom, "exclude-from", nil, "hide mail from these senders (repeatable, comma-separated); exact match on the From field, so it never hides a real message whose SUBJECT mentions the name")
 	mailListCmd.Flags().BoolVar(&mailJSON, "json", false, "emit one JSON object per line (NDJSON) instead of human-formatted output")
 
 	mailRegisterCmd.Flags().BoolVar(&mailJSON, "json", false, "emit a single JSON object instead of human-formatted output")

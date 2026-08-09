@@ -23,6 +23,74 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- **`mg mail list AGENT` takes a sender predicate, and always says what it hid
+  (mg-5168).** `--from=NAME` lists only mail from those senders;
+  `--exclude-from=NAME` hides them. Both are repeatable and comma-separated, and
+  both match the **From field exactly** — case-insensitively, with the same
+  `mg-`/`cat-` stripping every mailbox argument already gets. A name given to
+  both flags is refused rather than returning an empty listing that says nothing
+  about the mailbox.
+
+  A `*/10` mail-check appends a row every ten minutes forever, so the ratio
+  degrades monotonically with agent uptime. Measured on 2026-08-09: `architect`
+  **264 of 265** unread from `scheduler`, `pm-pogo` **284 of 287**. The mailbox
+  is timestamp-ordered and the noise arrives at **both ends**, so no bounded read
+  from either end can see a message buried in the middle — `tail -N` bounds
+  volume, not time, and two agents that morning used different bounds on
+  different mailboxes (`tail -40` over 265 rows, `tail -60` over 287) and both
+  saw nothing but scheduler rows. One came within a hunch of reporting "no mail"
+  over a real message 32 hours old at roughly row 108. `mayor` looked healthy
+  only because 1,459 real messages swamped 123 noise rows; every low-traffic
+  agent sat at ~99%, and those are the agents for whom one missed message costs
+  the most. Until now `mg mail list` had no sender or subject predicate at all,
+  so there was nothing to filter *with*.
+
+  **The escape that was reached for, `grep -v scheduler`, is retracted, and this
+  is its replacement rather than its shorthand.** It matches the rendered LINE,
+  so it discards any real message whose SUBJECT says "scheduler" — which is to
+  say exactly the correspondence *about* the noise, including mail about this
+  change. That is a category error rather than a bad pattern: a text filter over
+  a field-structured listing cannot see which column it landed in, and no better
+  pattern fixes it. It also **self-validates** — both forms returned identical
+  answers all morning, because no real message had yet mentioned the scheduler,
+  and the collision is correlated with the topic, so it arrives exactly when the
+  traffic matters most. It passed review; the agent that recommended it had just
+  finished writing the note explaining why it fails, and was running a variant
+  that survived the retraction mail only because the subject read "scheduler,"
+  with a comma.
+
+- **A `mg mail list` filter always reports what it removed (mg-5168).** A filter
+  is another bounded read, and a bounded read that reports nothing manufactures
+  absence — so a silent predicate would reproduce, in its own remedy, the defect
+  it was built to remove. Whenever one is active the rows are preceded by
+
+      sender filter: --exclude-from=scheduler — 1 of 265 shown, 264 hidden
+
+  and a predicate that removes **everything** says outright that the mailbox is
+  NOT empty and how many rows it hid, instead of borrowing the wording of a quiet
+  inbox. It is a **header**, for the reason `mg mail read` puts its body-length
+  counts in the header block: a footer is cut by the same bounded read it would
+  warn about.
+
+  Under `--json` the same figures arrive as one trailing object
+  `{mailbox,unread,exists,listed,suppressed,from,exclude_from}`, emitted whether
+  or not any message matched — the scripted reader is the one this has to be
+  safest for, since the coordinator's inbox reached 1,582 unread and a bulk
+  archive of 1,451 noise rows came within a re-listing of destroying a gh-issue
+  triage packet and a fleet-wide notify report. Like the empty-mailbox sentinel
+  it carries **no `id`**, so the documented `jq 'select(.id and …)'` guard skips
+  it unchanged, and `unread` is always the mailbox's true unread count rather
+  than the filtered one. With no predicate given, nothing extra is printed or
+  emitted and every existing invocation is byte-identical to before.
+
+  This is the **mitigation half** of the finding, and deliberately not the fix:
+  removing the mail write removes the noise, while a predicate only helps a
+  consumer who remembers to use it — a reflex that failed for the agent holding
+  the freshly written note about this exact failure. The pogod half (stop the
+  scheduler writing a mailbox row for a fire already delivered as a nudge) is
+  tracked separately in the pogo repo as mg-af83 and is the one to build if only
+  one gets built.
+
 - **A claim is not a hold, and `mg unclaim` stops pretending otherwise
   (mg-ed7b).** `mg unclaim <id> --assignee=<who>` records who the item is
   waiting on **and then** releases the claim. `mg unclaim` also now says when it
