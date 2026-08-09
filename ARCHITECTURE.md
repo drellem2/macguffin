@@ -268,6 +268,23 @@ mv mail/arch/new/$msg_id mail/arch/cur/$msg_id   # Mark read
 
 This is literally Maildir — a proven, battle-tested pattern from 1strstrstr1995 that solved the same concurrent-delivery problem for email that we're solving for agent coordination.
 
+### Reclaim generator mail
+
+Maildir gives delivery, not retention. A scheduler fire that cannot reach an
+agent's PTY falls back to a mailbox row, so an outage writes one row per fire
+forever and nothing removes them — 12,295 fleet-wide from a single 33-hour
+outage, which every mail check then reads through until a real message is buried
+in the middle of it.
+
+`mg mail reclaim` moves superseded generator copies from `new/`/`cur/` into
+`archive/`. The invariant is that **selection is by parsed field, never by
+volume**: only messages whose `From` field exactly matches a named generator are
+candidates, and among those only ones that are (a) not the newest `--keep` of
+their Subject group and (b) older than the retention window. `archive/` is not
+pruned — the reclaimed row leaves the read path, which is where the damage was,
+and stays recoverable, because a deletion that mis-classifies fails silently and
+permanently.
+
 ## Work Item Format
 
 A work item is a Markdown file with YAML frontmatter:

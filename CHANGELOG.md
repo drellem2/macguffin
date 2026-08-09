@@ -23,6 +23,60 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- **`mg mail reclaim` drains the scheduler fallback pile that nothing ever
+  removed (mg-36b7).** A scheduler fire that cannot reach an agent's PTY falls
+  back to writing the fire into that agent's mailbox. Nothing reclaimed those
+  copies, and nothing set a retention policy: one 33-hour crew outage rendered
+  as **264 consecutive `From: scheduler` rows** in `architect`'s box and
+  **12,295 fleet-wide**, which every mail check then paged through. That pile is
+  not inert — it is what produced the day's false negatives. Two agents ran a
+  bounded read over their own mailbox, saw nothing but scheduler rows, and
+  nearly reported "no mail" over a real message 32 hours old at row ~108 of 265.
+  Coalescing (mg-af83) bounds what a *future* outage writes; it reclaims nothing
+  already written.
+
+  `mg mail reclaim [AGENT]` moves superseded copies into `archive/`; with no
+  AGENT it sweeps every mailbox. A message moves only when **all three** hold:
+
+  1. its **From field** exactly matches a `--from` sender (default `scheduler`)
+     — the mg-5168 predicate, never a substring, never the subject text, never
+     row volume;
+  2. it is **not among the newest `--keep`** (default 1) copies of its recurring
+     notification, grouped by **exact Subject** — two fires of one schedule
+     carry byte-identical subjects and two different schedules never do, so a
+     live pointer survives for *each* schedule;
+  3. its **Date parses** and is strictly older than `--older-than` (default
+     `24h`). An unparseable Date is retained *and counted*, never guessed at.
+
+  Measured against a copy of the live store: **10,780 of 11,974** scheduler
+  copies reclaimed, **11,451 non-scheduler active messages unchanged**, and
+  every one of the 10,780 moved files carried `From: scheduler`. `architect`'s
+  box went from 265 unread to 4 — one pointer for each of its two schedules,
+  plus both real messages.
+
+  **Why it selects by sender.** The alternative already happened: a
+  1,594-message bulk sweep, run under pressure, very nearly took a triage packet
+  and a fleet notify report with it — caught only by re-listing the archive
+  afterwards. That sweep was not wrong for archiving too much; it was wrong for
+  selecting by volume. A `--from` naming a sender that **has a mailbox of its
+  own** is refused (exit 4) without `--force`: that name is a correspondent, and
+  "an older copy sharing a subject is obsolete" holds for recurring machine
+  notifications and is false for a thread. Generators like `scheduler` and
+  `stall-watch` have no mailbox — nobody replies to them.
+
+  **Nothing is deleted.** Reclaimed mail stays readable under
+  `mg mail list AGENT --archived`, and every move is audited (`op=reclaim`,
+  with the directory it left). Pruning `archive/` is deliberately out of scope:
+  this reclaims the *read path*, which is where the damage was, and deletion is
+  the one operation whose failure is silent and permanent.
+
+  The remedy is checked against the defect it remedies. Reclaim emits **one
+  `mail.reclaimed` summary event per mailbox**, not one `mail.archived` per
+  message, so draining an unbounded pile does not build an unbounded pile inside
+  `events.jsonl`; and the human report is **bounded to 20 mailbox rows**,
+  heaviest first, with the remainder counted — so a fleet sweep's totals cannot
+  be pushed off the bottom of a bounded read. `--json` carries every row.
+
 - **A mailbox registration is now a durable record, so an unregistered box is
   distinguishable after the fact (mg-d639).** `mg mail send` already refuses a
   recipient mg has never seen — but that refusal fires **once per name**.
