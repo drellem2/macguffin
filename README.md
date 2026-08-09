@@ -220,9 +220,9 @@ mg log                 # view snapshot history
 | `mg unclaim ID [--assignee=WHO]` | Release a claim, returning the work item to `available/`. **A claim is not a hold.** A claimed item says someone took it and says nothing about *why*, so to any sweeper collecting claims left by dead agents, a deliberate hold and an abandoned claim are the same object — and the usual discriminator, "was anything produced?" (a pushed branch, a merged commit), is blind by construction to work whose only artifact is the ticket body. On 2026-08-07 that released **five completed gh-issue triages** back into the dispatchable pool, where the next dispatch would have re-run each triage over the body carrying its only copy. `--assignee` is the fix at the callsite: it records who the item is waiting on **and then** releases it, in that order, so the item is never in `available/` without the reason it is held. The order is the whole flag — the two-command form (`mg edit --assignee` after `mg unclaim`) is what produced the defect: mg-24d2 was released at 18:24:18Z, assigned at 18:27:15Z, and a priority-wake named it as *"ready and unclaimed — claim or dispatch now"* in the 2m57s between. `--assignee=""` clears the field; `human`, `parked` and `blocked:<agent>` are what pogo's dispatcher gates on by default (`config.IsDispatchGated`, as of 2026-08-07; the sentinel list is configurable, the `blocked:` shape is not), and any value at all says more than a bare claim does. The recorded assignee is echoed back (`Waiting on human`) and rides on the `work.unclaim` event, which now also records its **actor** — every other transition said who; the release did not, and five releases were later described as "attributed" when the log lines carried no actor at all. |
 | `mg unclaim` says what it is releasing | If the released item **declares a remainder that nothing tracks** — the same condition `mg done` refuses to complete on — and it lands with no assignee, `mg unclaim` says so and names the correction. It is a **report, not a refusal**: a sweep of genuinely stranded claims has to stay one command that works, and a guard here would fire on the abandoned-triage case the sweep exists for. It is also the discriminator a sweeper otherwise lacks, and it is the *item's own declaration about its output* — not a stage, a type, or a body grep — so it sees a triage whose deliverable is prose exactly as well as it sees a build ticket. Every one of the five swept items carried `declares-remainder`; four named no successor; mg held that at the moment of each release and said nothing. An item that declares nothing releases silently, exactly as before — a note on the routine case is a note nobody reads on the case that matters. |
 | `mg reclaim ID [--pid N]` | Re-stamp the owner PID on a claim, **without the item leaving `claimed/`**. This is the handover half of a claim made on someone else's behalf: pogod claims a work item at spawn time under its own PID — before the worker process exists, so an item being worked is never invisible to an ownership check — and the worker's first act is `mg reclaim <id>`, moving the recorded PID to its own. That the PID changed is a **positive signal that the worker itself acted**, which nothing else in the store provides. The item must already be claimed; an available item is **refused** (exit 4, `not_claimed`, remedy `mg claim`), a done/shelved/archived one likewise, and an unknown id is exit 3. Keeping this a separate verb rather than a flag on `mg claim` is deliberate: `mg claim` refusing a non-available item is what makes two concurrent dispatches onto one item impossible, and a `--steal` flag would put that guard one typo away from being off. **The item never leaves `claimed/`** — the implementation is a single `rename(2)` *within* `claimed/`, `<id>.md.<old>` → `<id>.md.<new>`, not an unclaim followed by a claim, which would park the item in `available/` for the duration and reopen exactly the window pogod's spawn-time claim exists to close. Re-stamping to the PID already recorded exits 0 and changes nothing, so a worker repeating the step after a context compaction gets a no-op, not an error that reads as a failure. `--pid` defaults to `$POGO_PID` and then to the calling process's PID, matching `mg claim`; the transition is printed (`Reclaimed mg-7d6d: pid 32194 -> 40881`) so an operator reading a transcript can tell which side of the handover they are looking at. A re-stamp records the same `work.claim` event a claim does, with `prev_pid` added and both statuses `claimed` — `mg spend` pairs a claim with the next release to attribute spend, so a silent handover would bill the worker's whole run to whoever claimed on its behalf. |
-| `mg schedule` | Promote pending items **whose gates have all opened** — every dependency met, and any `snooze:` wake time now past — **and report every pending item it could not promote**, each with the gate that held it and that gate's state (`depends: mg-2c34 (claimed)`, `snoozed: wakes … (in 1h 29m)`, or both). Both gates are reported, because "no items promoted" over a non-empty pending set otherwise reads as "nothing is waiting". It **also** calls out separately the pending items no completion can *ever* promote — those waiting on a `shelved` or nonexistent parent, each named with the parent responsible. A held item is invisible from every other angle: it is not `available/`, so stall-watch and priority-wake cannot see it, and `pending` is exactly what a correctly-waiting item looks like. This is the only view of that population. |
+| `mg schedule` | The full sweep and the only report on the pending population. **It is no longer the only thing that opens a snooze** — every `mg` command does that (see [Snooze](#snooze-not-now-come-back-at)) — but it is the only thing that sweeps the dependency gate, tidies spent gates, and enumerates what is waiting. Promote pending items **whose gates have all opened** — every dependency met, and any `snooze:` wake time now past — **and report every pending item it could not promote**, each with the gate that held it and that gate's state (`depends: mg-2c34 (claimed)`, `snoozed: wakes … (in 1h 29m)`, or both). Both gates are reported, because "no items promoted" over a non-empty pending set otherwise reads as "nothing is waiting". It **also** calls out separately the pending items no completion can *ever* promote — those waiting on a `shelved` or nonexistent parent, each named with the parent responsible. A held item is invisible from every other angle: it is not `available/`, so stall-watch and priority-wake cannot see it, and `pending` is exactly what a correctly-waiting item looks like. This is the only view of that population. |
 | Dependency satisfaction | A dependency is met once the parent **has passed through `done`** — `done/` and `archive/` both count. Archiving is a filing decision about completed work, not a repudiation of the completion, so archiving a parent never strands its dependents. Placement is decided **at filing time** against the resolved state of every dependency, not deferred to the next sweep: an item whose dependencies are already satisfied is filed straight to `available/`, never parked in `pending/` to wait on an unrelated completion. |
-| `mg snooze ID (--until TIME \| --for DURATION)` | Set an item aside until a time. It moves to `pending/` carrying a `snooze:` attribute and returns to `available/` on the first `mg schedule` sweep after that time. **Snooze is an attribute, not a sixth status** — see [Snooze](#snooze-not-now-come-back-at). `--for` takes Go durations plus `d`/`w` (`90m`, `6h`, `3d`, `2w`); `--until` takes RFC3339 or a local `2026-08-03 14:30`, and a bare date means **09:00 local**, never midnight. The resolved absolute instant is echoed back and stored as RFC3339 UTC. Snoozing a claimed item releases the claim, as shelving does. |
+| `mg snooze ID (--until TIME \| --for DURATION)` | Set an item aside until a time. It moves to `pending/` carrying a `snooze:` attribute and returns to `available/` on the first **`mg` command of any kind** after that time — every mg invocation promotes elapsed gates, so nothing needs to be scheduled for this to work. **Snooze is an attribute, not a sixth status** — see [Snooze](#snooze-not-now-come-back-at). `--for` takes Go durations plus `d`/`w` (`90m`, `6h`, `3d`, `2w`); `--until` takes RFC3339 or a local `2026-08-03 14:30`, and a bare date means **09:00 local**, never midnight. The resolved absolute instant is echoed back and stored as RFC3339 UTC. Snoozing a claimed item releases the claim, as shelving does. |
 | `mg unsnooze ID` | Lift a snooze early. A pending item returns to `available/` if its dependencies are also met and stays `pending` if they are not — lifting one gate does not lift the others. Refuses an item that is not snoozed. |
 | `mg shelve (ID \| --tag T)` | Hide a work item and everything that depends on it. Restored with `mg unshelve`. **Two guards refuse a shelve**, ported from `mg archive` because a shelved item is no more a tracker for outstanding work than an archived one, and shelve is the cheapest of the three exits to reach — one command, no claim, no status precondition. It is refused if the item is tagged `blocked-on-*`, or if it **declares a remainder**: it carries `declares-remainder`, *or* its type is one whose output IS a recommendation (`design`, `scoping`, `audit`, `idea`), *or* its body's leading carrier block says `stage: triage`. The last two arms read the same defaults `mg new` writes, and they are here rather than at `mg done` because they reach the items filed before that default existed — measured on the live store on 2026-07-30, the whole 181-item shelf, of which exactly one carries the tag. Satisfied by an existing `successor:<id>` tag naming an item that still exists (`mg edit <id> --add-tags=successor:<id>`); a successor does **not** answer the `blocked-on-*` arm, for the reason it does not at archive time. `--tag` applies the same guards item by item, skips the ones it refuses, and names each on stderr **with the reason** — a bulk shelve that skipped the guards would be the targeted form's refusal one flag away. |
 | `mg shelve <id> --override "<why>"` | Shelve an item a guard refused, and record why. **It takes a string, not a flag.** A bare `--force` records that somebody overrode the gate and loses the only thing a later reader needs, which is *what they knew that the gate did not* — so the reason is required, and whitespace is not a reason. Using it emits a `work.shelve_forced` event carrying **both** halves: `guard` (the code of the refusal bypassed — `shelve_blocked_on_tag`, `shelve_without_successor`, `shelve_dangling_successor`) and `reason` (the operator's string). Legitimate uses are real: a design genuinely abandoned rather than deferred, an obligation discharged out of band with the tag left behind. It applies to **one named item** and is refused with `--tag`: an override is a claim about an item the operator looked at, and a bulk one is a claim about items they did not. Like `--force` on `mg archive`, it is documented here and in `mg shelve --help` and is deliberately **not** named by the refusal itself, so a guard hit mid-cleanup does not hand out its own bypass. |
@@ -275,31 +275,54 @@ exactly as `depends:` waits on an ITEM, both gates are ANDed, and both are
 evaluated in the one place. `ls work/pending` and `grep snooze:` still answer
 truthfully, which a status computed at read time would not.
 
-**`mg schedule` is the driver, and it must be run on a clock.** A gate is worth
-only as much as the thing that opens it, and a snoozed item is invisible from
-every other angle — it is not `available/`, so stall-watch and priority-wake
-cannot see it, and `pending` is exactly what a correctly-waiting item looks like.
-Three properties make it impossible to set a gate nothing will open:
+**Every `mg` command opens elapsed gates.** A gate is worth only as much as the
+thing that opens it, and a snoozed item is invisible from every other angle — it
+is not `available/`, so stall-watch and priority-wake cannot see it, and
+`pending` is exactly what a correctly-waiting item looks like. So the opener is
+mg itself: on **any** invocation — `mg list`, `mg show`, `mg claim`, anything —
+a goroutine started beside your command promotes every pending item whose wake
+time has passed. Three properties make it impossible to set a gate nothing will
+open:
 
-- **Level-triggered, never edge-triggered.** The sweep asks whether the wake
-  time has *passed*, not whether it just *arrived*. A driver down through the
-  wake instant therefore **delays** an item and can never lose one; one late
-  sweep recovers it.
+- **Level-triggered, never edge-triggered.** The check asks whether the wake
+  time has *passed*, not whether it just *arrived*. Nothing running at the wake
+  instant therefore **delays** an item and can never lose one; the next `mg` of
+  any kind recovers it.
+- **Not scheduled.** Promotion is a property of the store and the binary, not of
+  a cron on one particular agent. Readiness used to depend on mayor's
+  `mg-schedule-sweep`, and when that schedule was lost the sweep of 2026-08-04
+  reported `the previous sweep ran 4d 9h ago` — four days of gates that had
+  opened and stayed shut.
 - **Loud at snooze time.** A wake time that has already passed, or that mg
   cannot parse, is refused when you set it — not written and forgotten. A
   `snooze:` value that reaches disk unparseable anyway (a hand-edit) **holds**
   the item and is **named** by `mg schedule`'s stranded report and by `mg show`.
-- **No driver, no gate.** `mg schedule` stamps `work/.last-sweep` on every run.
-  If nothing has driven the sweep in the last two hours, `mg snooze` **refuses**
-  and prints the command that wires the driver. `--force` overrides with a
-  warning.
 
-Register the driver once — pogod, because it persists schedules to disk and
-replays them through host sleep, NTP steps and its own restarts:
+This is a **behaviour change on read paths**: `mg list` can move a file. The
+promotion is announced on stderr (`Snooze elapsed: promoted mg-1234 …`), so
+`--json` stdout stays a single parseable document, and it can never fail your
+command — a store it cannot write produces a warning and exit 0. Set
+`MG_NO_AUTO_PROMOTE=1` for a provably read-only mg.
+
+**`mg schedule` is still worth running on a clock, for its reports.** It is no
+longer what opens a snooze, but it is the only view of the pending population:
+the **held** report, and the **stranded** report — items no completion can ever
+release, which automatic promotion by construction can never fix. It also sweeps
+the dependency gate and tidies spent gates. Register it once — pogod, because it
+persists schedules to disk and replays them through host sleep, NTP steps and its
+own restarts:
 
 ```sh
 scripts/install-snooze-driver.sh     # AGENT=… CRON=… to override
 ```
+
+Its old staleness warning claimed *"Snoozes open only when this sweep runs"*.
+That is no longer true, so the warning now names what it actually detects — a
+stranded population going unread — and a **new and stricter** check replaces it
+as the safety net: a pending item with **every gate open** immediately after a
+sweep can only mean promotion is *failing* (a read-only store, a full disk), and
+`mg schedule` says so by name. That is positive evidence about the outcome
+rather than a proxy measurement of a cron's absence.
 
 `mg schedule` also lists **every pending item it could not promote**, with each
 gate that held it and that gate's state — `depends: mg-2c34 (claimed)`,

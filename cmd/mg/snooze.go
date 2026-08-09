@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
@@ -20,8 +19,9 @@ var snoozeCmd = &cobra.Command{
 	Use:   "snooze ID (--until TIME | --for DURATION)",
 	Short: "Set a work item aside until a time, returning it to available/ then",
 	Long: `Snooze sets a work item aside until a wake time and files it in pending/,
-which is already where an item waiting on a gate lives. ` + "`mg schedule`" + ` returns it
-to available/ on the first sweep after that time.
+which is already where an item waiting on a gate lives. It returns to available/
+on the first ` + "`mg`" + ` command of any kind after that time — every mg invocation
+promotes elapsed snoozes, so nothing needs to be scheduled for this to work.
 
 Snooze is an ATTRIBUTE, not a status. Status in mg is the directory an item is
 in; a snoozed item is a pending item carrying a ` + "`snooze:`" + ` timestamp. It waits on
@@ -39,13 +39,14 @@ the item is released.
 A date with no time means 09:00 LOCAL on that date, not midnight. The resolved
 absolute instant is always echoed back, and it is always stored as RFC3339 UTC.
 
-Three refusals, because a snooze nothing will open is worse than no snooze at
-all — it looks scheduled, it is not available, and nothing nags:
+A wake time that has already passed, or that mg cannot parse, is refused here
+rather than written and forgotten: a snooze nothing will open is worse than no
+snooze at all, because it looks scheduled, it is not available, and nothing
+nags.
 
-  - a wake time that has already passed, or that mg cannot parse, is refused
-    here rather than written and forgotten;
-  - a snooze is refused entirely when nothing has driven ` + "`mg schedule`" + ` recently
-    (the sweep is what opens the gate). --force overrides, loudly.
+mg used to refuse a snooze entirely when nothing had run ` + "`mg schedule`" + ` recently,
+since the sweep was the only thing that opened a gate. It no longer is, so that
+refusal is gone and --force has nothing left to override.
 
 Snoozing a claimed item releases the claim, the same way shelving does.`,
 	Args: usageArgs(cobra.ExactArgs(1)),
@@ -61,10 +62,6 @@ Snoozing a claimed item releases the claim, the same way shelving does.`,
 			return err
 		}
 
-		if err := requireDriver(root, snoozeForce); err != nil {
-			return err
-		}
-
 		item, from, err := workitem.SnoozeItem(root, id, until)
 		if err != nil {
 			return err
@@ -72,7 +69,7 @@ Snoozing a claimed item releases the claim, the same way shelving does.`,
 
 		wait := workitem.HumanUntil(time.Until(item.Snooze))
 		fmt.Printf("Snoozed %s until %s (in %s): %s\n", item.ID, item.SnoozeRaw, wait, item.Title)
-		fmt.Printf("It is in pending/ (was %s) and returns to available/ on the first `mg schedule` sweep after that time.\n", from)
+		fmt.Printf("It is in pending/ (was %s) and returns to available/ on the first `mg` command after that time.\n", from)
 		return nil
 	},
 }
@@ -149,43 +146,36 @@ func resolveWakeTime(until, dur string, now time.Time) (time.Time, error) {
 	return t, nil
 }
 
-// requireDriver refuses to set a gate when nothing is opening gates.
+// The driver refusal is GONE, and this comment is where it used to be.
 //
-// This is the condition the whole feature ships under. `mg schedule` is what
-// returns a snoozed item to available/, and for most of mg's life nothing ran
-// it on a clock — which is precisely how two items sat fifteen days behind a
-// gate whose date had passed. Rather than trust that a driver exists, mg
-// checks: `mg schedule` stamps work/.last-sweep on every run, and a stamp
-// older than DriverStaleAfter (or no stamp at all) means an item snoozed now
-// would sit in pending/ indefinitely, looking exactly like an item that is
-// waiting correctly.
-func requireDriver(root string, force bool) error {
-	st := workitem.CheckDriver(root, time.Now().UTC())
-	if !st.Stale {
-		return nil
-	}
-
-	last := "never — no sweep has ever been recorded in this store"
-	if st.Ever {
-		last = fmt.Sprintf("%s (%s ago)", st.Last.Format(time.RFC3339), workitem.HumanUntil(st.Since))
-	}
-
-	if force {
-		fmt.Fprintf(os.Stderr, "warning: nothing is driving `mg schedule` (last sweep: %s).\n", last)
-		fmt.Fprintf(os.Stderr, "warning: --force accepted anyway; this item will not return to available/ until something runs the sweep.\n")
-		return nil
-	}
-
-	return mgerr.Conflict("no_snooze_driver",
-		fmt.Sprintf("refusing to snooze: nothing is driving `mg schedule` (last sweep: %s).", last),
-		"A snooze is only a gate — the sweep is what opens it, so an item snoozed now would\n"+
-			"sit in pending/ indefinitely, looking exactly like an item that is waiting correctly.\n"+
-			"Register the driver, then retry:\n\n  "+workitem.DriverHint+"\n\n"+
-			"Running `mg schedule` once also clears this check. Use --force to snooze anyway.")
-}
+// `mg snooze` used to refuse outright when work/.last-sweep was older than
+// DriverStaleAfter. The reasoning was sound for the world it shipped into: a
+// snooze was only a gate, `mg schedule` was the only thing that opened it, and
+// an item snoozed with no cron running would sit in pending/ indefinitely
+// looking exactly like an item that was waiting correctly. That is how two
+// items sat fifteen days behind a wake time that had already passed.
+//
+// Opportunistic promotion makes the premise false. Any mg invocation opens an
+// elapsed gate now (see cmd/mg/autopromote.go), so the opener is the binary
+// itself and cannot be missing while anyone is using mg at all. Keeping the
+// refusal would mean refusing to write a gate that in fact works — and worse,
+// it would refuse precisely in the situation this feature was built for, a
+// fleet whose sweep cron has been lost.
+//
+// What did NOT move to the promoter: the held and stranded reports. `mg
+// schedule` remains worth running on a clock for those, and it still says so
+// when its own stamp is stale. The precondition that has genuinely gone away is
+// the one about snoozes opening, so that is the one refusal that has gone away.
 
 func init() {
 	snoozeCmd.Flags().StringVar(&snoozeUntil, "until", "", "absolute wake time ("+workitem.SnoozeFormats()+"; a bare date means 09:00 local)")
 	snoozeCmd.Flags().StringVar(&snoozeFor, "for", "", "wake time as a duration from now (90m, 6h, 3d, 2w)")
-	snoozeCmd.Flags().BoolVar(&snoozeForce, "force", false, "snooze even when nothing is driving `mg schedule` (prints a warning)")
+
+	// --force is kept and ignored. Its only job was to override the driver
+	// refusal above; removing the flag outright would turn every script that
+	// passes it into an exit-2 unknown-flag failure, which is a worse outcome
+	// than a deprecation notice for a flag that now has nothing to force.
+	snoozeCmd.Flags().BoolVar(&snoozeForce, "force", false, "no longer has any effect")
+	_ = snoozeCmd.Flags().MarkDeprecated("force",
+		"snoozes now open on any mg command, so there is no driver check left to override.")
 }

@@ -338,8 +338,8 @@ shape:
 
 | Attribute | Waits on | Evaluated by |
 |-----------|----------|--------------|
-| `depends: [id, …]` | another ITEM reaching `done` | placement at filing time, then the `mg schedule` sweep |
-| `snooze: <RFC3339>` | the CLOCK reaching a time | the same `mg schedule` sweep |
+| `depends: [id, …]` | another ITEM reaching `done` | placement at filing time, then `mg done`'s sweep, then `mg schedule` |
+| `snooze: <RFC3339>` | the CLOCK reaching a time | **every `mg` invocation**, and `mg schedule` |
 
 Both are ANDed into **one** gate in **one** place, so an item is released only
 when every gate has opened. That is deliberate: two gating mechanisms that do
@@ -351,10 +351,41 @@ an existing gate consults is not.
 The corollary is the load-bearing one: **a gate is worth only as much as the
 thing that opens it.** A snoozed item is not `available/`, so stall-watch and
 priority-wake cannot see it, and `pending` is exactly what a correctly-waiting
-item looks like. So `mg schedule` must be run on a clock (see
-`scripts/install-snooze-driver.sh`), the sweep is level-triggered so a missed
-run delays rather than loses, and `mg snooze` refuses to set a gate at all when
-nothing has driven the sweep recently.
+item looks like.
+
+**So the opener is the binary, not a schedule.** Every `mg` process starts a
+goroutine beside the user's command that promotes pending items whose wake time
+has passed (`internal/workitem/autopromote.go`). Readiness used to depend on
+mayor's `mg-schedule-sweep` cron: when that schedule was lost, the next sweep
+reported `the previous sweep ran 4d 9h ago`, and the only reason anyone noticed
+four days of open-but-shut gates is that the sweep printed its own staleness. An
+item's readiness must not depend on one particular agent being alive.
+
+Three constraints shape that promoter, and they are the interesting part:
+
+- **Rename first.** Promotion is `rename(2)` from `pending/` to `available/`
+  *before* anything else, because rename is mg's only concurrency primitive —
+  exactly one racer wins and the losers get `ENOENT` and say nothing (see
+  `Claim`). Clearing the spent `snooze:` value *first*, which is what this code
+  used to do, is a `O_CREATE|O_TRUNC` write that a losing promoter performs
+  **after** the winner has already moved the file away, re-creating the item in
+  `pending/` and leaving it in two directories at once. The residue of the
+  correct order — an inert elapsed gate on an already-promoted item — is
+  visible, holds nothing, and is wiped by `ClearSpentGates` on the next sweep.
+- **It cannot fail the command it rode in on.** A locked or full store makes
+  `mg list` print a warning; it never changes the exit code. Abandonment is safe
+  because the gate is level-triggered: whatever this run does not finish, the
+  next invocation promotes from the same on-disk state.
+- **Clock gate only.** It does not compute the done-set unless it has already
+  found an elapsed wake time, so the common case is one `ReadDir` of the small
+  directory and no writes. The dependency gate is left to `mg done`, which
+  sweeps at the instant a parent completes and so was never the gate that went
+  stale.
+
+`mg snooze` therefore no longer refuses when nothing has driven the sweep. That
+refusal was correct while the sweep was the only opener; keeping it would mean
+refusing to write a gate that works, in exactly the situation — a fleet that has
+lost its cron — this design exists for.
 
 The same corollary governs the sweep's **report**, and one gate at a time is not
 enough. `mg schedule` lists every pending item it could not promote with each
@@ -363,6 +394,18 @@ covering one gate makes "no items promoted" read as *nothing is waiting*, which
 is false whenever the other gate is the closed one. The population a gate
 report covers must be the whole held population, or it is an instrument that
 answers rather than declining to.
+
+And the corollary applies to the **detector** as well. The sweep's staleness
+warning was the only thing that surfaced the four-day gap, and automatic
+promotion falsifies its premise — so it is repointed, not retired. It now warns
+that the *reports* are going unread, which is a real failure (a stranded item
+waits forever no matter how often mg runs, and nothing else can see it). What
+replaces it as the snooze safety net is stricter and measures the outcome rather
+than a proxy: a pending item with **every gate open**, immediately after a sweep
+whose job was to move it, can only mean promotion is *failing*. `mg schedule`
+names those items. An absent cron was evidence that snoozes *might* not be
+opening; this is the observation itself, and it fires for causes — read-only
+store, full disk, changed permissions — the cron check could never have seen.
 
 ### Querying work items
 

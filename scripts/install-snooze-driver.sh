@@ -1,17 +1,24 @@
 #!/bin/sh
-# Register the driver that opens snooze gates.
+# Register the periodic run of `mg schedule`.
 #
-# `mg snooze` writes a `snooze:` attribute onto a pending item; `mg schedule` is
-# what reads it and returns the item to available/. Without something running
-# that sweep on a clock, a snoozed item is invisible — it is not available/, so
-# stall-watch and priority-wake cannot see it, and "pending" is exactly what a
-# correctly-waiting item looks like. That is how two items sat fifteen days
-# behind a gate whose date had already passed.
+# THIS IS NO LONGER WHAT OPENS A SNOOZE. Every `mg` invocation promotes pending
+# items whose wake time has passed, on a goroutine beside whatever you ran, so a
+# gate opens on the next mg command of any kind. Readiness used to depend on this
+# schedule existing, and when it was lost the next sweep reported "the previous
+# sweep ran 4d 9h ago" — four days of gates that had opened and stayed shut.
 #
-# So `mg snooze` REFUSES to set a gate when nothing has driven the sweep
-# recently (see internal/workitem/snooze.go, DriverStaleAfter). This script is
-# the one-line answer to that refusal, kept in the repo so the driver is
-# reproducible rather than a thing somebody once typed on one machine.
+# What this schedule is still for is the REPORTS, which nothing else produces:
+#
+#   - the held report: every pending item and the gates holding it;
+#   - the stranded report: items no completion can ever release — waiting on a
+#     shelved or nonexistent parent — which automatic promotion by construction
+#     can never fix, and which are invisible from every other angle;
+#   - the dependency-gate sweep, and the tidy-up of spent gates;
+#   - the check that promotion is actually WORKING: a pending item with every
+#     gate open right after a sweep means the store cannot be written.
+#
+# So this is still worth registering — it is just no longer load-bearing for an
+# item's readiness, and `mg snooze` no longer refuses without it.
 #
 # pogod is the driver because it is the one that already survives host sleep,
 # NTP steps and its own restarts: schedules persist to disk and replay on wake,

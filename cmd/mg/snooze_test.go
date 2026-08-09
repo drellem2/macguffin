@@ -73,48 +73,52 @@ func driveTheSweep(t *testing.T, bin string, env []string) string {
 	return out
 }
 
-// TestCLI_SnoozeRefusedWithoutADriver is the condition the whole feature ships
-// under: an attribute with nothing to open it is a silent item-swallower, so mg
-// refuses to write one rather than trusting that a driver exists somewhere.
-func TestCLI_SnoozeRefusedWithoutADriver(t *testing.T) {
-	bin, env, _ := snoozeEnv(t)
+// TestCLI_SnoozeNeedsNoDriver is the INVERSION of the test that used to live
+// here, and the inversion is the point of mg-ad63.
+//
+// `mg snooze` used to refuse on a store where nothing had run `mg schedule`
+// recently, because a snooze was only a gate and the sweep was the only thing
+// that opened it. Promotion is now a property of the binary — any mg invocation
+// opens an elapsed gate — so that premise is false, and the refusal would fire
+// hardest in exactly the situation the feature was built for: a fleet that has
+// lost its sweep cron.
+//
+// So the assertion is now that a snooze on a driverless store SUCCEEDS, and
+// that nothing in the confirmation promises a sweep will be what wakes it.
+func TestCLI_SnoozeNeedsNoDriver(t *testing.T) {
+	bin, env, root := snoozeEnv(t)
 	id := snzNewItem(t, bin, env, "Revisit the pricing page")
 
+	// Deliberately no driveTheSweep: work/.last-sweep does not exist at all,
+	// which is the strongest form of "nothing is driving the sweep".
+	if _, err := os.Stat(filepath.Join(root, "work", ".last-sweep")); !os.IsNotExist(err) {
+		t.Fatalf("this test requires a store with no sweep stamp; Stat says: %v", err)
+	}
+
 	out, code := snzRun(t, bin, env, "snooze", id, "--for", "3d")
-	if code == 0 {
-		t.Fatalf("mg snooze succeeded on a store with no driver; it must refuse\n%s", out)
-	}
-	if code != 4 {
-		t.Errorf("exit code = %d, want 4 (conflict)\n%s", code, out)
-	}
-	for _, want := range []string{"nothing is driving", "mg schedule", "pogo schedule"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("refusal does not mention %q; it must name the missing driver and how to wire it\n%s", want, out)
-		}
-	}
-
-	// Nothing was written: the item is still available and carries no gate.
-	showOut, _ := snzRun(t, bin, env, "show", id)
-	if strings.Contains(showOut, "Snooze:") {
-		t.Errorf("a refused snooze must leave no attribute behind\n%s", showOut)
-	}
-	if !strings.Contains(showOut, "Status:    available") {
-		t.Errorf("a refused snooze must not move the item\n%s", showOut)
-	}
-
-	// Running the sweep once records a driver pulse and clears the refusal.
-	driveTheSweep(t, bin, env)
-	out, code = snzRun(t, bin, env, "snooze", id, "--for", "3d")
 	if code != 0 {
-		t.Fatalf("mg snooze still refused after the sweep ran: exit %d\n%s", code, out)
+		t.Fatalf("mg snooze refused on a driverless store; promotion no longer needs a driver: exit %d\n%s", code, out)
 	}
 	if !strings.Contains(out, "Snoozed "+id) {
 		t.Errorf("expected a Snoozed confirmation, got:\n%s", out)
 	}
+	if strings.Contains(out, "nothing is driving") {
+		t.Errorf("the driver refusal is gone; it must not reappear as a warning:\n%s", out)
+	}
+	if strings.Contains(out, "`mg schedule` sweep") {
+		t.Errorf("the confirmation must not promise the sweep is what wakes it:\n%s", out)
+	}
+
+	// And the gate really is on disk, in pending/, where the promoter looks.
+	if _, err := os.Stat(filepath.Join(root, "work", "pending", id+".md")); err != nil {
+		t.Errorf("expected pending/%s.md: %v", id, err)
+	}
 }
 
-// --force is an override, not a bypass: it says so on stderr.
-func TestCLI_SnoozeForceWarnsWhenNoDriver(t *testing.T) {
+// --force survives as an accepted no-op. Removing the flag would turn every
+// script that passes it into an exit-2 unknown-flag failure; keeping it and
+// saying it is deprecated costs a line and breaks nobody.
+func TestCLI_SnoozeForceIsADeprecatedNoOp(t *testing.T) {
 	bin, env, _ := snoozeEnv(t)
 	id := snzNewItem(t, bin, env, "Forced")
 
@@ -122,8 +126,11 @@ func TestCLI_SnoozeForceWarnsWhenNoDriver(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("mg snooze --force: exit %d\n%s", code, out)
 	}
-	if !strings.Contains(out, "warning") || !strings.Contains(out, "nothing is driving") {
-		t.Errorf("--force must warn loudly, got:\n%s", out)
+	if !strings.Contains(out, "deprecated") {
+		t.Errorf("--force must say it is deprecated rather than silently doing nothing, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Snoozed "+id) {
+		t.Errorf("--force must still snooze, got:\n%s", out)
 	}
 }
 

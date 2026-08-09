@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/drellem2/macguffin/internal/event"
 )
 
 // Schedule checks all items in pending/ and promotes any whose gates have all
@@ -19,6 +17,13 @@ import (
 // therefore delays the item until the next sweep and can never lose it. Every
 // promotion this sweep makes is one it would make again from the same on-disk
 // state, which is what makes a missed fire survivable.
+//
+// This is no longer the ONLY thing that opens a clock gate. AutoPromote runs in
+// every mg process and opens elapsed snoozes without anybody scheduling it;
+// this remains the full sweep — both gates, plus the held and stranded reports
+// that nothing else produces. The two share promote(), so they can run
+// concurrently against the same store without either losing or duplicating an
+// item.
 func Schedule(root string) ([]*Item, error) {
 	pendingDir := filepath.Join(root, "work", "pending")
 	entries, err := os.ReadDir(pendingDir)
@@ -46,34 +51,18 @@ func Schedule(root string) ([]*Item, error) {
 		}
 
 		if gateOpen(item, doneIDs, now) {
-			// A gate that has released its item is spent. Clearing it before
-			// the move keeps an elapsed wake time from sitting on an available
-			// item looking like a live gate — and does so while the file is
-			// still in pending/, so a crash between the write and the rename
-			// leaves an un-gated pending item the next sweep promotes, never a
-			// gated one nothing looks at.
-			if item.SnoozeRaw != "" {
-				woke := item.SnoozeRaw
-				item.ClearSnooze()
-				if err := os.WriteFile(path, []byte(Render(item)), 0o644); err != nil {
-					return nil, fmt.Errorf("clearing the snooze on %s: %w", item.ID, err)
-				}
-				event.Emit(root, "work.snooze_elapsed", map[string]string{
-					"item_id": item.ID,
-					"until":   woke,
-					"actor":   actor(),
-				})
+			// promote() carries the whole move, including clearing the spent
+			// gate. A false with no error means a concurrent promoter — the
+			// per-invocation AutoPromote, another agent's `mg done` — won the
+			// rename; the item is in available/ either way, and only the winner
+			// reports it so a promotion is never announced twice.
+			ok, err := promote(root, path, e.Name(), item)
+			if err != nil {
+				return nil, err
 			}
-			dst := filepath.Join(root, "work", "available", e.Name())
-			if err := os.Rename(path, dst); err != nil {
-				return nil, fmt.Errorf("promoting %s: %w", item.ID, err)
+			if ok {
+				promoted = append(promoted, item)
 			}
-			// Pending items normally have no sidecar, but keep the invariant
-			// total: a .result.json must never be left behind a moved .md.
-			if err := moveResultSidecar(filepath.Dir(path), filepath.Dir(dst), item.ID); err != nil {
-				return nil, fmt.Errorf("promoting sidecar for %s: %w", item.ID, err)
-			}
-			promoted = append(promoted, item)
 		}
 	}
 

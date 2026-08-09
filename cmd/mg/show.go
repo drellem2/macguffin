@@ -129,7 +129,15 @@ item as "unknown", not as Daniel.`,
 			case item.Snoozed(time.Now().UTC()):
 				fmt.Printf("%-10s %s (in %s)\n", "Snooze:", item.SnoozeRaw, workitem.HumanUntil(time.Until(item.Snooze)))
 			default:
-				fmt.Printf("%-10s %s (elapsed; the next `mg schedule` sweep releases it)\n", "Snooze:", item.SnoozeRaw)
+				// An elapsed gate on a PENDING item is about to open — this very
+				// command is promoting it on another goroutine, and the read that
+				// produced this line may simply have won the race. On any other
+				// status the gate is spent litter, not a promise.
+				if status == "pending" {
+					fmt.Printf("%-10s %s (elapsed; being released now — `mg show` again)\n", "Snooze:", item.SnoozeRaw)
+				} else {
+					fmt.Printf("%-10s %s (elapsed and spent; `mg schedule` clears it)\n", "Snooze:", item.SnoozeRaw)
+				}
 			}
 		}
 		if item.Repo != "" {

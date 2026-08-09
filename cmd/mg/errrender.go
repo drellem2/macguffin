@@ -83,12 +83,17 @@ func usageArgs(v cobra.PositionalArgs) cobra.PositionalArgs {
 // registerErrorRendering installs a root PersistentPreRun that records whether
 // the command about to execute is in --json mode. Cobra runs only the
 // closest-in-chain PersistentPreRun; no mg subcommand defines its own, so this
-// one fires for every command. It is additive and side-effect-free beyond
-// setting the package flag.
+// one fires for every command.
+//
+// It is also where the opportunistic snooze promoter is started, for the same
+// reason: this is the one hook that fires for every command, after flags are
+// bound and before any command does its work. See autopromote.go — the promoter
+// runs on its own goroutine and is joined by the exit seam in main().
 func registerErrorRendering() {
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		if f := cmd.Flags().Lookup("json"); f != nil && f.Changed {
 			outputJSON = true
 		}
+		startAutoPromote(cmd)
 	}
 }

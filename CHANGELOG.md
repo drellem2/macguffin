@@ -77,6 +77,46 @@ derived at all — no git, no tags, or a build from a source tarball.
   heaviest first, with the remainder counted — so a fleet sweep's totals cannot
   be pushed off the bottom of a bounded read. `--json` carries every row.
 
+- **Any `mg` command opens elapsed snoozes, so readiness no longer depends on
+  one agent's cron being alive (mg-ad63).** A snoozed item used to return to
+  `available/` only when `mg schedule` ran, and `mg schedule` ran only because
+  mayor held a `mg-schedule-sweep` cron. When that schedule was lost the gates
+  stayed shut and nothing said so: the sweep of 2026-08-04 opened with
+  `warning: the previous sweep ran 4d 9h ago`, four days of items whose gates
+  had opened sitting pending, noticed only because the sweep prints its own
+  staleness.
+
+  Promotion is now a property of the store and the binary. Every `mg` process
+  starts a goroutine beside the user's command that promotes pending items whose
+  wake time has passed. **Not a ticker** — mg is a CLI whose median process lives
+  a few milliseconds, so a goroutine ticking every N seconds fires zero times in
+  almost every process that starts one; the useful half of "another goroutine"
+  is concurrency, not periodicity. It runs once per invocation, started before
+  the command and joined after it, so the two overlap and the user's output is
+  already written by the time anything waits.
+
+  Three things constrain it:
+
+  - **It cannot fail your command.** A store it cannot write makes `mg list`
+    print a warning on stderr and exit **0**. Abandonment is safe for the same
+    reason a missed sweep was: the gate is level-triggered, so whatever one run
+    does not finish, the next invocation promotes from the same on-disk state.
+  - **Concurrent promoters cannot duplicate an item.** Promotion is now
+    `rename(2)` **first** — mg's only concurrency primitive, exactly one winner,
+    losers get `ENOENT` and stay quiet. Clearing the spent gate before the
+    rename, which is what the sweep used to do, is an `O_CREATE|O_TRUNC` write
+    that a losing promoter performs *after* the winner moved the file, putting
+    the same item in `pending/` and `available/` at once. With twelve polecats
+    plus crew all promoting, that stopped being theoretical.
+  - **It is the clock gate only**, and it does not compute the done-set unless
+    it has already found an elapsed wake time — so the common case is one
+    `ReadDir` and no writes. The dependency gate stays with `mg done`, which
+    sweeps at the instant a parent completes.
+
+  **This is a behaviour change on read paths:** `mg list` can move a file. The
+  promotion is announced on stderr, so `--json` stdout stays a single parseable
+  document. `MG_NO_AUTO_PROMOTE=1` opts out entirely.
+
 - **A mailbox registration is now a durable record, so an unregistered box is
   distinguishable after the fact (mg-d639).** `mg mail send` already refuses a
   recipient mg has never seen — but that refusal fires **once per name**.
@@ -350,6 +390,41 @@ derived at all — no git, no tags, or a build from a source tarball.
   the release *tag* carries it. Fields are compared as numbers rather than via
   `sort -V`, which is not dependable across the Linux, macOS and FreeBSD the
   installer claims to support.
+
+### Changed
+
+- **`mg snooze` no longer refuses when nothing has driven the sweep (mg-ad63).**
+  That refusal was correct while `mg schedule` was the only thing that opened a
+  gate. It is now false, and it would have fired hardest in exactly the
+  situation automatic promotion exists for — a fleet that has lost its sweep
+  cron. `--force` is kept as an accepted no-op with a deprecation notice rather
+  than removed, so scripts passing it do not start failing with exit 2.
+
+- **`mg schedule`'s staleness warning is repointed, not retired (mg-ad63).** It
+  used to say *"Snoozes open only when this sweep runs"*, which is no longer
+  true, and it was the only detector that surfaced the four-day gap — so it is
+  not silently dropped. It now fires on a held-or-stranded population and names
+  what the sweep is still load-bearing for: the **stranded** report, items no
+  completion can ever release, which automatic promotion by construction can
+  never fix and which are invisible from every other angle.
+
+  Replacing it as the snooze safety net is a **stricter** check that measures the
+  outcome instead of a proxy: a pending item with **every gate open**,
+  immediately after a sweep whose job was to move it, can only mean promotion is
+  *failing*. `mg schedule` names those items and says the store may be read-only
+  or full — a class of cause the old cron-absence check could never have seen.
+  A sweep that cannot promote now runs its reports before exiting non-zero,
+  rather than returning at the first error with nothing said about which items
+  did not move.
+
+- **`mg schedule` clears spent gates left on already-promoted items (mg-ad63).**
+  A process killed between the rename that promotes an item and the write that
+  clears its spent `snooze:` value — or a claim landing inside that same window
+  — leaves an inert elapsed wake time on an item that is no longer pending. It
+  gates nothing, but it reads as though the item were still scheduled. The sweep
+  wipes those and names them. A *future* wake time on a non-pending item is left
+  alone: only a hand-edit produces one, and deleting a gate somebody set on
+  purpose is not a repair.
 
 ### Fixed
 

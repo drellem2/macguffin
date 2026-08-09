@@ -115,6 +115,14 @@ func init() {
 // human text), and exits with the category's frozen code (§5).
 func main() {
 	err := rootCmd.Execute()
+
+	// Join the opportunistic snooze promoter HERE, after the command has
+	// written everything it is going to write and before any error rendering.
+	// Joining at the seam is what keeps a concurrent goroutine from interleaving
+	// with the command's own output, and it is why the promoter reports through
+	// a channel rather than printing as it goes. It cannot change err.
+	finishAutoPromote(os.Stderr)
+
 	if err == nil {
 		return
 	}
