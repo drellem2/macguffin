@@ -197,9 +197,38 @@ func TestCLI_AutoPromoteKeepsJSONStdoutClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mg list --json: %v\nstderr: %s", err, stderr.String())
 	}
-	var parsed any
-	if err := json.Unmarshal(stdout, &parsed); err != nil {
-		t.Fatalf("stdout is not parseable JSON — the promoter leaked into it: %v\n%s", err, stdout)
+	// `mg list --json` is NDJSON: one object per line. Parsing the whole stream
+	// as a single document only ever worked by accident, on the one-item store
+	// this test builds, and it turned BOTH interesting failures into the same
+	// opaque syntax error — a promoter notice leaking onto stdout, and the item
+	// going missing from stdout entirely, are opposite defects and must not
+	// report identically. Parse per line, and say which one happened.
+	var items []map[string]any
+	for _, line := range strings.Split(strings.TrimRight(string(stdout), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+			t.Fatalf("a stdout line is not parseable JSON — the promoter leaked into it: %v\n%q", err, line)
+		}
+		items = append(items, obj)
+	}
+
+	// The item must be PRESENT. This is the assertion the test was missing: the
+	// promoter renames pending/ -> available/ while the listing walks those same
+	// directories, and a walk that reads the destination before the source sees
+	// the item in neither. That emits zero lines, which is zero bytes, which a
+	// `jq` consumer reads as "no results" rather than as an error.
+	if len(items) != 1 {
+		t.Fatalf("stdout has %d items, want exactly 1 — a promotion mid-listing must not make the item vanish:\n%q",
+			len(items), stdout)
+	}
+	if got := items[0]["id"]; got != id {
+		t.Errorf("stdout lists %v, want %s", got, id)
+	}
+	if got := items[0]["status"]; got != "available" {
+		t.Errorf("stdout reports status %v, want available", got)
 	}
 	if !strings.Contains(stderr.String(), "Snooze elapsed") {
 		t.Errorf("the promotion must still be announced, on stderr:\n%s", stderr.String())

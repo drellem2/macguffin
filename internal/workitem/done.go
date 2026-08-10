@@ -242,18 +242,76 @@ func ListByStatus(root, status string) ([]*Item, error) {
 	return items, nil
 }
 
+// listAllOrder is the order ListAll reads the lifecycle directories, and it is
+// the order items FLOW between them: pending → available → claimed → done.
+//
+// That ordering is load-bearing, not cosmetic. Enumeration is four separate
+// ReadDirs and nothing holds the store still across them, so another process —
+// an agent's `mg claim`, or the auto-promoter that now runs on every single mg
+// invocation — can rename an item out of one directory and into another
+// between two of the reads. Which way that lands depends entirely on the order:
+//
+//   - source read BEFORE destination: the item is seen twice, once on each side
+//     of the rename. Recoverable — dedupe below drops the stale sighting.
+//   - destination read BEFORE source: the item is seen NOT AT ALL. It is absent
+//     from the destination (not moved yet) and absent from the source (already
+//     moved). Unrecoverable, and silent.
+//
+// The order was previously available, claimed, done, pending — which read
+// pending, the source of every promotion, LAST. So a promotion landing mid-scan
+// made the promoted item vanish from its own listing. `mg list --json` emitted
+// zero lines for a store holding one item, and because that stream is NDJSON,
+// zero lines is zero bytes: a `jq` consumer reads it as "no results" rather than
+// as an error. Reading sources first converts that silent disappearance into a
+// duplicate, which is a thing code can actually fix.
+//
+// WHAT THIS ORDER DOES NOT COVER. The lifecycle is not a line, it is a cycle:
+// `mg unclaim` moves claimed -> available and `mg reopen` moves done ->
+// available, both backwards along this order. No single ordering can read every
+// transition's source first when the transitions form a cycle, so those two
+// edges keep the vanishing window and ordering alone cannot close it. They are
+// left as they were, deliberately: they fire when a specific agent unclaims or
+// reopens at that exact instant, whereas promotion now fires on EVERY mg
+// invocation in the fleet, which is the difference between a race you might hit
+// and one CI hit on the first run after it shipped.
+var listAllOrder = []string{"pending", "available", "claimed", "done"}
+
 // ListAll returns all work items across active statuses, grouped by status.
 // Archived and shelved items are excluded — use ListByStatus to retrieve them.
+//
+// An item caught mid-rename is reported once, under the last status it was seen
+// in. Last, not first, because listAllOrder reads sources before destinations:
+// the later sighting is the one on the far side of the rename, so it is the
+// item's newer location.
 func ListAll(root string) (map[string][]*Item, error) {
 	result := make(map[string][]*Item)
-	for _, status := range []string{"available", "claimed", "done", "pending"} {
+	seenIn := make(map[string]string) // item ID -> status group currently holding it
+	for _, status := range listAllOrder {
 		items, err := ListByStatus(root, status)
 		if err != nil {
 			continue
 		}
-		if len(items) > 0 {
-			result[status] = items
+		for _, item := range items {
+			if prev, dup := seenIn[item.ID]; dup {
+				result[prev] = dropByID(result[prev], item.ID)
+				if len(result[prev]) == 0 {
+					delete(result, prev)
+				}
+			}
+			result[status] = append(result[status], item)
+			seenIn[item.ID] = status
 		}
 	}
 	return result, nil
+}
+
+// dropByID returns items without the entry for id, preserving order.
+func dropByID(items []*Item, id string) []*Item {
+	out := items[:0]
+	for _, item := range items {
+		if item.ID != id {
+			out = append(out, item)
+		}
+	}
+	return out
 }

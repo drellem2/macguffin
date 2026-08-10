@@ -428,6 +428,37 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Fixed
 
+- **A promotion landing mid-listing made the promoted item vanish from that
+  listing entirely (mg-9e3d).** `ListAll` walks the lifecycle directories with
+  four separate `ReadDir`s and nothing holds the store still across them, so a
+  rename can land between two of the reads. The order decides what that costs:
+  read a transition's SOURCE first and the item is seen twice, once on each side
+  of the rename; read the DESTINATION first and it is seen **not at all** —
+  absent from the destination because it has not moved yet, absent from the
+  source because it already has.
+
+  The order was `available, claimed, done, pending`, which read `pending/` — the
+  source of every promotion — last. Harmless while promotion only happened
+  inside `mg schedule`; not harmless since mg-ad63 made **every** `mg`
+  invocation promote. `mg list --json` could emit zero lines for a store holding
+  one item, and that stream is NDJSON, so zero lines is zero bytes: `jq` reads it
+  as "no results" rather than as an error. This is what turned macguffin's `main`
+  red — `TestCLI_AutoPromoteKeepsJSONStdoutClean` failed with `unexpected end of
+  JSON input`, an **empty** stdout rather than the polluted one the test name
+  suggests.
+
+  The walk now reads sources before destinations (`pending, available, claimed,
+  done`) and deduplicates by ID, keeping the later sighting because that is the
+  post-rename one. The forward flow is now safe. The backward edges —
+  `mg unclaim` (claimed → available) and `mg reopen` (done → available) — close
+  a cycle that no single ordering can linearise, and they keep the window;
+  they fire on an explicit human action rather than on every invocation.
+
+  The test that caught it was also strengthened: it parsed NDJSON as one JSON
+  document, so a leaked notice and a vanished item reported identically. It now
+  parses per line and asserts the item is *present*, exactly once, as
+  `available`.
+
 - **"Never existed" and "real but empty" are different answers to
   `mg mail list AGENT` (mg-d639).** The prose already differed; nothing
   downstream could use the difference. Under `--json` **both emitted nothing at
