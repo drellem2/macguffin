@@ -116,11 +116,12 @@ func init() {
 func main() {
 	err := rootCmd.Execute()
 
-	// Join the opportunistic snooze promoter HERE, after the command has
+	// REPORT the opportunistic snooze promoter here, after the command has
 	// written everything it is going to write and before any error rendering.
-	// Joining at the seam is what keeps a concurrent goroutine from interleaving
-	// with the command's own output, and it is why the promoter reports through
-	// a channel rather than printing as it goes. It cannot change err.
+	// The promoter itself was already joined in PersistentPreRun, in front of
+	// the command, so that no command can read a store its own process is still
+	// rewriting; what is left for the seam is saying what happened, below the
+	// output the caller actually asked for. It cannot change err.
 	finishAutoPromote(os.Stderr)
 
 	if err == nil {

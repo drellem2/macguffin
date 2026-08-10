@@ -85,15 +85,27 @@ func usageArgs(v cobra.PositionalArgs) cobra.PositionalArgs {
 // closest-in-chain PersistentPreRun; no mg subcommand defines its own, so this
 // one fires for every command.
 //
-// It is also where the opportunistic snooze promoter is started, for the same
-// reason: this is the one hook that fires for every command, after flags are
-// bound and before any command does its work. See autopromote.go — the promoter
-// runs on its own goroutine and is joined by the exit seam in main().
+// It is also where the opportunistic snooze promoter runs, for the same reason:
+// this is the one hook that fires for every command, after flags are bound and
+// before any command does its work.
+//
+// Start and await are BOTH here, and adjacent on purpose. The promoter renames
+// items between the very directories a listing walks, and an mg listing derives
+// status from the directory an item was found in — so a promoter still running
+// while the command reads makes the command report a state its own process is
+// in the middle of superseding. Joining here, in front of the command, is what
+// stops that; see the header comment in autopromote.go. The goroutine remains
+// because it is how the wait gets a timeout.
+//
+// The barrier lives here rather than at each store-reading command because a
+// barrier you have to remember to call is one a new command will forget, and
+// the symptom of forgetting it is a stale field in valid-looking JSON.
 func registerErrorRendering() {
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		if f := cmd.Flags().Lookup("json"); f != nil && f.Changed {
 			outputJSON = true
 		}
 		startAutoPromote(cmd)
+		awaitAutoPromote()
 	}
 }

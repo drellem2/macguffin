@@ -353,15 +353,27 @@ thing that opens it.** A snoozed item is not `available/`, so stall-watch and
 priority-wake cannot see it, and `pending` is exactly what a correctly-waiting
 item looks like.
 
-**So the opener is the binary, not a schedule.** Every `mg` process starts a
-goroutine beside the user's command that promotes pending items whose wake time
-has passed (`internal/workitem/autopromote.go`). Readiness used to depend on
+**So the opener is the binary, not a schedule.** Every `mg` process promotes
+pending items whose wake time has passed, on a goroutine started and joined
+before the user's command runs (`internal/workitem/autopromote.go`,
+`cmd/mg/autopromote.go`). Readiness used to depend on
 mayor's `mg-schedule-sweep` cron: when that schedule was lost, the next sweep
 reported `the previous sweep ran 4d 9h ago`, and the only reason anyone noticed
 four days of open-but-shut gates is that the sweep printed its own staleness. An
 item's readiness must not depend on one particular agent being alive.
 
-Three constraints shape that promoter, and they are the interesting part:
+Four constraints shape that promoter, and they are the interesting part:
+
+- **It finishes before the command reads.** The promoter renames items between
+  the very directories a listing walks, and an mg listing has no status field to
+  read — it takes an item's status from the directory it was found in. Run it
+  *beside* the command, as this code first did, and one `mg list --json` can
+  print `"status":"pending"` on stdout while its own stderr announces the
+  promotion and the item sits in `available/`. Read ordering (see `listAllOrder`)
+  makes a mid-walk rename survivable; it cannot make a reader see a rename that
+  has not happened yet. So the goroutine is joined in `PersistentPreRun`, in
+  front of the command. It stays a goroutine because that is how the wait gets a
+  timeout — abandonment, not overlap, is what it was really buying.
 
 - **Rename first.** Promotion is `rename(2)` from `pending/` to `available/`
   *before* anything else, because rename is mg's only concurrency primitive —
