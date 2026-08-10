@@ -238,6 +238,116 @@ func TestCLI_AutoPromoteKeepsJSONStdoutClean(t *testing.T) {
 	}
 }
 
+// TestCLI_AutoPromoteFinishesBeforeTheCommandReads is the test above with the
+// interleaving FORCED, rather than left to whether CI happened to be loaded.
+//
+// The one above is a race by construction: the promoter renames pending/x.md to
+// available/x.md while `mg list` walks those same directories, and an mg listing
+// takes an item's status from the directory it was found in. It passed on every
+// developer machine and failed on CI, twice, on two different commits — because
+// the losing interleaving needs the reader to get through both ReadDirs before
+// the rename lands, and that is a coin CI flips differently.
+//
+// MG_AUTO_PROMOTE_DELAY holds the promoter back long enough that the reader
+// WILL win that race if it is allowed to run concurrently at all. So:
+//
+//   - without the PersistentPreRun barrier, stdout says pending, every time.
+//   - with it, the command does not start until the promoter is done, so stdout
+//     says available, every time.
+//
+// The delay is well inside autoPromoteBudget, so nothing here is testing the
+// timeout; that is the next test.
+func TestCLI_AutoPromoteFinishesBeforeTheCommandReads(t *testing.T) {
+	bin, env, root := snoozeEnv(t)
+	id := snzNewItem(t, bin, env, "Slow store")
+	snzSnooze(t, bin, env, id, "3d")
+	elapse(t, root, id)
+
+	slow := append(append([]string{}, env...), "MG_AUTO_PROMOTE_DELAY=250ms")
+	cmd := exec.Command(bin, "list", "--json")
+	cmd.Env = slow
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	stdout, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("mg list --json: %v\nstderr: %s", err, stderr.String())
+	}
+
+	// IN-BAND CONTROL, and it is the whole reason this test is worth having.
+	// A cleanliness or freshness assertion on a run where the promote never
+	// fired passes vacuously — it proves only that nothing happened. Assert the
+	// promotion occurred in the SAME run being judged, before judging it.
+	if !strings.Contains(stderr.String(), "Snooze elapsed") {
+		t.Fatalf("the promoter did not run, so this test proves nothing:\n%s", stderr.String())
+	}
+	if got := dirOf(t, root, id); got != "available" {
+		t.Fatalf("the promoter did not finish; item is %q, want available", got)
+	}
+
+	var items []map[string]any
+	for _, line := range strings.Split(strings.TrimRight(string(stdout), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+			t.Fatalf("a stdout line is not parseable JSON: %v\n%q", err, line)
+		}
+		items = append(items, obj)
+	}
+	if len(items) != 1 {
+		t.Fatalf("stdout has %d items, want exactly 1:\n%q", len(items), stdout)
+	}
+	if got := items[0]["status"]; got != "available" {
+		t.Errorf("stdout reports status %v, want available — the command read the store "+
+			"while its own promoter was still rewriting it, and stderr above says so", got)
+	}
+}
+
+// The barrier waits, but not forever. A store that has stopped responding must
+// not hold the user's command hostage past autoPromoteBudget: mg gives up, says
+// it gave up, runs the command anyway, and exits 0.
+//
+// The delay here is far longer than the budget, so the promoter cannot possibly
+// land — which makes "the item is still pending" a real in-band control that
+// abandonment happened, rather than an assertion about timing luck.
+func TestCLI_AutoPromoteBarrierAbandonsAWedgedStore(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spends autoPromoteBudget waiting on purpose")
+	}
+	bin, env, root := snoozeEnv(t)
+	id := snzNewItem(t, bin, env, "Wedged store")
+	snzSnooze(t, bin, env, id, "3d")
+	elapse(t, root, id)
+
+	wedged := append(append([]string{}, env...), "MG_AUTO_PROMOTE_DELAY=10s")
+	start := time.Now()
+	out, code := snzRun(t, bin, wedged, "list")
+	elapsed := time.Since(start)
+
+	if code != 0 {
+		t.Fatalf("an unresponsive promoter must not fail `mg list`: exit %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "Wedged store") {
+		t.Errorf("`mg list` must still produce its own output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "gave up promoting elapsed snoozes") {
+		t.Errorf("abandonment must be said out loud, got:\n%s", out)
+	}
+	if !strings.Contains(out, "does not affect the command above") {
+		t.Errorf("the warning must say it did not affect the command, got:\n%s", out)
+	}
+	if got := dirOf(t, root, id); got != "pending" {
+		t.Errorf("item is %q, want pending — the promoter was supposed to be abandoned, "+
+			"so this run did not exercise the timeout at all", got)
+	}
+	// The budget is a ceiling on the wait, and the point of having one is that it
+	// is not the 10s the promoter would have taken.
+	if elapsed > autoPromoteBudget+5*time.Second {
+		t.Errorf("waited %s for a promoter it was supposed to abandon after %s", elapsed, autoPromoteBudget)
+	}
+}
+
 // The opt-out. `mg list` mutating the store is a real behaviour change, and a
 // reader who needs a provably read-only mg gets one.
 func TestCLI_AutoPromoteCanBeDisabled(t *testing.T) {

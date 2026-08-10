@@ -511,6 +511,48 @@ derived at all — no git, no tags, or a build from a source tarball.
   parses per line and asserts the item is *present*, exactly once, as
   `available`.
 
+- **An `mg` command could contradict its own snooze promoter, reporting a status
+  the same process was in the middle of superseding (mg-3804).** The promoter
+  ran *beside* the command — started in `PersistentPreRun`, joined at the exit
+  seam — while its entire job is renaming `pending/x.md` to `available/x.md`.
+  An `mg` listing has no status field to read: it takes an item's status from
+  the directory it was found in. So one `mg list --json` could print
+
+  ```
+  stdout: {"id":"mg-xxxx","status":"pending"}
+  stderr: Snooze elapsed: promoted mg-xxxx to available
+  ```
+
+  with the item sitting in `available/` by the time the process exited.
+
+  This is the half mg-9e3d did not reach. Read ordering bought "the item is
+  never absent"; no ordering can buy "the item is never stale", because a reader
+  cannot observe a rename that has not happened yet. `main` stayed red across
+  both commits on the same test name for opposite reasons — first an *empty*
+  stdout, then a *stale* one.
+
+  The promoter is now joined **before** the command runs, in the same
+  `PersistentPreRun` that starts it. The cost is what `AutoPromote` costs in the
+  common case — one `ReadDir` of `pending/`, zero writes — paid serially in a
+  process whose median life is a few milliseconds. The goroutine stays, because
+  overlap was never the only thing it bought: it is how the wait gets a timeout,
+  and `autoPromoteBudget` still abandons a store that has stopped answering.
+
+  Two windows are deliberately left open and documented: another process's
+  `mg claim` landing mid-listing (nothing in one process can close that), and
+  this process's own promoter landing after the barrier abandoned it. The second
+  can still yield a stale listing, but no longer the self-contradiction — the
+  seam reports `gave up promoting elapsed snoozes`, never a promotion beside a
+  listing that denies it.
+
+  The regression test no longer depends on losing a race by luck.
+  `MG_AUTO_PROMOTE_DELAY` is a test seam that holds the promoter back, making
+  the losing interleaving deterministic: without the barrier the new test
+  reproduces CI's exact assertion on every run, and with it, never. mg-9e3d
+  verified the equivalent property with a temporary instrumented build — a
+  measurement that ran once and then deleted itself, which is why the next
+  regression was found by CI on the merge commit rather than before it.
+
 - **"Never existed" and "real but empty" are different answers to
   `mg mail list AGENT` (mg-d639).** The prose already differed; nothing
   downstream could use the difference. Under `--json` **both emitted nothing at

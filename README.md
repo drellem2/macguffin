@@ -310,9 +310,15 @@ open:
 
 This is a **behaviour change on read paths**: `mg list` can move a file. The
 promotion is announced on stderr (`Snooze elapsed: promoted mg-1234 …`), so
-`--json` stdout stays a single parseable document, and it can never fail your
-command — a store it cannot write produces a warning and exit 0. Set
-`MG_NO_AUTO_PROMOTE=1` for a provably read-only mg.
+`--json` stdout carries nothing but the NDJSON stream you asked for, and it can
+never fail your command — a store it cannot write produces a warning and exit 0.
+Set `MG_NO_AUTO_PROMOTE=1` for a provably read-only mg.
+
+A command that promotes also **reports the promotion it just made**: the
+promoter finishes before the command reads the store, so `mg list` shows the
+item under `available`, not under the `pending` it occupied a moment earlier.
+The one exception is a store that has stopped responding, where mg abandons the
+promotion after a few seconds and says so rather than making you wait.
 
 **`mg schedule` is still worth running on a clock, for its reports.** It is no
 longer what opens a snooze, but it is the only view of the pending population:
