@@ -428,6 +428,58 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Fixed
 
+- **`mg mail list AGENT --json` emitted two different schemas, selected by
+  whether the mailbox had mail (mg-4d34).** The documented contract is "each
+  message is one NDJSON object `{id,from,subject,date,read}`". An **empty**
+  mailbox instead emitted a single mailbox-summary object
+  `{mailbox,unread,exists,registration}`, which shares none of those fields:
+
+      $ mg mail list mayor --json | jq -s 'length'
+      1                       # <- ONE row, for an EMPTY mailbox
+      $ mg mail list mayor --all --json | jq -s 'length'
+      5897                    # <- message objects, as documented
+
+  So the cheapest automation anyone writes — "do I have mail?" as a row count —
+  returned a **false positive, forever, on exactly the case where the answer was
+  no**, and in the dangerous direction: the checker concludes there *is* mail.
+  Field selectors were no better, because `.from` on the summary is `null`, so
+  `jq -r '.[] | "\(.from): \(.subject)"'` printed `null: null` — which reads as
+  a *malformed message*, not an empty box. The reporter misdiagnosed it as a jq
+  quirk twice in one shift before checking the bytes with `od -c`.
+
+  The summary itself is not the mistake; it was added (mg-d639) so a scripted
+  consumer could tell a quiet inbox from a misdelivery, and that distinction is
+  worth keeping — reading "No mailbox for X yet" as "X has no new mail" is how a
+  stalled review stayed invisible for forty minutes. The mistake was answering
+  that question **on the message stream**, where a second schema costs the first
+  one its meaning. Discriminating on the absent `id` only protects a consumer
+  that selects fields; one that *counts rows* never looks at a field.
+
+  So the two answers now travel on separate channels. **stdout is message
+  objects and nothing else, in every state of the mailbox** — an empty mailbox
+  emits zero bytes and `jq -s 'length'` is the message count. The status object
+  moves to **stderr**, where metadata about a listing belongs:
+
+      $ mg mail list quietbox --json | jq -s 'length'
+      0
+      $ mg mail list quietbox --json 2>&1 >/dev/null | jq -c .
+      {"mailbox":"quietbox","unread":0,"exists":true,"registration":"registered"}
+
+  The **sender-filter summary** (mg-5168) moved with it, for the same reason and
+  because otherwise the reported behaviour would have survived one
+  `--exclude-from` away — the remedy reproducing the defect it remedies. A
+  filtered listing's row count is now exactly its `listed` count, not `listed`
+  plus one. Nothing is lost: `listed`/`suppressed`/`unread` still arrive
+  whenever a predicate is active, and the human path is unchanged in both cases.
+  Exit stays **0** throughout; scripts needing missing-vs-empty should read
+  stderr or the no-arg enumeration, never the exit code.
+
+  Regression coverage asserts the row count *with a non-empty control in the
+  same test*, so it cannot pass by the command being broken into silence, and
+  the new tests read stdout and stderr **separately** — the existing suite
+  covered the summary's contents thoroughly but decoded combined output, which
+  is exactly why a defect about *which stream a row is on* shipped past it.
+
 - **A promotion landing mid-listing made the promoted item vanish from that
   listing entirely (mg-9e3d).** `ListAll` walks the lifecycle directories with
   four separate `ReadDir`s and nothing holds the store still across them, so a

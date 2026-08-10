@@ -152,15 +152,19 @@ func TestCLI_MailListSenderFilterNeverExistedStillDistinct(t *testing.T) {
 	}
 }
 
-// TestCLI_MailListSenderFilterJSONSummary: the trailing summary object carries
-// the counts, is emitted whether or not messages matched, and has no "id" — so
-// the documented consumer guard `select(.id and ...)` skips it exactly as it
-// already skips the empty-mailbox sentinel.
+// TestCLI_MailListSenderFilterJSONSummary: the summary object carries the
+// counts and is emitted whether or not messages matched — on STDERR, so that
+// stdout remains a pure message stream and a consumer that COUNTS rows is not
+// handed one row per filtered listing (mg-4d34).
 func TestCLI_MailListSenderFilterJSONSummary(t *testing.T) {
 	bin, env := mailInit(t)
 	mailNoisyBox(t, bin, env, "arch")
 
-	decode := func(out string) (msgs []map[string]any, summary map[string]any) {
+	// decode enforces the split itself: every stdout row must be a message,
+	// and the summary must be on stderr. Reading them from one merged stream
+	// is how the row-count defect stayed invisible — the old test decoded
+	// combined output and could not see which stream a row arrived on.
+	decode := func(out, errOut string) (msgs []map[string]any, summary map[string]any) {
 		t.Helper()
 		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 			if line == "" {
@@ -168,31 +172,40 @@ func TestCLI_MailListSenderFilterJSONSummary(t *testing.T) {
 			}
 			var obj map[string]any
 			if err := json.Unmarshal([]byte(line), &obj); err != nil {
-				t.Fatalf("non-JSON line %q: %v", line, err)
+				t.Fatalf("non-JSON line on stdout %q: %v", line, err)
 			}
-			// This is the guard the docs hand to consumers.
-			if _, hasID := obj["id"]; hasID {
-				msgs = append(msgs, obj)
+			if _, hasID := obj["id"]; !hasID {
+				t.Fatalf("stdout carried a non-message object — the message stream must hold "+
+					"messages only, or a row count stops being a message count:\n%s", out)
+			}
+			msgs = append(msgs, obj)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(errOut), "\n") {
+			if line == "" || !strings.HasPrefix(line, "{") {
 				continue
 			}
+			var obj map[string]any
+			if err := json.Unmarshal([]byte(line), &obj); err != nil {
+				t.Fatalf("non-JSON object line on stderr %q: %v", line, err)
+			}
 			if summary != nil {
-				t.Fatalf("more than one non-message object in the stream:\n%s", out)
+				t.Fatalf("more than one summary object on stderr:\n%s", errOut)
 			}
 			summary = obj
 		}
 		return msgs, summary
 	}
 
-	out, _, err := runMail(t, bin, env, "list", "arch", "--exclude-from=scheduler", "--json")
+	out, errOut, err := runMail(t, bin, env, "list", "arch", "--exclude-from=scheduler", "--json")
 	if err != nil {
 		t.Fatalf("filtered json list failed: %v\n%s", err, out)
 	}
-	msgs, summary := decode(out)
+	msgs, summary := decode(out, errOut)
 	if len(msgs) != 2 {
 		t.Fatalf("expected 2 surviving messages, got %d:\n%s", len(msgs), out)
 	}
 	if summary == nil {
-		t.Fatalf("a filtered stream must carry a summary object:\n%s", out)
+		t.Fatalf("a filtered listing must carry a summary object on stderr:\n%s", errOut)
 	}
 	if got := summary["suppressed"]; got != float64(3) {
 		t.Errorf("suppressed = %v, want 3:\n%s", got, out)
@@ -216,17 +229,22 @@ func TestCLI_MailListSenderFilterJSONSummary(t *testing.T) {
 		t.Errorf("from must be [] rather than null when unset, got %v", summary["from"])
 	}
 
-	// Filtered to nothing: still exactly one summary object, still counted.
-	out, _, err = runMail(t, bin, env, "list", "arch", "--from=nobody-at-all", "--json")
+	// Filtered to nothing: still exactly one summary object, still counted —
+	// and stdout is empty, because no message matched and the summary is not
+	// a message.
+	out, errOut, err = runMail(t, bin, env, "list", "arch", "--from=nobody-at-all", "--json")
 	if err != nil {
 		t.Fatalf("filtered-to-empty json list failed: %v\n%s", err, out)
 	}
-	msgs, summary = decode(out)
+	msgs, summary = decode(out, errOut)
 	if len(msgs) != 0 {
 		t.Fatalf("expected no messages, got %d:\n%s", len(msgs), out)
 	}
+	if strings.TrimSpace(out) != "" {
+		t.Errorf("a listing filtered to nothing must emit zero bytes on stdout, got:\n%s", out)
+	}
 	if summary == nil || summary["suppressed"] != float64(5) || summary["unread"] != float64(5) {
-		t.Fatalf("emptied stream must report 5 suppressed over 5 unread, got:\n%s", out)
+		t.Fatalf("emptied listing must report 5 suppressed over 5 unread, got:\n%s", errOut)
 	}
 }
 
@@ -255,13 +273,17 @@ func TestCLI_MailListUnfilteredJSONUnchanged(t *testing.T) {
 		}
 	}
 
-	// The empty-mailbox sentinel still stands alone.
-	out, _, err = runMail(t, bin, env, "list", "arch", "--archived", "--json")
+	// The empty-listing status object is the plain one, not the filter
+	// summary — and it is on stderr, leaving stdout empty (mg-4d34).
+	out, errOut, err := runMail(t, bin, env, "list", "arch", "--archived", "--json")
 	if err != nil {
-		t.Fatalf("archived json list failed: %v\n%s", err, out)
+		t.Fatalf("archived json list failed: %v\n%s", err, errOut)
 	}
-	if !strings.Contains(out, `"exists":true`) || strings.Contains(out, `"suppressed"`) {
-		t.Errorf("an unfiltered empty listing must emit the plain sentinel, got:\n%s", out)
+	if strings.TrimSpace(out) != "" {
+		t.Errorf("an empty listing must leave stdout empty, got:\n%s", out)
+	}
+	if !strings.Contains(errOut, `"exists":true`) || strings.Contains(errOut, `"suppressed"`) {
+		t.Errorf("an unfiltered empty listing must emit the plain status object, got:\n%s", errOut)
 	}
 }
 

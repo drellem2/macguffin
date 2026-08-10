@@ -42,7 +42,15 @@ type (
 		Read    bool   `json:"read"`
 	}
 
-	// mailboxJSON is one line of no-arg `mg mail list --json` output. A
+	// mailboxJSON is one line of no-arg `mg mail list --json` output, on
+	// STDOUT — there the mailbox IS the record, so it is the stream's schema.
+	//
+	// It is also the status object `mg mail list AGENT --json` writes to
+	// STDERR when there is nothing to list. There the mailbox is not the
+	// record and a message is, so emitting it on stdout mixed two schemas into
+	// one stream and made an empty mailbox count as one message (mg-4d34).
+	//
+	// A
 	// mailbox present in the stream exists on disk; its absence means the
 	// mailbox never existed. Combined with unread this lets a scripted
 	// consumer tell existing-but-empty (present, unread 0) from
@@ -64,15 +72,20 @@ type (
 		Registration string `json:"registration"`
 	}
 
-	// mailFilterJSON is the trailing summary object emitted by
-	// `mg mail list AGENT --json` when — and only when — a sender predicate
-	// (--from / --exclude-from) is active. It is a superset of mailboxJSON, so
-	// it also answers the existing-vs-never-existed question, and it carries
-	// NO "id" field, which is what lets the documented consumer guard
+	// mailFilterJSON is the summary object `mg mail list AGENT --json` writes
+	// to STDERR when — and only when — a sender predicate (--from /
+	// --exclude-from) is active. It is a superset of mailboxJSON, so it also
+	// answers the existing-vs-never-existed question.
+	//
+	// It used to be a trailing object on stdout, discriminated by carrying no
+	// "id" so that a guard like
 	//
 	//   jq 'select(.id and .from != "scheduler")'
 	//
-	// skip it exactly as it already skips the empty-mailbox sentinel.
+	// would skip it. That discriminator only protects a consumer who selects
+	// fields; one that COUNTS rows never looks at a field, so the summary
+	// inflated every filtered count by exactly one and an emptied listing
+	// counted as a message (mg-4d34). Being off the stream protects both.
 	//
 	// It is emitted even when messages were listed, because the scripted
 	// reader is the one this has to be safest for: the coordinator's inbox hit
@@ -172,6 +185,22 @@ type (
 // both single-item output and (called per element) NDJSON collections.
 func encodeJSON(v any) error {
 	return json.NewEncoder(os.Stdout).Encode(v)
+}
+
+// encodeJSONStderr writes v as one JSON object followed by a newline on STDERR.
+//
+// It exists for exactly one job: saying something ABOUT a --json stream without
+// saying it INTO the stream. `mg mail list AGENT --json` promises stdout is
+// message objects and nothing else, so the mailbox status object (mg-d639) and
+// the sender-filter summary (mg-5168) — neither of which is a message — go here
+// instead. Both are metadata about the listing, which is what stderr is for.
+//
+// The alternative, keeping them on stdout and asking consumers to discriminate
+// on a missing "id", failed in the field: a row is a row to `jq -s length`, so
+// an empty mailbox counted as one message and "is there mail?" answered yes
+// forever on precisely the case where the answer was no (mg-4d34).
+func encodeJSONStderr(v any) error {
+	return json.NewEncoder(os.Stderr).Encode(v)
 }
 
 var (
@@ -420,7 +449,10 @@ never existed is simply absent. Under --json each mailbox is one NDJSON object
 With an AGENT, list that agent's unread messages (or, with --all, read messages
 too; with --archived, archived messages). Under --json each message is one
 NDJSON object {id,from,subject,date,read}; the MSG-ID it prints is the token
-'mg mail read'/'mg mail archive' accept.
+'mg mail read'/'mg mail archive' accept. That is the WHOLE of stdout, in every
+state of the mailbox: an empty mailbox emits zero bytes, so 'jq -s length' is
+the message count and 0 means no mail. Anything mg has to say ABOUT the listing
+goes to stderr — see EMPTY AND MISSING MAILBOXES below.
 
 SENDER PREDICATE. --from=NAME lists only mail from those senders;
 --exclude-from=NAME hides them. Both are repeatable and comma-separated:
@@ -456,25 +488,37 @@ address. So whenever a predicate is active the listing is preceded by
 
 and a predicate that removes EVERYTHING says outright that the mailbox is not
 empty, instead of borrowing the wording of a quiet inbox. Under --json the same
-figures arrive as one trailing object {mailbox,unread,exists,listed,suppressed,
-from,exclude_from}, emitted whether or not any message matched; like the
-empty-mailbox sentinel it carries no "id", so a consumer selecting on .id skips
-it. "unread" is always the mailbox's true unread count, never the filtered one.
+figures arrive as one object {mailbox,unread,exists,listed,suppressed,from,
+exclude_from} on STDERR, emitted whether or not any message matched. "unread" is
+always the mailbox's true unread count, never the filtered one.
 
-A mailbox that NEVER EXISTED is reported as "No such mailbox", not as an empty
-one, and near neighbours are suggested ("did you mean bf3ae?"). The two used to
-differ in prose alone and nothing downstream could use the difference: a human
-diagnosing a silent loop read "No mailbox for X yet" as "X has no new mail",
-which is how a stalled review stayed invisible for forty minutes.
+EMPTY AND MISSING MAILBOXES. A mailbox that NEVER EXISTED is reported as "No
+such mailbox", not as an empty one, and near neighbours are suggested ("did you
+mean bf3ae?"). The two used to differ in prose alone and nothing downstream
+could use the difference: a human diagnosing a silent loop read "No mailbox for
+X yet" as "X has no new mail", which is how a stalled review stayed invisible
+for forty minutes.
 
-So the distinction survives into tooling: when there are NO messages to list,
---json emits exactly one object {mailbox,unread,exists} in place of the empty
-stream it used to emit, which was byte-identical for a real mailbox and a
-fictional one. It is the same shape the no-arg mailbox enumeration emits, and it
-carries no "id" field, so a consumer reading messages can tell the two apart.
+So the distinction survives into tooling. When there are NO messages to list,
+--json writes one object {mailbox,unread,exists,registration} to STDERR — the
+same shape the no-arg enumeration emits — while stdout stays empty, because
+empty is what a list of no messages looks like:
+
+  mg mail list quietbox --json | jq -s 'length'          # 0
+  mg mail list quietbox --json 2>&1 >/dev/null | jq .    # {"mailbox":"quietbox",...}
+
+That object was briefly on stdout, and putting it there answered the
+missing-vs-empty question by breaking the count: an empty mailbox emitted one
+row, so 'jq -s length' said 1, and the cheapest automation anyone writes — "do I
+have mail?" — returned a false positive forever on exactly the mailboxes that
+had none. Selecting a field was no better; '.from' on the status object is null,
+which reads as a corrupt message rather than as an empty box. stderr keeps both
+answers without either costing the other.
+
 Exit status stays 0 in both cases: a mailbox that does not exist yet is the
 normal state of an agent nobody has mailed, and a poller asking after one is
-asking a fair question, not making an error.
+asking a fair question, not making an error. Scripts that need the distinction
+should read stderr or the no-arg enumeration, not the exit code.
 
 STANDING. The no-arg enumeration also says which boxes nobody established. A
 mailbox is created by delivering to it, so existence was never evidence that
@@ -495,10 +539,10 @@ without that. Nothing is refused on the basis of standing; run
 
 The per-box form stays quiet about standing on the human path, because agents
 poll their own box every few minutes and a line there would be a nag on the
-healthy path. Under --json the answer is on the per-box status object when
-there is nothing to list, and on every mailbox in the no-arg enumeration — so
-'mg mail list --json' is where to ask about a box that HAS mail, since that
-stream is the messages themselves.`,
+healthy path. Under --json the answer is on the per-box status object on stderr
+when there is nothing to list, and on every mailbox in the no-arg enumeration —
+so 'mg mail list --json' is where to ask about a box that HAS mail, since its
+per-box stdout is the messages themselves.`,
 	Args: usageArgs(cobra.MaximumNArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		mr, err := mailRoot()
@@ -573,16 +617,16 @@ stream is the messages themselves.`,
 					return err
 				}
 			}
-			// A trailing summary whenever a predicate is active, so no
+			// A summary on STDERR whenever a predicate is active, so no
 			// scripted consumer can be handed a narrowed stream without the
 			// count of what was removed from it. It is a superset of the
-			// empty-mailbox sentinel, so it replaces rather than joins it.
+			// empty-mailbox status object, so it replaces rather than joins it.
 			if filter.active() {
 				standing, err := listStanding(mr, agent)
 				if err != nil {
 					return err
 				}
-				return encodeJSON(mailFilterJSON{
+				return encodeJSONStderr(mailFilterJSON{
 					Mailbox:      agent,
 					Unread:       unreadCount(mr, agent),
 					Exists:       exists,
@@ -593,16 +637,20 @@ stream is the messages themselves.`,
 					ExcludeFrom:  jsonNames(mailListExcludeFrom),
 				})
 			}
-			// An empty stream used to be the ONLY output for both a mailbox
+			// An empty STDOUT used to be the only output for both a mailbox
 			// with nothing in it and a mailbox that never existed, so no
-			// scripted consumer could tell a quiet inbox from a misdelivery.
-			// Emit the box's own state instead of nothing.
+			// scripted consumer could tell a quiet inbox from a misdelivery
+			// (mg-d639). The box's own state answers that — but on stderr.
+			// Putting it on stdout answered the second question by corrupting
+			// the first: an empty mailbox emitted one row, so the cheapest
+			// possible check, `jq -s length`, reported one message waiting
+			// forever on exactly the mailboxes that had none (mg-4d34).
 			if len(shown) == 0 {
 				standing, err := listStanding(mr, agent)
 				if err != nil {
 					return err
 				}
-				return encodeJSON(mailboxJSON{
+				return encodeJSONStderr(mailboxJSON{
 					Mailbox:      agent,
 					Unread:       unreadCount(mr, agent),
 					Exists:       exists,
