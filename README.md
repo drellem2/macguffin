@@ -49,6 +49,15 @@ sh install.sh --force                  # install even over a newer mg
 
 Supports Linux (amd64, arm64), macOS (amd64, arm64), and FreeBSD (amd64).
 
+The installer asks the GitHub API which release is latest, and does so
+anonymously — no token needed, and none is wanted, for an install on your own
+machine. The API meters anonymous callers per source IP (60/hour), which only
+becomes a problem where an IP is shared with strangers: on CI runners that quota
+is often already spent, and the call comes back `403` with nothing wrong on your
+end. Set `GITHUB_TOKEN` (or `GH_TOKEN`) there and the request is metered against
+the token instead. This repo's own `install` job does that with the default
+workflow token.
+
 The installer only ever installs **releases**, so running it on a host that
 already has a newer `mg` would be a downgrade. It refuses to do that. Both
 candidate binaries are checked, because they are not always the same file:

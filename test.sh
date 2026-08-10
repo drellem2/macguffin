@@ -7,6 +7,7 @@ go test ./...
 sh scripts/test-shadow.sh
 sh scripts/test-build-version.sh
 sh scripts/test-install-guard.sh
+sh scripts/test-install-auth.sh
 
 # scripts/test-install.sh is deliberately NOT here: it downloads a real release
 # from GitHub, so it runs in CI's `install` job instead. Everything about the

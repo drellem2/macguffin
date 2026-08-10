@@ -39,14 +39,31 @@ jobs:
   # runner at all — so its assertions could rot (and had) with nothing to notice.
   install:
     strategy:
+      # Report both legs. Under the default fail-fast, one leg's failure cancels
+      # the other mid-run, and a cancelled leg's state is unknown rather than
+      # clean — on 31363989670 that is exactly what happened to ubuntu, so the
+      # rate-limit failure could not be told apart from a macOS-only one.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # install.sh asks the GitHub API for the latest release tag. That call is
+    # rate-limited per SOURCE IP when unauthenticated (60/hour), and Actions
+    # runners share a NAT pool with the rest of the platform — so the quota is
+    # regularly spent by strangers and the call 403s with nothing wrong on our
+    # side. Run 31363989670 died exactly there, on both legs of this matrix.
+    # Authenticated, the request is metered against the token instead (5000/hr).
+    # The default workflow token needs no secret and no permission beyond the
+    # `contents: read` already granted above.
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      # test-install-guard.sh needs no network; test-install.sh downloads the
-      # latest release, which is why it is here rather than in ./test.sh.
+      # test-install-guard.sh and test-install-auth.sh need no network;
+      # test-install.sh downloads the latest release, which is why it is here
+      # rather than in ./test.sh.
       - run: sh scripts/test-install-guard.sh
+      - run: sh scripts/test-install-auth.sh
       - run: sh scripts/test-install.sh
 
   lint:

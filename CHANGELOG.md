@@ -428,6 +428,53 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Fixed
 
+- **CI's `install` job called the GitHub API anonymously and got rate-limited
+  off a shared runner IP (mg-7e8d).** `install.sh` asks
+  `api.github.com/repos/…/releases/latest` which release is latest. Anonymous
+  callers are metered at 60 requests/hour **per source IP**, and GitHub Actions
+  runners share an IP pool with every other job on the platform — so the quota
+  is routinely spent by strangers and the call returns `403`. Run 31363989670
+  died exactly there:
+
+      Run sh scripts/test-install.sh
+        curl: (56) The requested URL returned error: 403
+        Error: could not determine latest version
+
+  Nothing was wrong with the script, the release, or the endpoint: the same job
+  passed on the two runs immediately before, which is the signature of a shared
+  time-windowed quota rather than a defect. Judge this fix by whether the call
+  carries a credential, not by one green run.
+
+  The job now passes `GITHUB_TOKEN` (the default workflow token — no secret to
+  configure, no permission beyond the `contents: read` already granted), and
+  `install.sh` uses `GITHUB_TOKEN`/`GH_TOKEN` when either is set. Authenticated,
+  the request is metered against the token at 5000/hour. Measured directly
+  through the new code path: `"limit": 60` anonymous, `"limit": 5000` with a
+  token.
+
+  **The token is not baked into `install.sh`.** Anonymous is the correct call
+  for a person running `curl … | sh` on their own machine and stays the default;
+  an empty `GITHUB_TOKEN` — what a fork PR or an absent secret produces — is
+  treated as no token rather than sent as `Bearer `, which would turn a working
+  anonymous call into a 401. Both are asserted in
+  `scripts/test-install-auth.sh`.
+
+  Two details worth not re-deriving. The header is handed to curl through a
+  `--config` file on **stdin**, not `-H`, because argv is world-readable via
+  `ps(1)` and this script runs on multi-user machines. And the quotes in
+  `header = "Authorization: Bearer …"` are load-bearing: curl's config parser
+  truncates an **unquoted** value at the first space, producing the valueless
+  header `Authorization:`, which curl reads as *suppress this header* — sending
+  no credential, with no warning and exit 0. That failure is indistinguishable
+  from the bug being fixed, so the new suite checks it against the real curl
+  (via `--libcurl`, aimed at a dead local port so nothing leaves the machine)
+  with a negative control proving the assertion can fail.
+
+  The `install` matrix also sets `fail-fast: false`. On the run above, `install
+  (ubuntu-latest)` was **cancelled** when the macOS leg failed, leaving its
+  state unknown rather than clean — it is the same script on the same shared
+  pool, and it had simply been luckier with the quota window.
+
 - **`mg mail list AGENT --json` emitted two different schemas, selected by
   whether the mailbox had mail (mg-4d34).** The documented contract is "each
   message is one NDJSON object `{id,from,subject,date,read}`". An **empty**

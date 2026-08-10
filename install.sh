@@ -14,6 +14,9 @@
 #                 (microemacs) on macOS/Linux. Default: /usr/local/bin.
 #   SHADOW_MG     Set to 0 to skip the shadow symlink. Default: 1.
 #   MG_FORCE      Set to 1 to install over a newer mg. Same as --force.
+#   GITHUB_TOKEN  Optional. A token to authenticate the one GitHub API call this
+#   GH_TOKEN      script makes (looking up the latest release tag). Unset is the
+#                 normal case and works fine; see github_api() for when it isn't.
 #
 # Supports: Linux (amd64, arm64), macOS (amd64, arm64), FreeBSD (amd64)
 
@@ -54,8 +57,40 @@ detect_arch() {
     esac
 }
 
+# GET a GitHub REST API URL, authenticated only if the caller supplied a token.
+#
+# The API rate-limits unauthenticated callers by SOURCE IP, 60 requests/hour.
+# For a person running `curl … | sh` on their own machine that is ample and no
+# credential is wanted — so the default path here sends none, and must keep
+# sending none. CI is the exception: GitHub Actions runners share a NAT pool
+# with every other job on the platform, so that per-IP quota is routinely
+# already spent by strangers and the call comes back 403 with nothing wrong on
+# this end. An authenticated call is metered against the token instead (5000/hr),
+# which is why the workflow passes GITHUB_TOKEN into the install job rather than
+# this script carrying a credential of its own.
+#
+# The token goes to curl through a --config file on stdin, not through
+# `-H "Authorization: …"`, because argv is world-readable via ps(1) and this
+# script also runs on multi-user machines. Nothing here echoes it.
+#
+# The quotes around the header value are load-bearing. curl's config parser
+# takes an UNQUOTED value only up to the first space, so `header = Authorization:
+# Bearer xyz` sets the header to a bare "Authorization:" — which curl reads as
+# "suppress this header" and sends no credential at all, with no error. That
+# failure is invisible and looks exactly like the bug being fixed; it is asserted
+# against the real curl in scripts/test-install-auth.sh.
+github_api() {
+    _api_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+    if [ -n "$_api_token" ]; then
+        printf 'header = "Authorization: Bearer %s"\n' "$_api_token" \
+            | curl -sSfL --config - "$1"
+    else
+        curl -sSfL "$1"
+    fi
+}
+
 get_latest_version() {
-    curl -sSfL "https://api.github.com/repos/${REPO}/releases/latest" \
+    github_api "https://api.github.com/repos/${REPO}/releases/latest" \
         | grep '"tag_name"' \
         | sed 's/.*"tag_name": *"//;s/".*//'
 }
@@ -467,6 +502,13 @@ main() {
 
     if [ -z "$version" ]; then
         echo "Error: could not determine latest version" >&2
+        # The overwhelmingly likely cause of a 403 on that call, and the one
+        # thing the caller can do about it. Only worth saying when the call was
+        # in fact unauthenticated; with a token set, this is the wrong advice.
+        if [ -z "${GITHUB_TOKEN:-${GH_TOKEN:-}}" ]; then
+            echo "  If that was an HTTP 403, the GitHub API is rate-limiting this IP." >&2
+            echo "  Retry later, or set GITHUB_TOKEN to raise the limit." >&2
+        fi
         exit 1
     fi
 
