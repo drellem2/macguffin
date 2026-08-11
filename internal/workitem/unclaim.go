@@ -116,6 +116,16 @@ func Unclaim(root, id string, opts ...UnclaimOption) (*UnclaimResult, error) {
 	// failure here refuses the release outright: an item that stayed claimed is
 	// recoverable by re-running, whereas one released without the gate it was
 	// asked for is a dispatchable ticket nobody knows is unguarded.
+	// A gate that does not gate is refused before the release, for the same
+	// reason the write below happens before it: an item released into
+	// available/ carrying a misspelled hold is a dispatchable ticket whose
+	// assignee field reads, to a human, as held. See assigneegate.go.
+	if o.setAssignee {
+		if err := ValidateAssignee(o.assignee); err != nil {
+			return nil, err
+		}
+	}
+
 	if o.setAssignee && item.Assignee != o.assignee {
 		item.Assignee = o.assignee
 		if err := os.WriteFile(src, []byte(Render(item)), 0o644); err != nil {

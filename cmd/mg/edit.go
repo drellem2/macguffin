@@ -17,6 +17,7 @@ var (
 	editAppendBody     string
 	editAppendBodyFile string
 	editIfUnchanged    string
+	editIfAssignee     string
 
 	editType       string
 	editRepo       string
@@ -73,6 +74,47 @@ A prefix of 8 or more characters is accepted.
 --title alone is body-safe: it rewrites the "# heading" line in place and leaves
 every other byte of the body untouched. It is the one edit two agents can make
 to a live item without racing each other's prose.
+
+THE SAME GUARD, ON THE DISPATCH GATE.
+
+  mg edit mg-1234 --if-assignee=blocked:pm-pogo --append-body-file - <<'EOF'
+  ## note written on the assumption that this item is still held
+  EOF
+
+--if-assignee refuses the edit (exit 4) unless the stored assignee is EXACTLY
+that value. --if-unchanged guards the body; this guards the one field that
+decides whether the item is dispatched at all, and until mg-5eee it had no
+guard. On 2026-08-12 the mayor gated mg-27d4 with 'blocked:pm-pogo', pm-pogo set
+it back to 'mayor' a minute later, and the mayor's next four writes each printed
+'Updated mg-27d4' while the hold was gone. Nothing there was a bug: both agents
+wrote what they meant and events.jsonl names both. What was missing was any way
+for the holder to SAY the hold was still in place, so a hold survived only as
+long as nobody disagreed with it — silently, in the holder's direction.
+
+--if-assignee="" requires the field to be unset, which makes the flag a
+compare-and-swap: '--if-assignee="" --assignee=blocked:me' takes a gate only if
+nobody else already holds one. The refusal names both values and the file's mtime;
+'mg event list --type=work.edited' names the actor who moved it.
+
+'Updated <id>' IS NOT EVIDENCE A FIELD YOU DID NOT NAME STILL SAYS WHAT IT SAID.
+mg cannot warn about that on its own — inside one invocation there is a read and
+a write microseconds apart and no record of what the CALLER last saw. Only the
+caller knows the value they are relying on, which is why this is a precondition
+you pass rather than a check mg performs.
+
+A MISSPELLED GATE IS AN OPEN GATE.
+
+'human', 'parked' and 'blocked:<agent>' are what pogo's dispatcher gates on. A
+near-miss of those spellings is refused (exit 2) instead of stored: --assignee=
+'blocekd:pm-pogo', 'blocked-pm-pogo', 'blocked:', 'Blocked:pm-pogo' and 'Human'
+each used to exit 0 and store a value that gates nothing, which reads to a human
+exactly like a hold and to the dispatcher like an ordinary name.
+
+mg does NOT know the set of legitimate assignees, so it cannot refuse
+"unrecognised" — any agent name is valid and passes. Only attempts at the gate
+that missed are refused, and a typo far enough from the three spellings (say
+'parkd') is indistinguishable from a name and still gets through. There is no
+--force: the way past the guard is to spell the gate correctly.
 
 THE TITLE LIVES IN THE BODY. EDITING ONE EDITS THE OTHER.
 
@@ -226,6 +268,12 @@ default build template; a carrier block IN the appended text is still refused
 			// like a successful check. Carried as a field, not counted as one.
 			fields.IfUnchanged = editIfUnchanged
 		}
+		if cmd.Flags().Changed("if-assignee") {
+			// Carried, not counted, exactly like --if-unchanged: a precondition
+			// on its own writes nothing, and letting it stand alone would report
+			// "no fields specified" while looking like a check that passed.
+			fields.IfAssignee = &editIfAssignee
+		}
 		if cmd.Flags().Changed("type") {
 			fields.Type = &editType
 			changed = true
@@ -351,6 +399,7 @@ func init() {
 	editCmd.Flags().StringVar(&editAppendBody, "append-body", "", "append text to the existing body instead of replacing it")
 	editCmd.Flags().StringVar(&editAppendBodyFile, "append-body-file", "", "append the verbatim contents of a file (\"-\" for stdin) to the existing body; cannot clobber a concurrent write")
 	editCmd.Flags().StringVar(&editIfUnchanged, "if-unchanged", "", "refuse the edit unless the stored body still hashes to this (from 'mg show ID --body-hash'); a prefix of 8+ chars is accepted")
+	editCmd.Flags().StringVar(&editIfAssignee, "if-assignee", "", "refuse the edit (exit 4) unless the stored assignee is exactly this; --if-assignee=\"\" requires it to be unset")
 	editCmd.Flags().StringVar(&editType, "type", "", "new type")
 	editCmd.Flags().StringVar(&editRepo, "repo", "", "new repo path")
 	stringSliceVarWithAlias(editCmd.Flags(), &editDepends, "depends", "depend", "replace all dependencies (comma-separated or repeated)")

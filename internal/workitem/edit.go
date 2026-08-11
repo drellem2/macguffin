@@ -34,6 +34,29 @@ type UpdateField struct {
 	// characters) or the whole update is refused before anything is written.
 	// Empty means no precondition — the historical, unguarded behaviour.
 	IfUnchanged string
+
+	// IfAssignee is the same precondition one field over, on the dispatch gate.
+	// nil means no precondition; a non-nil pointer (including to "") requires
+	// the STORED assignee to equal it or the whole update is refused before
+	// anything is written.
+	//
+	// WHY THE GATE NEEDS ITS OWN GUARD (mg-5eee). --if-unchanged covers the
+	// body, which is where mg-f326's losses were. It says nothing about the
+	// metadata, and the metadata contains the one field that decides whether an
+	// item is dispatched at all. On 2026-08-12 the mayor gated mg-27d4 with
+	// `blocked:pm-pogo`, pm-pogo set it back to `mayor` a minute later, and the
+	// mayor's next four writes to that item each printed `Updated mg-27d4` while
+	// the hold the mayor believed in was gone. Nothing lied and nothing was
+	// lost: every write did exactly what it was asked, and the audit log records
+	// both agents by name. The gap is that a caller holding an item has no way
+	// to say "and it is still held" — so a hold survives only as long as nobody
+	// else disagrees with it, and the disagreement is silent to the holder.
+	//
+	// It is a precondition rather than a warning because mg has no baseline of
+	// its own: within one invocation there is a read and a write microseconds
+	// apart, and no record of what the CALLER last saw. Only the caller knows
+	// the value they are relying on, so only the caller can supply it.
+	IfAssignee *string
 }
 
 // BodyChange reports what an update did to the stored body. It exists so the
@@ -167,6 +190,20 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 		}
 		if !bodyHashMatches(want, bodyBefore) {
 			return nil, nil, errBodyChanged(id, itemPath, want, bodyBefore)
+		}
+	}
+
+	// The same, on the dispatch gate. Also before any field is applied, so a
+	// refusal leaves the stored item byte-identical.
+	if fields.IfAssignee != nil && item.Assignee != *fields.IfAssignee {
+		return nil, nil, errAssigneeChanged(id, itemPath, *fields.IfAssignee, item.Assignee)
+	}
+
+	// A gate that does not gate is refused before the write, not stored and
+	// reported as success. See assigneegate.go.
+	if fields.Assignee != nil {
+		if err := ValidateAssignee(*fields.Assignee); err != nil {
+			return nil, nil, err
 		}
 	}
 
@@ -552,6 +589,48 @@ func errBodyChanged(id, itemPath, want, stored string) *mgerr.Error {
 		id, id, id, id)
 
 	return mgerr.Conflict("body_changed", msg, hint)
+}
+
+// errAssigneeChanged is the loud refusal --if-assignee exists to produce.
+//
+// It names both values and when the file was last written, which is enough to
+// find the other writer: `mg event list --type=work.edited` records every
+// assignee move with its actor and its before/after pair (mg-3122), so the
+// question "who un-gated this, and when" has an answer that does not depend on
+// anyone having been watching.
+//
+// Conflict (exit 4), not retryable: re-running the identical command against the
+// same stored value can never succeed. The remedy is to decide which of the two
+// holds — which is a judgement, not a retry.
+func errAssigneeChanged(id, itemPath, want, stored string) *mgerr.Error {
+	modified := "unknown"
+	if info, err := os.Stat(itemPath); err == nil {
+		modified = info.ModTime().UTC().Format(time.RFC3339)
+	}
+
+	show := func(v string) string {
+		if v == "" {
+			return "(unset)"
+		}
+		return strconv.Quote(v)
+	}
+
+	msg := fmt.Sprintf(
+		"%s: the assignee changed since you read it — refusing the edit.\n"+
+			"  you passed --if-assignee=%s\n"+
+			"  on disk now %s (last written %s)",
+		id, show(want), show(stored), modified)
+
+	hint := fmt.Sprintf(
+		"Someone else reassigned %s after the read this edit is based on. The assignee is "+
+			"the dispatch gate, so this is the difference between an item that is held and one "+
+			"that is being offered. Find the writer with "+
+			"'mg event list --type=work.edited | grep %s' — every assignee move records its "+
+			"actor and both values. Then either accept theirs (drop --if-assignee) or re-assert "+
+			"yours ('mg edit %s --assignee=%s').",
+		id, id, id, want)
+
+	return mgerr.Conflict("assignee_changed", msg, hint)
 }
 
 // addUnique appends values to a slice, skipping duplicates.

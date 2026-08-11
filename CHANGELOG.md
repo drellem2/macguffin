@@ -23,6 +23,40 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- **`mg edit --if-assignee` guards the dispatch gate the way `--if-unchanged`
+  guards the body (mg-5eee).** Refuses the edit (exit 4, `assignee_changed`)
+  unless the stored `assignee` is exactly the given value; `--if-assignee=""`
+  requires it to be unset, making the flag a compare-and-swap.
+
+  The report that produced this was that `mg edit --append-body-file` silently
+  reverted `assignee` to `mayor` — a value nobody set — observed twice, with one
+  non-repro in between, and the leading hypothesis was that bodies are scanned
+  for field-shaped lines the way the title is derived from the first `# `
+  heading. **That hypothesis is dead and the append is innocent.** `events.jsonl`
+  has recorded every assignee move with its actor and both values since mg-3122,
+  and it shows what actually happened: the mayor gated mg-27d4 with
+  `blocked:pm-pogo` at 23:17:34, **pm-pogo** — the agent the gate named — set it
+  back to `mayor` at 23:18:35 and again at 23:19:54, each time within a minute of
+  reading a note the mayor had just appended. Every append in the sequence left
+  the field alone. The correlation was real and the causation inverted: the
+  appends did not clobber the field, they *notified the agent that then set it*,
+  and the harmless 3-line probe was harmless because it asked pm-pogo nothing.
+
+  So nothing there was a bug — both agents wrote what they meant. The gap is that
+  a caller holding an item had no way to say *"and it is still held"*: a hold
+  survived only as long as nobody disagreed with it, and the disagreement was
+  silent in the holder's direction while every subsequent write printed
+  `Updated <id>`. It is a precondition rather than a warning mg emits on its own
+  because mg has no baseline — inside one invocation there is a read and a write
+  microseconds apart and no record of what the *caller* last saw. Only the caller
+  knows the value they are relying on.
+
+  A regression guard now asserts that an append leaves **every** other field
+  untouched, across ten bodies chosen to attack a body-is-scanned-for-fields
+  implementation (YAML-shaped lines, a whole frontmatter block, a horizontal
+  rule, the mayor's own report). It passes against the code it was written to
+  indict, and is labelled as a guard rather than a repro.
+
 - **`mg mail reclaim` drains the scheduler fallback pile that nothing ever
   removed (mg-36b7).** A scheduler fire that cannot reach an agent's PTY falls
   back to writing the fire into that agent's mailbox. Nothing reclaimed those
@@ -427,6 +461,32 @@ derived at all — no git, no tags, or a build from a source tarball.
   purpose is not a repair.
 
 ### Fixed
+
+- **A misspelled dispatch gate was stored and reported as success (mg-5eee).**
+  `human`, `parked` and `blocked:<agent>` are what pogo's dispatcher gates on.
+  Every near-miss of those spellings was accepted: `--assignee=blocekd:pm-pogo`,
+  `blocked-pm-pogo`, `blocked:` (the prefix with no agent), `Blocked:pm-pogo` and
+  `Human` each exited 0, printed `Updated <id>`, and stored a value that gates
+  nothing — which reads to a human exactly like a hold and to the dispatcher like
+  an ordinary name. There was no later signal, because a value nobody recognises
+  is indistinguishable from an agent nobody has heard of. That is the same
+  exposure `--if-assignee` closes, reached by a second route, and it defeats the
+  vocabulary mg-6fb0 introduced to close it.
+
+  Near-misses are now refused (exit 2, `invalid_value`) with the spellings that
+  work, on `mg edit`, `mg assign`, and `mg unclaim --assignee` — where the check
+  runs **before** the release, so a refusal leaves the item claimed rather than
+  dropping it into `available/` under a hold that holds nothing.
+
+  Deliberately narrow. mg does not know the set of legitimate assignees, so it
+  cannot refuse "unrecognised" — any agent name is valid and passes, as does an
+  unrelated colon-bearing value like `team:infra`. Only attempts at the gate that
+  missed are refused. The residual is pinned by a test rather than papered over:
+  a typo far enough from the three spellings (`parkd`) is indistinguishable from
+  a name and still gets through, because widening the net means refusing by edit
+  distance from a five-letter word and `parker` lives in that neighbourhood — a
+  guard that refuses real names is one that gets switched off. There is no
+  `--force`; the way past the guard is to spell the gate correctly.
 
 - **CI's `install` job called the GitHub API anonymously and got rate-limited
   off a shared runner IP (mg-7e8d).** `install.sh` asks
