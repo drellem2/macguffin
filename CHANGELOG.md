@@ -23,6 +23,39 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- **`mg show <id> --sections` indexes a body's dated headings, and `mg show`
+  banners a body that has become a log (mg-7e02).** Agents append dated sections
+  to long-lived tickets because the ticket is the only artifact the next actor
+  reads. The convention works; reading it is what fails. A contested item
+  accumulates sections until its live spec and the history that superseded it
+  sit in the same undifferentiated body, and a reader who starts at the top has
+  no signal that line 232 overturns line 105 — a worker was nearly dispatched on
+  a position that had been retracted twice.
+
+  `--sections` prints a jump table: body line, date, heading, in **document
+  order** so an append dated before the one above it stays visible as the
+  anomaly it is. `--sections --json` emits the same as
+  `{"id","count","sections":[…]}`. A plain `mg show` adds one line above the
+  body — `Sections:  this body carries N dated sections …` — once there are
+  **three or more**; that banner is the half that matters, because the failure
+  is not knowing the body is a log until you are already deep in it. Measured on
+  the open store (115 items), the banner falls on 18 of them.
+
+  A dated heading is any `#`–`######` heading whose text **contains** a
+  `20xx-xx-xx` date, outside fenced code blocks, other than the body's first
+  `# ` line (that one is the title). "Contains" rather than "starts with" is
+  deliberate and was measured: the headings a reader most needs are written
+  `## STRUCK 2026-07-30: …` and `## ⚠ RETRACTION (doctor, 2026-08-06) — …`,
+  verdict first. The narrow rule indexes the tidy appends and drops every
+  retraction.
+
+  There is **no write-path change**: `--append-body-file` is still the safe
+  operation and still the convenient one, which is the only reason the
+  convention holds. Neither flag says which section is CURRENT — nothing
+  mechanical can. An earlier `--spec` design (everything above the first dated
+  heading) was tested and rejected: on `mg-49b1` the live spec was in a *later*
+  section, so it would have printed a retracted position with machine authority.
+
 - **`mg mail send`/`reply` warn when the recipient's work item is finished
   (mg-cf1e).** A maildir outlives its agent, so a box named for a work item that
   is `done`, `archived` or `shelved` accepted mail forever and said nothing: the

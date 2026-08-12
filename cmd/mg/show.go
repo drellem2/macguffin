@@ -16,6 +16,7 @@ import (
 var (
 	showJSON     bool
 	showBodyHash bool
+	showSections bool
 )
 
 // showJSONItem is the stable on-the-wire shape for `mg show ID --json`: the
@@ -48,6 +49,17 @@ bare ID is ambiguous. Disambiguate with an @partition qualifier:
 
   mg show mg-4fa7@2026-04   # the twin archived in partition 2026-04
 
+A long-lived item accumulates dated sections, and its live spec then sits in the
+same undifferentiated body as the history that superseded it. --sections prints
+an index of those dated headings with the body line each sits on, and a plain
+'mg show' says so in one line once there are three or more:
+
+  mg show mg-49b1 --sections   # a jump table, in document order
+
+Neither says which section is CURRENT — that is a judgement someone made, and it
+is recorded by striking the superseded section where it sits, not by being the
+bottom entry in a list.
+
 'Creator' is whoever ran 'mg new' (MG_ACTOR, else POGO_AGENT_NAME, else the OS
 user). It is self-asserted and forgeable, so it is attribution and not
 authentication. On items filed before mg-ddf4 it records the unix user, which
@@ -71,6 +83,24 @@ item as "unknown", not as Daniel.`,
 			return mgerr.Usage("mutually_exclusive_flags",
 				"cannot use both --json and --body-hash",
 				"--json already carries the hash in its body_hash field")
+		}
+		if showSections && showBodyHash {
+			return mgerr.Usage("mutually_exclusive_flags",
+				"cannot use both --sections and --body-hash",
+				"--body-hash prints one line and nothing else; run the two commands separately")
+		}
+
+		// --sections replaces the whole view with the index: a reader who asked
+		// where the dated headings are is not also asking to scroll the body
+		// they were trying to navigate. --json is honoured rather than ignored,
+		// because a caller who passed it will parse whatever comes back.
+		if showSections {
+			secs := workitem.DatedSections(item.Body)
+			if showJSON {
+				return writeSectionsJSON(item, secs)
+			}
+			renderSections(os.Stdout, item, secs, resolveListWidth(os.Stdout, false))
+			return nil
 		}
 
 		// --body-hash prints the bare hash and nothing else, so the safe write
@@ -145,6 +175,12 @@ item as "unknown", not as Daniel.`,
 		}
 		fmt.Printf("%-10s %s\n", "Title:", item.Title)
 
+		// Above the body, not below it: a reader who learns the body is a log
+		// after reading it has learned it too late, which is the whole defect.
+		if banner := sectionsBannerLine(item, workitem.DatedSections(item.Body)); banner != "" {
+			fmt.Println(banner)
+		}
+
 		if item.Body != "" {
 			fmt.Printf("\n%s", item.Body)
 		}
@@ -156,6 +192,7 @@ item as "unknown", not as Daniel.`,
 func init() {
 	showCmd.Flags().BoolVar(&showJSON, "json", false, "emit the full work item as one JSON object")
 	showCmd.Flags().BoolVar(&showBodyHash, "body-hash", false, "print only the body's SHA-256, for 'mg edit --if-unchanged'")
+	showCmd.Flags().BoolVar(&showSections, "sections", false, "print an index of the body's dated headings instead of the item")
 }
 
 // writeShowJSON marshals the work item as a single JSON object on stdout.

@@ -230,7 +230,7 @@ mg log                 # view snapshot history
 |---------|-------------|
 | `mg init [--git]` | Create the `~/.macguffin` directory tree. `--git` enables snapshot tracking. |
 | `mg new` | Create a new work item (Markdown + YAML frontmatter). |
-| `mg show <id> [--json] [--body-hash]` | Display a work item by ID. `--json` emits the full item as one JSON object (adds `creator`, `body`, `body_hash`, `budget`, `spent` to the `list --json` field set). `--body-hash` prints only the body's SHA-256 — the version token `mg edit --if-unchanged` checks against — so a guarded write is one command rather than a pipe through `jq`. When two archived twins share a short ID across partitions, disambiguate with `mg show <id>@<partition>` (e.g. `mg show mg-4fa7@2026-04`). |
+| `mg show <id> [--json] [--body-hash] [--sections]` | Display a work item by ID. `--json` emits the full item as one JSON object (adds `creator`, `body`, `body_hash`, `budget`, `spent` to the `list --json` field set). `--body-hash` prints only the body's SHA-256 — the version token `mg edit --if-unchanged` checks against — so a guarded write is one command rather than a pipe through `jq`. `--sections` prints an index of the body's **dated headings** instead of the item — see [Reading a body that has become a log](#reading-a-body-that-has-become-a-log). When two archived twins share a short ID across partitions, disambiguate with `mg show <id>@<partition>` (e.g. `mg show mg-4fa7@2026-04`). |
 | `mg list [--json] [--wide]` | List work items. On a terminal each line is fitted to the terminal width: the **id, type, assignee and snooze marker are always shown**, and the **title and tags** are shortened (with a `…` marker) to make room — the fields worth keeping sit last on the line, so cutting at a column would delete exactly them. Piped or redirected output is **never** truncated, so anything parsing `mg list` sees the full line; `--wide` (alias `--no-truncate`) opts a terminal out too. `--json` emits NDJSON (one JSON object per line) for scripts and dashboards, and is unaffected by any of this. |
 | `mg claim ID` | Atomically claim a work item by ID. |
 | `mg done ID` | Mark a claimed work item as done. **Refused** if the item declares a remainder and nothing is tracking what it recommends — see the two rows below. |
@@ -433,6 +433,69 @@ Two further properties worth knowing:
 **Not locking.** Agents are long-lived and can die mid-edit, so a lock needs a
 timeout, and a timeout reintroduces the same race with more moving parts. The
 defect being fixed is *silence*, not concurrency.
+
+### Reading a body that has become a log
+
+The append convention above works, and it must not be made heavier — the ticket
+is the only artifact the next actor reads. What fails is **reading** it: a
+long-lived contested item accumulates dated sections, and its live spec then
+sits in the same undifferentiated body as the history that superseded it. A
+reader who starts at the top has no signal that line 232 overturns line 105.
+
+```sh
+mg show mg-01f7 --sections
+```
+
+```
+mg-01f7: 6 dated sections.
+Lines are lines of the BODY: mg show mg-01f7 --json | jq -r .body
+Order is document order. Which section is CURRENT is a judgement, not a field — this does not say.
+
+    27  2026-08-12  ## [SUPERSEDED ORIGINAL TITLE — demoted 2026-08-12 06:36Z, kept for the record]
+   105  2026-07-21  ## ⚠ CORRECTION + UPGRADE 2026-07-21 02:55Z: this should be WAKE-TRIGGERED, not parked
+   160  2026-08-05  ## EVIDENCE (doctor, 2026-08-05 22:00Z): the silence is NOT launchd-only …
+   232  2026-08-06  ## ⚠ RETRACTION (doctor, 2026-08-06 06:05Z) — MY 22:00Z EVIDENCE SECTION ABOVE IS WRONG.
+   292  2026-08-12  ## 2026-08-12 06:35Z — a SECOND, independent blocker on idle sleep …
+   338  2026-08-12  ## 2026-08-12 06:33Z — mayor: the passive option does not exist …
+```
+
+A plain `mg show` says so in one line, above the body, once there are **three or
+more** — because the failure is not knowing the body is a log until you are
+already deep in it:
+
+```
+Title:     DANIEL DECISION, not a wait: settling 'is the launchd wedge sleep-induced' …
+Sections:  this body carries 6 dated sections — see `mg show mg-01f7 --sections`
+```
+
+- **A dated heading is any `#`–`######` heading whose text contains a `20xx-xx-xx`
+  date**, outside fenced code blocks, other than the body's first `# ` line
+  (that one is the item's *title*, already printed above). The date does not
+  have to lead the heading, and that is deliberate: the sections a reader most
+  needs are written `## STRUCK 2026-07-30: …` and `## ⚠ RETRACTION (doctor,
+  2026-08-06) — …`, with the verdict first because the verdict is the point.
+  Indexing only `## 2026-08-12`-style headings would list the tidy appends and
+  drop every retraction.
+- **Line numbers are lines of the body** — the bytes `mg show <id> --json | jq -r
+  .body` returns — not offsets into `mg show`'s own output, whose header block
+  is a different height for each item.
+- **Order is document order, never date order.** A section dated before the one
+  above it is an anomaly a reader must be able to see.
+- `--sections --json` emits `{"id", "count", "sections":[{"line","date","level","heading"}]}`;
+  `sections` is `[]` and never `null`.
+- On a terminal, a heading longer than the window is fitted with a `…` marker —
+  the line and date columns are never cut. Piped or redirected output is **never**
+  truncated, the same rule `mg list` follows, because a heading cut at the
+  terminal's width would hide the half of a retraction that says what was retracted.
+
+**Neither flag says which section is CURRENT**, and nothing mechanical can —
+that is a judgement someone made. The convention that records it is to **strike
+a superseded section inline where it sits**, not to add a new one at the bottom:
+a reader who hits line 105 has no way to know that line 232 overturns it. `mg`
+does not enforce that, and an earlier design that tried to — a `--spec` flag
+printing everything above the first dated heading — was tested and rejected: on
+`mg-49b1` the live spec was in a *later* section, so `--spec` would have printed
+a retracted position with machine authority.
 
 ### Recovering an overwritten body
 
