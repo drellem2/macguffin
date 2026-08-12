@@ -60,11 +60,16 @@ func workItemNamed(root, name string) bool {
 	return false
 }
 
-// knownRecipient reports whether a recipient is addressable without --create:
-// it already has a mailbox, or a work item names it. See the file comment.
-func knownRecipient(mailRootDir, root, recipient string) bool {
-	return mail.MailboxExists(mailRootDir, recipient) || workItemNamed(root, recipient)
-}
+// A recipient is addressable without --create when it already has a mailbox, or
+// a work item names it (see the file comment). That test used to live here as
+// knownRecipient(); the send and reply paths now spell it inline as
+//
+//	existed || lookupRecipientItem(root, recipient).found
+//
+// because mg-cf1e made them ask the store a SECOND question about the same
+// records — "is anyone reading this box?" — and one walk of a 2,600-item store
+// answering both beats two walks answering one each, on the command every agent
+// in the fleet runs most. See maildeadrecipient.go.
 
 // recipientCandidates is the set of names a mistyped recipient might have meant:
 // every existing mailbox, plus every live work-item id (canonicalized to the

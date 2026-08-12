@@ -128,6 +128,13 @@ type (
 		InReplyTo      string `json:"in_reply_to"`
 		Subject        string `json:"subject"`
 		SubjectDerived bool   `json:"subject_derived"`
+		// RecipientWorkItemStatus is the lifecycle state of the work item the
+		// recipient is named for, when that state means nobody is reading the
+		// box — "done", "archived" or "shelved". Empty in every other case,
+		// including the common one where the recipient is not a work item at
+		// all, so a consumer tests for non-empty rather than enumerating.
+		// The stderr warning carries the same fact for a human.
+		RecipientWorkItemStatus string `json:"recipient_work_item_status"`
 	}
 
 	// mailReadJSON is the single object emitted by `mg mail read --json`.
@@ -302,6 +309,22 @@ as one. See 'mg mail list --help' for what the record is then used to report. Th
 delivery still notes "(new mailbox created)" — under --json the same signal is
 the boolean "mailbox_created" field.
 
+A KNOWN recipient can still be one nobody reads. A mailbox outlives the agent
+that read it, so a box named for a work item that is done, archived or shelved
+accepts mail forever. That delivery still happens and still exits 0 — mail to a
+finished agent's box is often correct, as an audit trail or a note for whoever
+adopts the item next — but it now prints a warning on STDERR naming the item and
+its state, so "sent" stops being indistinguishable from "received". Under --json
+the same fact is the "recipient_work_item_status" field, empty when there is
+nothing to report; the warning stays on stderr either way, so stdout remains one
+parseable object.
+
+What this does NOT catch: an agent that died while its item was still claimed.
+mg has no agent registry and never inspects process liveness — it reads the work
+item's lifecycle, not the agent's — so a claimed item looks exactly like one
+somebody is working. This is defence in depth behind pogo's own liveness checks,
+not a substitute for them.
+
 --from is free-text and intentionally unvalidated: a brand-new agent must be
 able to send its first message before it has a mailbox. Run 'mg mail list' with
 no arguments to see the existing mailboxes, which is the de-facto list of agent
@@ -363,10 +386,16 @@ filled in for you, use 'mg mail reply' instead.`,
 		// report first-delivery to a never-before-seen recipient.
 		existed := mail.MailboxExists(mr, recipient)
 
+		// ONE walk of the store answers both questions this command asks about
+		// its recipient: is the name addressable (mg-d639), and is anyone
+		// reading it (mg-cf1e). Asking them separately walked a 2,600-item
+		// store twice on the fleet's hottest command. See maildeadrecipient.go.
+		item := lookupRecipientItem(root, recipient)
+
 		// Refuse a recipient nothing on disk knows about, unless the caller
 		// says explicitly that it is new. Checked BEFORE SendWithOpts, so a
 		// refused address leaves no mailbox, no tmp file and no message.
-		if !mailSendCreate && !knownRecipient(mr, root, recipient) {
+		if !mailSendCreate && !existed && !item.found {
 			return unknownRecipientError(mr, root, recipient)
 		}
 
@@ -402,15 +431,28 @@ filled in for you, use 'mg mail reply' instead.`,
 
 		created := !existed
 
+		// A KNOWN recipient can still be an unread one: a maildir outlives the
+		// agent that read it, so a box named for a finished work item accepts
+		// mail forever and says nothing. The state was read before the send,
+		// with the address check; it is EMITTED only now, because a warning
+		// printed ahead of a send that then failed would describe a message
+		// that does not exist.
+		pastState := item.past
+
 		if mailJSON {
+			// The notice goes to stderr even under --json, so stdout stays one
+			// parseable object; recipient_work_item_status carries the same
+			// fact to a scripted consumer that is not reading stderr.
+			stderrWarnPastRecipient(root, recipient, pastState)
 			return encodeJSON(mailSendJSON{
-				MsgID:          msgID,
-				From:           mailSendFrom,
-				To:             recipient,
-				MailboxCreated: created,
-				InReplyTo:      mailSendInReplyTo,
-				Subject:        subject,
-				SubjectDerived: subjectDerived,
+				MsgID:                   msgID,
+				From:                    mailSendFrom,
+				To:                      recipient,
+				MailboxCreated:          created,
+				InReplyTo:               mailSendInReplyTo,
+				Subject:                 subject,
+				SubjectDerived:          subjectDerived,
+				RecipientWorkItemStatus: pastState,
 			})
 		}
 
@@ -431,6 +473,10 @@ filled in for you, use 'mg mail reply' instead.`,
 			note = "  (new mailbox created)"
 		}
 		fmt.Printf("Delivered: %s → %s/new/%s%s\n", mailSendFrom, recipient, msgID, note)
+
+		// After the Delivered line, not before it: the warning qualifies a
+		// delivery the caller has just been told happened.
+		stderrWarnPastRecipient(root, recipient, pastState)
 		return nil
 	},
 }
@@ -1050,7 +1096,13 @@ archive it yourself with 'mg mail archive' when you are done with it.
 The recipient is taken from a From header the original's sender wrote, which is
 free text mg never validated, so a reply is a send to an unchecked address. It
 gets the same treatment: a From naming nobody mg has seen is refused rather than
-answered into a phantom mailbox, and --create is the override.`,
+answered into a phantom mailbox, and --create is the override.
+
+It also gets the same STDERR warning when the recipient's work item is done,
+archived or shelved — see 'mg mail send --help'. Reply is where that matters
+most: the recipient is a From header rather than a name you chose, and answering
+an agent that has already exited is exactly the stall this warning exists to
+make visible.`,
 	Args: usageArgs(cobra.RangeArgs(1, 2)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		agent, msgID, err := parseAgentMsgID(args)
@@ -1114,7 +1166,9 @@ answered into a phantom mailbox, and --create is the override.`,
 		if err != nil {
 			return err
 		}
-		if !mailSendCreate && !knownRecipient(mr, root, recipient) {
+		// One walk, both questions — see the send path above.
+		item := lookupRecipientItem(root, recipient)
+		if !mailSendCreate && !existed && !item.found {
 			return unknownRecipientError(mr, root, recipient)
 		}
 
@@ -1134,7 +1188,14 @@ answered into a phantom mailbox, and --create is the override.`,
 
 		created := !existed
 
+		// Reply carries the same gap as send, and carries it in the shape the
+		// gap was reported from: a reviewer answering a builder that had
+		// already exited (drellem2/pogo#131). The recipient here is the
+		// original's From, so the sender did not even choose it.
+		pastState := item.past
+
 		if mailJSON {
+			stderrWarnPastRecipient(root, recipient, pastState)
 			return encodeJSON(mailSendJSON{
 				MsgID:          newID,
 				From:           from,
@@ -1145,7 +1206,8 @@ answered into a phantom mailbox, and --create is the override.`,
 				// reply's default subject comes from the ORIGINAL message, not
 				// from a body, so it is not the first-line derivation the flag
 				// names. Reply is untouched by mg-158e.
-				SubjectDerived: false,
+				SubjectDerived:          false,
+				RecipientWorkItemStatus: pastState,
 			})
 		}
 
@@ -1154,6 +1216,7 @@ answered into a phantom mailbox, and --create is the override.`,
 			note = "  (new mailbox created)"
 		}
 		fmt.Printf("Replied: %s → %s/new/%s  (in-reply-to %s/%s)%s\n", from, recipient, newID, agent, orig.ID, note)
+		stderrWarnPastRecipient(root, recipient, pastState)
 		return nil
 	},
 }

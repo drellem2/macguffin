@@ -23,6 +23,39 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- **`mg mail send`/`reply` warn when the recipient's work item is finished
+  (mg-cf1e).** A maildir outlives its agent, so a box named for a work item that
+  is `done`, `archived` or `shelved` accepted mail forever and said nothing: the
+  sender got exit 0 and reasonably concluded the message was received. That is
+  the shape drellem2/pogo#131 was reported from — a review polecat waiting on a
+  builder that had already exited. The delivery still happens and the exit code
+  is still 0; a warning on **stderr** now names the item and its state, and
+  `--json` carries the same fact in the new `recipient_work_item_status` field
+  (empty when there is nothing to report, so a consumer tests for non-empty).
+
+  It warns rather than refuses, deliberately. Mail to a finished agent's box is
+  often correct — an audit trail, or a note for whoever adopts the item next —
+  and `mg mail` is on the hot path for every agent in the fleet, where a new
+  refusal mode could strand a coordinator mid-cycle.
+
+  The warning fires only on states BEHIND the sender. `claimed` is silent
+  because an agent holds the item; `available` and `pending` are silent because
+  they are the states *before* dispatch, and a work-item mailbox is addressable
+  precisely so a polecat can be mailed before it exists. `shelved` warns even
+  though `workitem.liveStates` counts it live: that set answers "can this still
+  be worked?", and this warning answers "is anyone reading this box?"
+
+  What it does NOT catch: an agent that died while its item was still `claimed`.
+  mg has no agent registry and never inspects process liveness — it reads the
+  item's lifecycle, not the agent's. This is defence in depth behind the
+  pogo-side fixes (PRs #132, #133), not a substitute for them.
+
+  The address check and the liveness check now share ONE walk of the store
+  rather than taking one each, so the added hot-path cost is a single resolve:
+  1.4ms for a polecat box and 2.9ms for a name that is not a work item, over a
+  2,600-item store, against `mg mail send`'s ~9ms of process startup. Pinned by
+  `BenchmarkLookupRecipientItem`.
+
 - **`mg new` / `mg edit` refuse a body whose carrier declaration the dispatch
   parser cannot reach (mg-f928).** A `workflow:`/`stage:` line placed where the
   parser never scans — below a line of prose, or above the body's `# ` title

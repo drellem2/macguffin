@@ -149,6 +149,13 @@ mg mail send definitely-nobody-9ecf --from=me --body=hi
 #   Error: no mailbox named "definitely-nobody-9ecf", and no work item is called
 #   that either: mg has never seen this recipient
 
+# A KNOWN recipient can still be one nobody reads: a maildir outlives its agent.
+# The delivery happens and the exit is 0, but stderr says so.
+mg mail send cf1e --from=me --body="are you there?"
+#   Delivered: me → cf1e/new/1786516434490533000.1720.3000
+#   warning: delivered, but work item mg-cf1e has been completed, so the agent
+#   that read cf1e's mailbox is probably gone.
+
 # --create is the explicit "this recipient really is new"; mg mail register does
 # the same registration without sending. Both leave a durable record of who
 # registered the name and when — existence alone never could, because a box is
