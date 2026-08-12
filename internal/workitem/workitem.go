@@ -227,6 +227,14 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 		}
 		item.Tags = tags
 
+		// A carrier declaration the dispatch parser cannot reach is refused at
+		// the one moment someone can fix it (see carrierplacement.go). On a
+		// filing there is no prior body, so every line is one this write
+		// introduces.
+		if err := checkCarrierPlacement(composeBody(item), ""); err != nil {
+			return nil, err
+		}
+
 		// Layer 2: atomic, non-truncating create.
 		path := filepath.Join(dir, id+".md")
 		if err := writeNew(path, Render(item)); err != nil {

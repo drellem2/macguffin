@@ -153,7 +153,13 @@ func TestCLI_NewTriageWordInProseDoesNotDeclare(t *testing.T) {
 	bin := buildBinary(t)
 	root := archiveTestRoot(t, bin)
 
-	body := bodyFileArg(t, "Fix the bug.\n\nThe triage said this was urgent.\nstage: triage\n")
+	// The mention is backticked (mg-f928). An UNQUOTED column-0 `stage:` line is
+	// now refused at write time — those bytes are indistinguishable from a
+	// declaration the dispatch parser cannot reach, which is the defect that
+	// change exists to stop. What this test asserts is unchanged: the READER
+	// still takes only the leading carrier block, so a body discussing triage
+	// cannot mark the item.
+	body := bodyFileArg(t, "Fix the bug.\n\nThe triage said this was urgent: `stage: triage`.\n")
 	id := filedItem(t, bin, root, "--type=task", "--title=build the fix the triage asked for", body)
 	if declares(t, bin, root, id) {
 		t.Fatalf("%s declares a remainder because its PROSE mentions a stage; "+

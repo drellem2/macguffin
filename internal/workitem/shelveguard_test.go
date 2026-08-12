@@ -147,10 +147,18 @@ func TestShelveRefusesTriageCarrierBlock(t *testing.T) {
 // mention, not a declaration. leadingCarrierValue stops at the first line of
 // prose and this must inherit that, or a body that discusses triage comes to
 // mean the item IS one.
+//
+// The mention is backticked (mg-f928). It used to sit unquoted at column 0, and
+// that is now refused AT WRITE TIME — those bytes are indistinguishable from a
+// misplaced declaration, which is the whole of mg-27d4. Nothing about what this
+// test asserts changed: the READER still treats an unreachable `stage:` as a
+// mention, which is what a body already on disk in that shape depends on. Only
+// the way this fixture spells its mention did, and it now spells it the way all
+// 2,602 stored bodies do — the census found zero unquoted column-0 mentions.
 func TestShelveAllowsStageMentionedInProse(t *testing.T) {
 	root := shelveRoot(t)
 	item, _ := Create(root, "mg-", "task", "ordinary work", nil,
-		WithBody("Do the thing.\n\nUnlike the gh-issue flow, this is not\nstage: triage\nand never was.\n"))
+		WithBody("Do the thing.\n\nUnlike the gh-issue flow, this is not `stage: triage`\nand never was.\n"))
 
 	if _, err := Shelve(root, item.ID); err != nil {
 		t.Fatalf("a stage: line in prose refused the shelve: %v", err)

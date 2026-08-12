@@ -348,6 +348,15 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 	}
 	item.Tags = tags
 
+	// Placement, not just presence (see carrierplacement.go). Measured against
+	// the body ON DISK so that only a declaration THIS edit introduces is
+	// refused: an item that already carries an unreachable line keeps it, and an
+	// --append-body-file correction onto it still goes through, for the same
+	// reason mg-d878 grandfathers the missing-carrier case.
+	if err := checkCarrierPlacement(composeBody(item), bodyBefore); err != nil {
+		return nil, nil, err
+	}
+
 	// AFTER reconcileWorkflowMarkers, because that step can itself add a tag —
 	// and a tag mg wrote on the caller's behalf is exactly as worth recording
 	// as one the caller asked for.

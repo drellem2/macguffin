@@ -23,6 +23,31 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- **`mg new` / `mg edit` refuse a body whose carrier declaration the dispatch
+  parser cannot reach (mg-f928).** A `workflow:`/`stage:` line placed where the
+  parser never scans — below a line of prose, or above the body's `# ` title
+  heading — reads as declared to a human and as undeclared to the router, which
+  is how `mg-779b` and `mg-9863` reached `available/` with unreadable gates. Both
+  placements now exit 2 (`carrier_declaration_unreachable`) with a message naming
+  the placement and the move that fixes it. The above-title shape is the one mg
+  produced ITSELF: a body whose block correctly leads it but which carries its own
+  `# ` heading further down had that heading promoted to the title, leaving the
+  block above it — measured filing exit 0 before this change.
+
+  The refusal fires only on an unquoted, column-0 `workflow:`/`stage:` line with a
+  single-token value, outside any fenced code block, and only on a declaration the
+  write INTRODUCES. Over the 2,602-item store it selects 12 items — all real, no
+  prose or examples. Fenced examples, backticked mentions, indented and
+  blockquoted quotations, and ordinary sentences with colons are unaffected.
+
+### Fixed
+
+- **A fenced carrier example no longer refuses its own filing (mg-f928).** The
+  one-fact-one-marker guard walked past the fence that ended the leading block and
+  read the `workflow:` line inside it as a misplaced declaration, so
+  `mg new --body-file` on a body documenting the carrier convention exited 2.
+  Fenced lines are now examples to that scan, as they already are to dispatch.
+
 - **`mg edit --if-assignee` guards the dispatch gate the way `--if-unchanged`
   guards the body (mg-5eee).** Refuses the edit (exit 4, `assignee_changed`)
   unless the stored `assignee` is exactly the given value; `--if-assignee=""`

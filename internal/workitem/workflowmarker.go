@@ -83,10 +83,27 @@ var carrierSkeleton = map[string]string{
 // after prose. Such an item looks correctly marked to a human skimming `mg show`
 // while routing exactly like an unmarked one, so it is refused rather than
 // silently accepted.
+// A line inside a fenced code block is an EXAMPLE, never a declaration, and it
+// is skipped by both scans below. Without that, a body documenting the carrier
+// convention refused itself: the fence line ends the leading block, the scan
+// then walks on into the fence, finds the `workflow:` line inside it, and calls
+// it misplaced. `mg new --body-file` on a fenced example exited 2 (measured
+// 2026-08-12, mg-f928), which made the ticket that explains the block one of the
+// tickets that could not be filed. Dispatch never sees a fenced line either — it
+// stops at the fence — so skipping is fidelity to the reader, not leniency.
 func leadingWorkflow(body string) (name string, found, misplaced bool) {
 	inLeadingBlock := true
+	inFence := false
 	for _, line := range strings.Split(body, "\n") {
 		trimmed := strings.TrimSpace(line)
+		if isFenceLine(line) {
+			inFence = !inFence
+			inLeadingBlock = false
+			continue
+		}
+		if inFence {
+			continue
+		}
 		if v, ok := strings.CutPrefix(trimmed, "workflow:"); ok {
 			return strings.TrimSpace(v), inLeadingBlock, !inLeadingBlock
 		}
@@ -114,6 +131,12 @@ func leadingCarrierValue(body, key string) string {
 	prefix := key + ":"
 	for _, line := range strings.Split(body, "\n") {
 		trimmed := strings.TrimSpace(line)
+		if isFenceLine(line) {
+			// A fence ends the leading block exactly as any other non-carrier
+			// line does. This scan already stops at the first such line, so it
+			// needs no fence-skipping of its own — the fence IS the stop.
+			return ""
+		}
 		if v, ok := strings.CutPrefix(trimmed, prefix); ok {
 			return strings.TrimSpace(v)
 		}
