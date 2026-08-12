@@ -497,6 +497,44 @@ printing everything above the first dated heading — was tested and rejected: o
 `mg-49b1` the live spec was in a *later* section, so `--spec` would have printed
 a retracted position with machine authority.
 
+### Who touched this last
+
+Two agents editing one item could not see each other, and what that cost was not
+data — it was a **false bug report**. On `2026-08-11` the mayor mailed the human
+that `mg edit --append-body-file` was silently reverting an assignee field, filed
+it high, and an investigation was dispatched. It then retracted: pm-pogo had been
+deliberately handing the item back, twice, **both writes had landed**, and the
+value that read as corruption was a colleague answering. A colleague's edit and a
+corrupted field were the same observation.
+
+So an edit now names the last *recorded* writer, on **stderr**:
+
+```
+$ mg edit mg-1234 --append-body-file - <<'EOF'
+## a reply
+EOF
+Updated mg-1234: the title (body 84 → 96 lines)
+note: mg-1234 was last edited 4m ago by mayor (append). A field you did not write
+is a colleague, not corruption — 'mg event list --type=work.edited | grep
+mg-1234' names every writer and both body hashes.
+```
+
+- **It refuses nothing and it is not a lock**, for the reason above: 919 of 1,287
+  edits measured over 15 days already use the append path that cannot clobber,
+  and making the safe path heavier is how callers get routed onto the unsafe one.
+- **Silence has one meaning:** no other party has a recorded edit of this item
+  since you last wrote it. An agent iterating on its own item sees nothing, so
+  the note does not become wallpaper — which is the failure mode of a warning
+  that fires on every write.
+- **No recency threshold**, deliberately. A cutoff would be a number nothing in
+  the incident record justifies, and a wrong cutoff turns silence into a lie. The
+  age is printed instead, so a three-week-old touch can be discounted by the
+  reader — a judgement they can make and `mg` cannot.
+- **It reports what was *recorded*.** `events.jsonl` is best-effort by design (a
+  state change must not fail because the log is unwritable), so an absent record
+  means "not recorded", not "did not happen". The note also names only the
+  **last** writer; the `mg event list` line in it is the full roll.
+
 ### Recovering an overwritten body
 
 `--if-unchanged` proves **nobody else** wrote between your read and your write.
@@ -731,7 +769,8 @@ list naming what moved, and a `<field>_before` / `<field>_after` pair for each:
  "actor":"cat-3122","mode":"metadata","fields":"assignee",
  "assignee_before":"mayor","assignee_after":"parked",
  "body_hash_before":"a1b2c3d4","body_hash_after":"a1b2c3d4",
- "lines_before":"42","lines_after":"42","guarded":"false"}
+ "lines_before":"42","lines_after":"42","guarded":"false",
+ "body_read_state":"not_at_risk"}
 ```
 
 Tracked fields: `title`, `type`, `repo`, `assignee`, `priority`, `budget`,
@@ -749,6 +788,41 @@ Tracked fields: `title`, `type`, `repo`, `assignee`, `priority`, `budget`,
 - **A no-op emits nothing.** Setting a field to the value it already holds
   changes nothing on disk and manufactures no audit line; a log that records
   non-events is a slower way to be untrustworthy.
+
+#### Lost updates are *unmeasurable*, not measured-as-zero
+
+`body_hash_before` looks like it answers "did this write clobber someone?" It
+cannot. It is read from the stored body **inside** the edit — the state at *write*
+time, never what the caller read — so it always equals the previous line's
+`body_hash_after`, and any "zero clobbers" figure computed from the pair is true
+**by construction**. That figure was computed over the live log, and retracted.
+
+The record captures what a write overwrote. Nothing captured what the writer
+*believed* it was overwriting, so these two were identical in the log:
+
+```
+a deliberate rewrite of the body as it currently stands
+a rewrite by someone whose read was ten minutes and three edits stale
+```
+
+Every `work.edited` line therefore carries **`body_read_state`**:
+
+| value | meaning |
+|---|---|
+| `asserted` | the caller named the body version it believed it was overwriting (`--if-unchanged`). The value is alongside as `body_hash_asserted`. |
+| `unmeasurable` | a full-body replacement landed with no such record. Whether it destroyed an unseen write is **not derivable from this log, in either direction** — it is neither evidence of a clobber nor evidence of none. |
+| `not_at_risk` | an append (composes against the body on disk), a metadata edit, or a title rewrite: no body section could be lost. |
+
+93 of 138 measured replacements supplied no `--if-unchanged`, and those are the
+`unmeasurable` ones. Recording the absence *explicitly* is the whole point: a
+silent gap reads as clean, and read as clean it was. No behaviour changed, and
+the question is answerable for writes made from here on — lines written before
+`2026-08-12` carry no such field, which is itself unmeasurable.
+
+The field is about the **body**, as its name says. A metadata edit is
+`not_at_risk` because no prose was at stake; the assignee it moved is guarded by
+`--if-assignee` and recorded by `fields` / `assignee_before` / `assignee_after`
+on the same line.
 
 ### `--json` output contract
 

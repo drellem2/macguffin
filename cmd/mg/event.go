@@ -124,7 +124,34 @@ old lines only — it is not what the field does now.
 
 mail.read and mail.sent carry no 'actor' at all; they attribute with 'from' and
 'to'. Every work.* type carries one. An absent 'actor' is therefore the shape of
-the event, not a dropped value.`,
+the event, not a dropped value.
+
+READING 'body_read_state' ON work.edited
+
+Do not compute lost updates from 'body_hash_before'. It is read from the STORED
+body inside the edit — the state at WRITE time, never what the caller read — so
+it always equals the previous line's 'body_hash_after' by construction, and a
+"zero clobbers" figure derived from the pair is guaranteed rather than measured.
+That figure was computed over this log and retracted (mg-43d0).
+
+'body_read_state' is the field that can answer the question, for lines written
+from 2026-08-12 on:
+
+  asserted      the caller named the body version it believed it was overwriting
+                (--if-unchanged). The value is alongside as 'body_hash_asserted'.
+  unmeasurable  a full-body replacement landed with no record of the caller's
+                read-state. Whether it destroyed an unseen write is NOT derivable
+                from this log, in either direction. It is not evidence of a
+                clobber and it is not evidence of none.
+  not_at_risk   the write could not lose a body section: an append composes
+                against the body on disk at write time, and metadata-only and
+                title-incidental writes overwrite no prose.
+
+The field is about the BODY, which is what its name says. A metadata edit is
+'not_at_risk' because no prose was at stake — the assignee it moved is guarded
+by --if-assignee and by 'fields'/'assignee_before'/'assignee_after' on this same
+line, not by this one. Lines written before 2026-08-12 carry no such field at
+all; absent means "an older mg wrote this", which is itself unmeasurable.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := resolveRoot()
 		if err != nil {

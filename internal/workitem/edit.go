@@ -181,6 +181,11 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 
 	// The precondition runs FIRST, before a single field is applied and long
 	// before the write, so a refusal leaves the stored item byte-identical.
+	//
+	// asserted is kept for the audit line: it is the ONLY place a caller's own
+	// read-state is expressible, and it is what makes body_read_state below
+	// mean something. See recordedReadState.
+	asserted := ""
 	if fields.IfUnchanged != "" {
 		want, err := normalizeHashArg(fields.IfUnchanged)
 		if err != nil {
@@ -191,6 +196,7 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 		if !bodyHashMatches(want, bodyBefore) {
 			return nil, nil, errBodyChanged(id, itemPath, want, bodyBefore)
 		}
+		asserted = want
 	}
 
 	// The same, on the dispatch gate. Also before any field is applied, so a
@@ -436,6 +442,10 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 			"body_hash_after":  change.HashAfter,
 			"lines_before":     strconv.Itoa(change.LinesBefore),
 			"lines_after":      strconv.Itoa(change.LinesAfter),
+			"body_read_state":  recordedReadState(mode, asserted),
+		}
+		if asserted != "" {
+			extra["body_hash_asserted"] = asserted
 		}
 		if backupPath != "" {
 			extra["body_backup"] = backupPath
@@ -561,6 +571,56 @@ func describeBodyChange(fields UpdateField, before, after string) *BodyChange {
 		TitleBefore:   titleBefore,
 		TitleAfter:    titleAfter,
 		ExtraHeadings: extra,
+	}
+}
+
+// recordedReadState names, for one write, whether the log captured what the
+// CALLER believed it was overwriting — the field that separates "no lost
+// updates" from "lost updates are not observable here" (mg-43d0).
+//
+// THE GAP THIS CLOSES, AND WHY IT MATTERED. body_hash_before is taken from
+// item.Body INSIDE this function, i.e. the stored state at WRITE time. It is
+// never what the caller read. So it always equals the previous record's
+// body_hash_after, and any "zero clobbers" computed from those two fields is
+// true BY CONSTRUCTION rather than by measurement. pm-pogo computed exactly that
+// figure over the live log and had to retract it. These two writes are identical
+// in the record and always were:
+//
+//	a deliberate rewrite of the body as it currently stands
+//	a rewrite by someone whose read was ten minutes and three edits stale
+//
+// The only place a caller's own read-state has ever existed is --if-unchanged,
+// and it is opt-in: 93 of 138 measured replaces did not supply it. Recording its
+// ABSENCE explicitly is the whole point — a silent gap reads as clean, and read
+// as clean it was. "unmeasurable" is a statement mg can stand behind; "no
+// clobbers observed" was not.
+//
+// This changes no behaviour and refuses nothing. It makes the question
+// answerable going forward, for the writes made from here on.
+//
+// The three values, each a claim the log can support:
+//
+//	asserted      — the caller named the body version it believed it was
+//	                overwriting (--if-unchanged), and that version is recorded
+//	                alongside as body_hash_asserted.
+//	unmeasurable  — a full-body replacement landed with no record of the
+//	                caller's read-state. Whether it destroyed an unseen write is
+//	                NOT DERIVABLE from this log, in either direction.
+//	not_at_risk   — the write could not lose a body section: an append composes
+//	                against the body on disk at write time, and metadata-only and
+//	                title-incidental writes overwrite no prose at all.
+//
+// asserted wins over the mode because it is a fact about the caller and the
+// others are facts about the write: a caller that named its read-state did so
+// whether or not the body turned out to be at risk.
+func recordedReadState(mode, asserted string) string {
+	switch {
+	case asserted != "":
+		return "asserted"
+	case mode == "replace":
+		return "unmeasurable"
+	default:
+		return "not_at_risk"
 	}
 }
 

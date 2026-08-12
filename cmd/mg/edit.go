@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
 	"github.com/drellem2/macguffin/internal/workitem"
@@ -102,6 +103,35 @@ a write microseconds apart and no record of what the CALLER last saw. Only the
 caller knows the value they are relying on, which is why this is a precondition
 you pass rather than a check mg performs.
 
+WHO ELSE HAS BEEN HERE.
+
+  mg edit mg-1234 --append-body-file - <<'EOF'
+  ## a reply
+  EOF
+  Updated mg-1234: the title (body 84 → 96 lines)
+  note: mg-1234 was last edited 4m ago by mayor (append). A field you did not
+  write is a colleague, not corruption — ...
+
+When the last RECORDED editor of an item is somebody other than you, mg names
+them and how long ago, on stderr. It refuses nothing and is not a lock: 919 of
+1,287 edits measured over 15 days already use --append-body-file, which composes
+against the body on disk and cannot clobber, and making the safe path heavier is
+how callers get routed onto the unsafe one.
+
+It exists because a colleague's edit and a corrupted field are the same
+observation. On 2026-08-11 mayor reported to the human that --append-body-file
+was silently reverting an assignee, filed it high, and an investigation was
+dispatched — then retracted: pm-pogo had been deliberately handing the item back,
+twice, and BOTH WRITES HAD LANDED. Nothing was lost. The cost was a false bug
+report, a high-priority ticket and a retraction.
+
+SILENCE MEANS: no other party has a recorded edit of this item since you last
+wrote it — which covers both "only you have edited it" and "nobody has". It does
+NOT mean nobody did. The note reads events.jsonl, which is best-effort by design
+(a state change must not fail because the log is unwritable), so an absent record
+means "not recorded", not "did not happen". The note also names only the LAST
+writer; 'mg event list --type=work.edited | grep mg-1234' is the full list.
+
 A MISSPELLED GATE IS AN OPEN GATE.
 
 'human', 'parked' and 'blocked:<agent>' are what pogo's dispatcher gates on. A
@@ -200,6 +230,16 @@ ever worked on should not be changeable without a record.
 The event's 'actor' is whoever RAN the command (MG_ACTOR, else POGO_AGENT_NAME,
 else the OS user), not the item's assignee. Setting an edit to no-op values
 writes nothing at all.
+
+Each line also carries 'body_read_state', which says whether the write recorded
+what its CALLER believed it was overwriting: 'asserted' (--if-unchanged was
+passed, and the value is alongside as 'body_hash_asserted'), 'unmeasurable' (a
+full-body replacement with no such record — whether it destroyed an unseen write
+is not derivable from this log in either direction), or 'not_at_risk' (an append,
+a metadata edit, or a title rewrite, none of which can lose a body section).
+'body_hash_before' cannot answer this on its own: it is read from the stored body
+INSIDE the edit, so it always equals the previous line's 'body_hash_after' and
+any "zero clobbers" computed from the pair is true by construction.
 
 The --assignee flag names the agent that owns triage and routing for the
 item, not the agent that runs the work. Substantive work is performed by
@@ -331,6 +371,11 @@ default build template; a carrier block IN the appended text is still refused
 			return fmt.Errorf("no fields specified; use --title, --body, --type, --assignee, --depends, --tags, etc.")
 		}
 
+		// Read who touched this item last BEFORE the write, so the note reports
+		// the state the caller is walking into rather than the one they just
+		// created. See lasttouch.go for why this is a note and not a lock.
+		prior := workitem.LastTouch(root, args[0])
+
 		item, change, err := workitem.UpdateWithBodyChange(root, args[0], fields)
 		if err != nil {
 			return err
@@ -359,6 +404,14 @@ default build template; a carrier block IN the appended text is still refused
 			shown = fmt.Sprintf("%s (title was %q)", change.TitleAfter, change.TitleBefore)
 		}
 		fmt.Printf("Updated %s: %s%s\n", item.ID, shown, note)
+
+		// SOMEBODY ELSE WAS HERE (mg-43d0). Printed only when the last recorded
+		// editor is not the caller, so an agent iterating on its own item — 71%
+		// of measured edits — sees nothing. stderr, so it cannot corrupt
+		// anything parsing stdout.
+		if n := workitem.EditNotice(prior, workitem.Actor(), item.ID, time.Now()); n != "" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "note: %s\n", n)
+		}
 
 		// mg no longer stacks a heading of its own, so any extra H1 is the
 		// caller's own prose — but a body that came in with a near-duplicate of

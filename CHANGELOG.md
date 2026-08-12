@@ -56,6 +56,58 @@ derived at all — no git, no tags, or a build from a source tarball.
   heading) was tested and rejected: on `mg-49b1` the live spec was in a *later*
   section, so it would have printed a retracted position with machine authority.
 
+- **`mg edit` names who touched the item last, and how long ago (mg-43d0).**
+  When the last *recorded* editor of an item is somebody other than you, the
+  write now prints a note on **stderr** alongside the usual success line:
+
+      Updated mg-1234: the title (body 84 → 96 lines)
+      note: mg-1234 was last edited 4m ago by mayor (append). A field you did not
+      write is a colleague, not corruption — 'mg event list --type=work.edited |
+      grep mg-1234' names every writer and both body hashes.
+
+  The cost this removes is not lost data — it is a false bug report. On
+  2026-08-11 the mayor mailed the human that `mg edit --append-body-file` was
+  silently reverting an assignee field, filed it high, and an investigation was
+  dispatched; it then retracted. pm-pogo had been deliberately handing the item
+  back, twice, **both writes had landed**, and the value that read as corruption
+  was a colleague answering. Two agents editing one item could not see each
+  other, so a colleague's edit and a corrupted field were the same observation.
+
+  It is **not a lock** and refuses nothing. 919 of 1,287 edits measured over 15
+  days already use `--append-body-file`, which composes against the body on disk
+  at write time and cannot clobber; making that path heavier is how callers get
+  routed onto the unsafe one.
+
+  Silence has one meaning: **no other party has a recorded edit of this item
+  since you last wrote it.** An agent iterating on its own item sees nothing, so
+  the note does not become wallpaper. There is deliberately no recency
+  threshold — a cutoff would be a number nothing justifies, and the age is
+  printed so the reader can discount an old touch themselves. The note reads
+  `events.jsonl`, which is best-effort by design, so an absent record means "not
+  recorded" rather than "did not happen". The note names only the *last* writer,
+  and `mg event list --type=work.edited | grep <id>` is the full list.
+
+- **`work.edited` records whether a write's read-state was measurable at all
+  (mg-43d0).** Every line now carries `body_read_state`, and lines that passed
+  `--if-unchanged` also carry `body_hash_asserted`:
+
+  | value | meaning |
+  |---|---|
+  | `asserted` | the caller named the body version it believed it was overwriting |
+  | `unmeasurable` | a full-body replacement with no such record — whether it destroyed an unseen write is **not derivable from this log, in either direction** |
+  | `not_at_risk` | an append, a metadata edit or a title rewrite: no body section could be lost |
+
+  This exists because `body_hash_before` cannot answer the question and reads as
+  though it can. It is taken from the stored body *inside* the edit — the state
+  at write time, never what the caller read — so it always equals the previous
+  line's `body_hash_after`, and any "zero clobbers" computed from the pair is
+  true **by construction**. That figure was computed over the live log and
+  retracted. Recording the absence explicitly is the point: a silent gap reads
+  as clean, and read as clean it was.
+
+  No behaviour change; 93 of 138 measured replacements supplied no
+  `--if-unchanged` and will now say so.
+
 - **`mg mail send`/`reply` warn when the recipient's work item is finished
   (mg-cf1e).** A maildir outlives its agent, so a box named for a work item that
   is `done`, `archived` or `shelved` accepted mail forever and said nothing: the
