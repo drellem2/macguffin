@@ -276,15 +276,31 @@ func relPath(root, path string) string {
 // could disagree with each other when the ID was ambiguous, rendering one
 // item's body under another item's status.
 func ReadWithStatus(root, id string) (*Item, string, error) {
-	m, err := ResolveUnique(root, id)
-	if err != nil {
-		return nil, "", err
-	}
-	item, err := readFile(m.Path)
+	item, m, err := ReadWithMatch(root, id)
 	if err != nil {
 		return nil, "", err
 	}
 	return item, m.Status, nil
+}
+
+// ReadWithMatch is ReadWithStatus plus the Match it resolved through, for
+// callers that need the item's LOCATION and not just its status — reading the
+// result sidecar beside it, above all (see SidecarOf).
+//
+// It exists so those callers do not resolve a second time. A second resolve is
+// not merely wasted work: an @partition-qualified id resolves once and then
+// carries a BARE id on the Item, which a re-resolve can find ambiguous, and a
+// shadowed id prints its stderr note once per resolve.
+func ReadWithMatch(root, id string) (*Item, Match, error) {
+	m, err := ResolveUnique(root, id)
+	if err != nil {
+		return nil, Match{}, err
+	}
+	item, err := readFile(m.Path)
+	if err != nil {
+		return nil, Match{}, err
+	}
+	return item, m, nil
 }
 
 // errAmbiguousID reports that a short ID names more than one work item, listing

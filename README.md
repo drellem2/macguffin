@@ -230,7 +230,7 @@ mg log                 # view snapshot history
 |---------|-------------|
 | `mg init [--git]` | Create the `~/.macguffin` directory tree. `--git` enables snapshot tracking. |
 | `mg new` | Create a new work item (Markdown + YAML frontmatter). |
-| `mg show <id> [--json] [--body-hash] [--sections]` | Display a work item by ID. `--json` emits the full item as one JSON object (adds `creator`, `body`, `body_hash`, `budget`, `spent` to the `list --json` field set). Resolved `Successor:` / `Predecessor:` lines name a linked item's **title and current status**, or `⚠ UNRESOLVED` when the id no longer names anything — see [`mg done` naming the successor](#work-items) below. `--body-hash` prints only the body's SHA-256 — the version token `mg edit --if-unchanged` checks against — so a guarded write is one command rather than a pipe through `jq`. `--sections` prints an index of the body's **dated headings** instead of the item — see [Reading a body that has become a log](#reading-a-body-that-has-become-a-log). When two archived twins share a short ID across partitions, disambiguate with `mg show <id>@<partition>` (e.g. `mg show mg-4fa7@2026-04`). |
+| `mg show <id> [--json] [--body-hash] [--sections]` | Display a work item by ID. `--json` emits the full item as one JSON object (adds `creator`, `body`, `body_hash`, `budget`, `spent`, `result_path`, `result` to the `list --json` field set) — `result_path`/`result` are the item's **verdict**, resolved rather than globbed for; both are `null` when it recorded none, and a non-null `result_path` with a `null` `result` means the file is there and is not valid JSON. Resolved `Successor:` / `Predecessor:` lines name a linked item's **title and current status**, or `⚠ UNRESOLVED` when the id no longer names anything — see [`mg done` naming the successor](#work-items) below. `--body-hash` prints only the body's SHA-256 — the version token `mg edit --if-unchanged` checks against — so a guarded write is one command rather than a pipe through `jq`. `--sections` prints an index of the body's **dated headings** instead of the item — see [Reading a body that has become a log](#reading-a-body-that-has-become-a-log). When two archived twins share a short ID across partitions, disambiguate with `mg show <id>@<partition>` (e.g. `mg show mg-4fa7@2026-04`). |
 | `mg list [--json] [--wide]` | List work items. On a terminal each line is fitted to the terminal width: the **id, type, assignee and snooze marker are always shown**, and the **title and tags** are shortened (with a `…` marker) to make room — the fields worth keeping sit last on the line, so cutting at a column would delete exactly them. Piped or redirected output is **never** truncated, so anything parsing `mg list` sees the full line; `--wide` (alias `--no-truncate`) opts a terminal out too. `--json` emits NDJSON (one JSON object per line) for scripts and dashboards, and is unaffected by any of this. Alongside `tags` it carries the structured carriers that live *inside* them as their own fields — `successor`, `predecessor` (both always arrays, never null) and `declares_remainder` — so a check does not have to know the tag spelling to be written. |
 | `mg claim ID` | Atomically claim a work item by ID. |
 | `mg done ID` | Mark a claimed work item as done. **Refused** if the item declares a remainder and nothing is tracking what it recommends — see the two rows below. |
@@ -278,6 +278,7 @@ mg log                 # view snapshot history
 | `mg spend [--by AXIS] [--since D] [--window W] [--total] [--json]` | Aggregate token consumption per item, tag, repo, agent, etc. `--since` is a rolling duration (`24h`, `7d`); `--window today\|week` is calendar-anchored; `--total` prints the today/this-week/all-time headline. See [Token spend accounting](#token-spend-accounting). |
 | `mg snapshot` | Commit a git snapshot of current state. |
 | `mg log [args]` | Show snapshot history (passes args to `git log`). |
+| `mg sidecar <id> [--path] [--json]` | Print the result sidecar **resolved** from the item's own location — never scanned for, never a candidate list, so it follows an item into the month-partitioned archive. `--path` prints the absolute path instead of the contents. Exit **0** with the result on stdout, **3** (`no_sidecar`) with *nothing* on stdout when there is none, **1** (`io_error`) when the store could not be read. Use this instead of `ls ~/.macguffin/work/*/<id>.result.json`, which is one level deep and cannot see an archived sidecar at all. See [Reading a result sidecar](#reading-a-result-sidecar). |
 | `mg sidecars [--json]` | Report every `<id>.result.json` that is not sitting beside its item's `.md`, **classified by content**: `identical`, `equivalent` (same JSON re-serialised), `subset` (names the superset and the keys only it holds), `conflict` (names every key in disagreement), `opaque`, or `unknown` (a file could not be *read* — a failed probe, never reported as a difference). Reports and never deletes; a `subset` verdict is advice, not an instruction to keep the superset. See [Reading a result sidecar](#reading-a-result-sidecar). |
 | `mg schema` | Dump the full command tree as one JSON document (command names, use, flags, and a `mutates`/`idempotent` hint per command) for agent/tooling consumers. Frozen, additive-only shape versioned by `schema_version` (see [schema contract](#mg-schema-contract)). |
 | `mg version` / `mg --version` / `mg -v` | Print version. Release builds include commit + date build metadata (e.g. `mg v0.1.3 (abc1234, 2026-07-08)`). |
@@ -875,23 +876,48 @@ gate — a consumer diffing the command surface for stability must **ignore** bo
 ### Reading a result sidecar
 
 A completed item's result lives in `<id>.result.json` **beside that item's
-`.md`**, and it moves with the `.md` on every status transition. So the
-directory a sidecar sits in is part of its identity, and **globbing across
-statuses is unsafe**:
+`.md`**, and it moves with the `.md` on every status transition. **Ask mg where
+it is. Never build the path yourself:**
+
+```sh
+mg sidecar mg-560d            # the result, on stdout            # RIGHT
+mg sidecar mg-560d --path     # the absolute path, nothing else
+mg show mg-560d --json        # result_path and result, with the item
+```
+
+`mg sidecar` resolves the item and reads the file beside it. It never scans and
+never returns a candidate list, so it follows an item into
+`work/archive/2026-08/` without knowing that the archive is partitioned at all.
+Its three outcomes are deliberately distinct — **exit 0** with the result on
+stdout, **exit 3** (`no_sidecar`) with *nothing* on stdout when the item
+recorded none, **exit 1** (`io_error`) when the store could not be read — so a
+caller cannot render "there is none" and "I could not look" as the same empty
+string.
+
+The hand-built path is wrong twice over, and the second one is the one that
+bites:
 
 ```sh
 ls ~/.macguffin/work/*/mg-560d.result.json | head -1   # WRONG
 ```
 
-Shell globs expand in alphabetical order, so `available/` and `claimed/` are
-returned **ahead of** `done/`. A stale copy left by a pre-`mg-ab67` transition
-wins, and it reads as current — there is nothing in the file saying otherwise.
-Ask where the item is, then use that explicit path:
+* **The archive is nested by month.** That pattern is *one level* deep, and an
+  archived sidecar is at `work/archive/2026-08/mg-560d.result.json`. It cannot
+  match one, ever — and the archive holds the overwhelming majority of the
+  store's sidecars. The glob does not fail *into* your result; it fails *beside*
+  it, and what lands in your result is the empty set. On 2026-08-13 two agents
+  ninety minutes apart published "no sidecar" for items that had one, both
+  recording `verdict=pass`.
+* **`archived` is a status, not a directory.** The directory is `archive`.
+  `work/archived/` matches nothing, silently — that was the second of those two
+  false negatives.
+* **Alphabetical order.** Among what a one-level glob *can* see, `available/`
+  and `claimed/` sort ahead of `done/`, so a stale copy left by a
+  pre-`mg-ab67` transition is returned first and reads as current.
 
-```sh
-status=$(mg show mg-560d --json | jq -r .status)       # RIGHT
-cat ~/.macguffin/work/"$status"/mg-560d.result.json
-```
+The old recipe here — `status=$(mg show ID --json | jq -r .status)` then
+`work/$status/ID.result.json` — is broken for exactly the same reason: it yields
+`work/archived/` for an archived item. Use `mg sidecar`.
 
 `mg done --result` **merges into** any result already recorded for the item
 rather than replacing it, so completing an item cannot silently discard what the
@@ -909,10 +935,12 @@ are overwritten, keys it says nothing about survive. If the two cannot be merged
 — either side is valid JSON but not an object — `mg done` refuses and changes
 nothing, leaving both copies on disk to reconcile by hand.
 
-Run `mg sidecars` to find strays left behind by older versions. Note that
-claimed items carry a PID suffix (`<id>.md.<pid>`), so "sidecar with no
-matching `<id>.md`" is not a usable test for orphanhood in `claimed/` — use
-`mg sidecars`, which resolves the item rather than pattern-matching filenames.
+`mg sidecars` (plural) is an **integrity scan over the whole store**, not a
+lookup: it finds strays left behind by older versions. To read ONE item's
+result, use `mg sidecar` (singular). Note that claimed items carry a PID suffix
+(`<id>.md.<pid>`), so "sidecar with no matching `<id>.md`" is not a usable test
+for orphanhood in `claimed/` — use `mg sidecars`, which resolves the item rather
+than pattern-matching filenames.
 
 Each stray is compared by **content**, not by bytes, because the safe action
 differs by case and a single `differs` verdict forces the operator to open both

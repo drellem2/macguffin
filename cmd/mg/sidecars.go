@@ -19,16 +19,29 @@ var sidecarsCmd = &cobra.Command{
 	Long: `Report every <id>.result.json in the store that is not sitting beside its
 item's .md file.
 
-Why this exists: reading a result by glob is unsafe. The lifecycle directories
-are scanned in ALPHABETICAL order, so
+THIS IS AN INTEGRITY SCAN, NOT A LOOKUP. To read ONE item's result, use the
+resolver, which asks where the item is and reads the file beside it:
+
+    mg sidecar <id>            # the result
+    mg sidecar <id> --path     # the absolute path
+    mg show <id> --json        # result_path and result, alongside the item
+
+DO NOT BUILD THE PATH YOURSELF, AND ABOVE ALL DO NOT GLOB. Two hazards, and the
+second is the one that actually bites:
 
     ls ~/.macguffin/work/*/mg-560d.result.json | head -1
 
-returns a stray copy in available/ or claimed/ AHEAD of the real one in done/,
-and the reader cannot tell. To read one item's result, ask where the item is
-and use that explicit path:
-
-    mg show <id> --json | jq -r .status     # then <status>/<id>.result.json
+  * ARCHIVE NESTING. That pattern is ONE level deep and the archive is
+    partitioned by month — work/archive/2026-08/mg-560d.result.json. It cannot
+    match an archived sidecar AT ALL, and the archive holds the great majority
+    of the store's sidecars. The glob does not fail into your result; it fails
+    beside it, and what lands in your result is the empty set. On 2026-08-13
+    two agents ninety minutes apart published "no sidecar" for items that had
+    one. Note also that the archive DIRECTORY is 'archive' while the item's
+    STATUS is 'archived' — 'work/archived/' is nothing, silently.
+  * ALPHABETICAL ORDER. Among the one-level matches, available/ and claimed/
+    sort ahead of done/, so a stray copy is returned first and reads as
+    current. Real, but no instance of it is on record here.
 
 DISPOSITION IS NOT MECHANICAL, so each stray is classified by CONTENT and the
 verdict names what to do:
@@ -113,8 +126,9 @@ Exit status is 0 whether or not strays are found; this is a report, not a gate.`
 			}
 			fmt.Println()
 		}
-		fmt.Println("Read a result from the item's own status directory, never from a glob:")
-		fmt.Println("    mg show <id> --json | jq -r .status")
+		fmt.Println("Read one item's result with the resolver, never with a glob:")
+		fmt.Println("    mg sidecar <id>            # the result")
+		fmt.Println("    mg sidecar <id> --path     # the absolute path")
 		return nil
 	},
 }

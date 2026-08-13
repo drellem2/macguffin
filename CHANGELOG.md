@@ -23,6 +23,62 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- **`mg sidecar <id>` resolves an item's result, so nobody has to glob for it —
+  and the help text that warned about globbing now names the hazard that
+  actually bites (mg-6bc9).** There was no way to ask mg where an item's result
+  sidecar was. `mg show --json` had 21 keys and none of them was the verdict,
+  and `mg sidecars` (plural) is an integrity scan over the whole store, not a
+  lookup. So every consumer built the path by hand, and the shape everyone
+  reached for was `ls ~/.macguffin/work/*/<id>.result.json`.
+
+  **That pattern is one level deep and the archive is nested by month**
+  (`work/archive/2026-08/<id>.result.json`), so it cannot match an archived
+  sidecar *by construction* — and the archive holds the great majority of the
+  store's sidecars. A failing glob does not error into the caller's result; it
+  errors *beside* it, and what lands in the result is the empty set. On
+  2026-08-13 two agents ninety minutes apart turned that empty set into a
+  published "no sidecar" for items that both recorded `verdict=pass`; one of
+  them reached three work-item bodies and an agent tracking a sidecar that was
+  never missing, the other produced a retracted claim about another agent's
+  measurement. A near variant did the same damage from the other end: the item
+  *status* is `archived` while the *directory* is `archive`, so
+  `work/archived/*` matched nothing, silently.
+
+  Both agents had read `mg sidecars --help`, which warned — correctly — that
+  the lifecycle directories sort alphabetically so a stray in `available/` is
+  returned ahead of the real copy in `done/`. That hazard is real and, as far
+  as anyone can find, has never bitten anyone here. **A warning that names a
+  lesser hazard is worse than no warning: it occupies the slot the real caution
+  would go in, and it discharges the reader's sense that they have checked.**
+
+  - **`mg sidecar <id>`** prints the result; `--path` prints the resolved
+    absolute path; `--json` emits `{id,status,partition,path,result}`. It
+    resolves the item through the same resolver as `mg show` and reads the file
+    beside that item's `.md`. It never scans, never matches a pattern, and never
+    returns a candidate list — so it follows an item into a month partition
+    knowing nothing about partitions.
+  - **Three outcomes, kept distinct**, because collapsing two of them is the
+    whole defect: exit **0** with the result on stdout; exit **3**
+    (`no_sidecar`) with **nothing** on stdout when the item recorded none; exit
+    **1** (`io_error`) when the store could not be *read*. A caller can no
+    longer render "there is none" and "I could not look" as the same empty
+    string.
+  - **`mg show <id> --json` gained `result_path` and `result`**, so the verdict
+    is reachable from the object consumers already parse. Both are `null` when
+    there is no sidecar; a non-null `result_path` with a `null` `result` is the
+    third state — the file is there and is not valid JSON. `mg show`'s human
+    output prints a `Result:` line with the resolved path, on the surface a
+    reader about to construct one actually looks at.
+  - **The help text and README now name the nesting hazard first**, point at
+    the resolver, and mark the old README recipe (`status=$(mg show ID --json |
+    jq -r .status)` then `work/$status/…`) as broken for the same reason.
+  - **The test carries its own mutant.** The archived-sidecar test runs the
+    one-level glob against the same store and asserts it finds *nothing* where
+    the resolver finds the file, so it demonstrably fails against the broken
+    implementation rather than merely passing against the fixed one. A help-text
+    guard walks the live command tree and fails any `--help` that shows
+    `work/*/` without forbidding it.
+
 - **A successor link is walkable from both ends and readable as a field, so the
   `declares-remainder` gate is auditable (mg-3386).** The link itself was
   already durable — `mg done --successor` has written a `successor:<id>` tag

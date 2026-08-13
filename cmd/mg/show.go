@@ -37,6 +37,21 @@ type showJSONItem struct {
 	BodyHash string `json:"body_hash"`
 	Budget   *int   `json:"budget"` // null when unset
 	Spent    int    `json:"spent"`  // total tokens recorded against this item
+	// ResultPath is the absolute path of the item's result sidecar, or null
+	// when the item has recorded no result. Result is that sidecar decoded.
+	//
+	// These exist because their absence is what sent every reader to a glob:
+	// the object had 21 keys and not one of them was the verdict, so "what did
+	// this item conclude" was answerable only by constructing a path by hand —
+	// and the hand-built path was `work/*/<id>.result.json`, which is one level
+	// deep and therefore blind to the month-nested archive holding most of the
+	// store's sidecars. A field cannot be globbed wrong.
+	//
+	// result_path non-null with result null means the file is there and its
+	// bytes are not valid JSON — which is a third state, and distinguishing it
+	// from "no result" is the entire discipline this pair is for.
+	ResultPath *string         `json:"result_path"`
+	Result     json.RawMessage `json:"result"`
 }
 
 var showCmd = &cobra.Command{
@@ -73,11 +88,15 @@ item as "unknown", not as Daniel.`,
 		}
 
 		// One resolve, not two: reading the body and the status separately
-		// let `show` render one item under another item's status.
-		item, status, err := workitem.ReadWithStatus(root, args[0])
+		// let `show` render one item under another item's status. The same
+		// resolve carries the item's LOCATION, which is where its result
+		// sidecar lives — re-deriving that later is a second chance to derive
+		// it wrong, and deriving it wrong is exactly mg-6bc9.
+		item, match, err := workitem.ReadWithMatch(root, args[0])
 		if err != nil {
 			return err
 		}
+		status := match.Status
 
 		if showJSON && showBodyHash {
 			return mgerr.Usage("mutually_exclusive_flags",
@@ -112,7 +131,7 @@ item as "unknown", not as Daniel.`,
 		}
 
 		if showJSON {
-			return writeShowJSON(root, item, status)
+			return writeShowJSON(root, item, match)
 		}
 
 		fmt.Printf("%-10s %s\n", "ID:", item.ID)
@@ -191,6 +210,18 @@ item as "unknown", not as Daniel.`,
 		if item.Repo != "" {
 			fmt.Printf("%-10s %s\n", "Repo:", item.Repo)
 		}
+
+		// The resolved sidecar path, printed on the surface people actually
+		// read. A reader who can see the path has no reason to construct one,
+		// and constructing one is where the glob comes from. An unreadable
+		// store says so rather than printing nothing: a missing line and a line
+		// that could not be produced are the two states this must not merge.
+		if sc, err := workitem.SidecarOf(match); err != nil {
+			fmt.Printf("%-10s ⚠ could not read the result sidecar: %s\n", "Result:", err)
+		} else if sc.Exists {
+			fmt.Printf("%-10s %s\n", "Result:", sc.Path)
+		}
+
 		fmt.Printf("%-10s %s\n", "Title:", item.Title)
 
 		// Above the body, not below it: a reader who learns the body is a log
@@ -216,20 +247,35 @@ func init() {
 // writeShowJSON marshals the work item as a single JSON object on stdout.
 // Spend is summed from the per-item spend records (0 when none are recorded),
 // mirroring the human view's Spent line.
-func writeShowJSON(root string, item *workitem.Item, status string) error {
+func writeShowJSON(root string, item *workitem.Item, match workitem.Match) error {
 	spent := 0
 	if recs, err := spend.ReadItem(root, item.ID); err == nil {
 		for _, r := range recs {
 			spent += r.Input + r.CacheRead + r.CacheCreate + r.Output
 		}
 	}
+	// An unreadable store must fail the command rather than render result_path
+	// null: "there is no result" and "I could not look" are the two states this
+	// pair exists to keep apart, and collapsing them here would reintroduce the
+	// bug one layer up.
+	sc, result, ok, err := workitem.SidecarResultOf(match)
+	if err != nil {
+		return err
+	}
 	out := showJSONItem{
-		listJSONItem: toJSONItem(item, status),
+		listJSONItem: toJSONItem(item, match.Status),
 		Creator:      item.Creator,
 		Body:         item.Body,
 		BodyHash:     workitem.BodyHash(item.Body),
 		Budget:       item.Budget,
 		Spent:        spent,
+	}
+	if sc.Exists {
+		path := sc.Path
+		out.ResultPath = &path
+	}
+	if ok {
+		out.Result = result
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")

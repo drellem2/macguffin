@@ -191,13 +191,17 @@ func (s StraySidecar) Redundant() bool { return s.AuthoritativeExists && s.Compa
 // beside its item's .md file.
 //
 // It resolves each sidecar's ID through Resolve rather than trusting the
-// directory the file was found in. That distinction is the whole point: the
-// hazard this function exists to close is that `ls work/*/<id>.result.json`
-// returns directories in ALPHABETICAL order, so an orphan in available/ or
-// claimed/ is returned ahead of the real copy in done/. A reader who takes the
-// first hit gets the stale file and cannot tell. Callers wanting one item's
-// result must ask the resolver where the item is and read that explicit path —
-// never a glob.
+// directory the file was found in. That distinction is the whole point:
+// `ls work/*/<id>.result.json` is wrong twice over. It is ONE level deep, so it
+// cannot see the month-partitioned archive that holds most of the store's
+// sidecars — the failure that produced two false "no sidecar" findings on
+// 2026-08-13 — and among what it CAN see it returns directories in ALPHABETICAL
+// order, so an orphan in available/ or claimed/ comes back ahead of the real
+// copy in done/.
+//
+// Callers wanting ONE item's result must not come here at all: this is a scan
+// over the whole store, and the answer to "where is this item's result" is
+// SidecarFor, which derives the path from the item's own location.
 //
 // Unreadable directories are skipped rather than failing the scan, matching
 // Resolve: a missing work/shelved/ must not hide strays elsewhere.
