@@ -115,20 +115,7 @@ type SuccessorRef struct {
 // caller: this runs after a completion has already happened, and a display
 // helper must never turn a landed transition into an error.
 func DescribeSuccessors(root string, item *Item) []SuccessorRef {
-	ids := SuccessorIDs(item)
-	refs := make([]SuccessorRef, 0, len(ids))
-	for _, sid := range ids {
-		ref := SuccessorRef{ID: sid}
-		matches, err := Resolve(root, sid)
-		if err == nil && len(matches) == 1 {
-			ref.Status = matches[0].Status
-			if s, err := readFile(matches[0].Path); err == nil {
-				ref.Title = s.Title
-			}
-		}
-		refs = append(refs, ref)
-	}
-	return refs
+	return describeLinks(root, SuccessorIDs(item))
 }
 
 // requireSuccessor reports whether item may be archived: nil when it is not a
@@ -202,6 +189,26 @@ func linkSuccessor(root, path string, item *Item, successor string) error {
 	if err := os.WriteFile(path, []byte(Render(item)), 0o644); err != nil {
 		return ioErr(fmt.Sprintf("%s: could not record successor %s: %s", item.ID, successor, fsErrText(err)))
 	}
+	return nil
+}
+
+// linkSuccessorBothWays records the forward link and then the reverse one.
+//
+// The order is not arrangeable. The forward tag is the half the guards read and
+// the half a refusal is scored against, so it is written first and its error is
+// returned; the reverse half is best-effort and reports its own failures. A
+// reverse link written before a forward link that then failed would leave the
+// successor claiming an inheritance from an item that never named it.
+//
+// reconcileBacklinks runs on the item AFTER the new tag is on it, so this call
+// covers both the id supplied by --successor and any successor: tag the item was
+// already carrying. See predecessor.go for why every route is reconciled and not
+// just this one.
+func linkSuccessorBothWays(root, path string, item *Item, successor string) error {
+	if err := linkSuccessor(root, path, item, successor); err != nil {
+		return err
+	}
+	reconcileBacklinks(root, item)
 	return nil
 }
 

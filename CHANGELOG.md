@@ -23,6 +23,77 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- **A successor link is walkable from both ends and readable as a field, so the
+  `declares-remainder` gate is auditable (mg-3386).** The link itself was
+  already durable — `mg done --successor` has written a `successor:<id>` tag
+  onto the completed item since mg-9259, and both items in the report that
+  produced this change were carrying theirs. What was missing was any way to
+  *read* it from where people stand. An operator asked whether a completed item
+  had named a successor, ran `mg show <id> --json | jq 'keys'`, grepped the
+  result for `succ|next|child`, found nothing, and filed the gate as bypassed.
+  The gate had fired and been satisfied; the link was one level below a field
+  lookup, inside `tags`. **The absence of a readable trace produced a false
+  report about a working mechanism**, inside an hour of that mechanism being
+  adopted — which is the same failure as a missing trace, arriving by a
+  different route.
+
+  Three changes, none of which moves where the link is stored:
+
+  - **`successor`, `predecessor` and `declares_remainder` are first-class fields**
+    on `mg show --json` and `mg list --json`, projected from the tags that
+    remain authoritative. Both link fields are always arrays, never null. This
+    makes the gate's own audit question answerable from fields alone:
+
+    ```
+    mg list --all --json | jq -r 'select(.declares_remainder
+      and (.status=="done" or .status=="archived")
+      and (.successor|length)==0) | .id'
+    ```
+
+    — *every item that declared a remainder and completed naming nothing to
+    carry it forward*. An empty result is the statement that the gate has not
+    been bypassed. That query is the ticket's stated acceptance condition and is
+    pinned by a test that runs it rather than describing it.
+
+  - **The link is written on both ends.** The successor gets
+    `predecessor:<id>` back, so a chain can be followed from the tracker to what
+    it inherited and not only the other way. It is written by `mg done` and
+    `mg archive`, and it reconciles **every** `successor:` tag on the item —
+    not just an id this run supplied — because the tag has three routes onto an
+    item and a back-link that exists for one of them is a chain that breaks
+    depending on how it was filed. Writing the reverse link is deliberately
+    **not** gating on it: mg-9259 measured that requiring the back-reference
+    would refuse 40 of 40 legitimate links, because it had never once been
+    written. `requireRemainderDischarged` still reads the forward tag and
+    nothing else.
+
+  - **`mg show` prints resolved `Successor:` / `Predecessor:` lines** naming the
+    linked item's title and *current* status. `mg done` already printed that at
+    the moment of the link; it scrolled away with the terminal. A link whose
+    target has since been deleted prints `⚠ UNRESOLVED` rather than being
+    skipped — the guards refuse a dangling successor at close time, so a
+    dangling one at read time is a link that rotted afterwards, which is the one
+    state a bare tag list cannot tell from a healthy one.
+
+  The reverse write touches a second item, so it is best-effort: a completion
+  that already satisfied its gate is never turned into a refusal because another
+  file could not be updated. It is not silent about it. A failure prints a note
+  on stderr naming both ends **and** emits a `work.backlink_failed` event, so
+  `mg event list --type=work.backlink_failed` distinguishes a one-directional
+  chain nothing tried to close from one that was attempted and failed. A
+  best-effort link whose only failure record was a printed line would have been
+  this ticket's own defect, one level down.
+
+  The `mg archive` **sweep** reconciles too, that being the last moment an item
+  is ever written and so the only route by which a link filed before reciprocity
+  existed becomes walkable from both ends. It is a side effect on the linked
+  item and never on which items the sweep moves, so `--dry-run` stays an honest
+  preview.
+
+  **Known gap, stated rather than papered over:** items already in `archive/`
+  acquire no reverse link — nothing moves them again. Links on items still in
+  `done/` close on their next sweep.
+
 - **`mg show <id> --sections` indexes a body's dated headings, and `mg show`
   banners a body that has become a log (mg-7e02).** Agents append dated sections
   to long-lived tickets because the ticket is the only artifact the next actor

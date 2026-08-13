@@ -43,9 +43,31 @@ that will never carry the work. So mg prints what it linked:
 
     Successor mg-4b01 (available): build the thing the triage recommended
 
-Read that line. It is the only place a wrong-but-real id is visible, and it is
-printed whenever the completed item carries a successor: tag — whether this run
-supplied it or an earlier edit did.
+Read that line. It is printed whenever the completed item carries a successor:
+tag — whether this run supplied it or an earlier edit did.
+
+THE LINK IS WRITTEN ON BOTH ENDS. The completed item gets "successor:<sid>", and
+<sid> gets "predecessor:<id>" back, so the chain is walkable in either direction
+by 'mg show'. The reverse half is best-effort: it touches a second item that may
+be claimed elsewhere, and a close that already satisfied its gate is never
+turned into a refusal because that write failed. When it does fail it says so on
+stderr, naming both ends — a reverse link that went missing quietly would be the
+same defect at a smaller scale.
+
+BOTH ENDS ARE QUERYABLE AS FIELDS, not only as tags. 'mg show --json' and
+'mg list --json' carry 'successor', 'predecessor' and 'declares_remainder'
+alongside 'tags', which makes the gate's own audit question answerable:
+
+    mg list --all --json | jq -r 'select(.declares_remainder
+      and (.status=="done" or .status=="archived")
+      and (.successor|length)==0) | .id'
+
+That is "every item that declared a remainder and completed without naming
+anything to carry it". An empty result means the gate has not been bypassed —
+but it asks whether a successor was NAMED, not whether one still EXISTS, so
+'mg list --help' documents the companion query for links that rotted after they
+were checked. Reading either empty result alone as clean is the same mistake
+this trace exists to stop.
 
 --result IS NOT LOST WHEN THIS COMMAND REFUSES. The result sidecar is written
 before the guards run, beside the item where it currently sits, and travels

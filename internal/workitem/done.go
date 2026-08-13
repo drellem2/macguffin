@@ -112,9 +112,16 @@ func Done(root, id string, resultJSON json.RawMessage, opts ...DoneOption) (*Ite
 	// obligation. linkSuccessor validates before it writes, so a bad target
 	// leaves the file untouched.
 	if o.successor != "" {
-		if err := linkSuccessor(root, srcPath, claimed, o.successor); err != nil {
+		if err := linkSuccessorBothWays(root, srcPath, claimed, o.successor); err != nil {
 			return nil, nil, notePreservedResult(err, id, srcDir, resultPreserved)
 		}
+	} else {
+		// An item can carry a successor: tag that no --successor supplied — from
+		// `mg edit --add-tags`, from `mg new --tags`, or from a previous run of
+		// this command. Reconciling here means the reverse link is a property of
+		// the LINK rather than of the route that filed it, so `mg show <successor>`
+		// names what it inherited however the inheritance was recorded.
+		reconcileBacklinks(root, claimed)
 	}
 	if err := requireRemainderDischarged(root, claimed); err != nil {
 		return nil, nil, notePreservedResult(err, id, srcDir, resultPreserved)

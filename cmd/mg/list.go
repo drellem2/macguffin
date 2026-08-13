@@ -67,6 +67,38 @@ type listJSONItem struct {
 	// hand-written value mg could not parse reaches the consumer as written
 	// instead of arriving as a zero time indistinguishable from "no snooze".
 	Snooze string `json:"snooze"`
+
+	// Successor, Predecessor and DeclaresRemainder are DERIVED from Tags — the
+	// `successor:`/`predecessor:`/`declares-remainder` carriers, projected into
+	// fields. They add no state; every one of them is recoverable from Tags by a
+	// caller who knows the convention.
+	//
+	// They exist because a caller who does NOT know the convention had no way to
+	// find them, and that cost a false bug report (mg-3386). An operator asked
+	// whether a completed item had named a successor, ran
+	//
+	//	mg show mg-0e8c --json | jq 'keys'
+	//
+	// grepped the result for succ|next|child, found nothing, and reported the
+	// declares-remainder gate as bypassed. The gate had fired and been satisfied;
+	// the link was sitting in `tags` as "successor:mg-28b6", one level below where
+	// a field lookup reaches. A trace that only answers a question you already
+	// know how to ask is why "an enforced gate and a bypassed one look identical"
+	// was a reasonable thing to conclude from real evidence.
+	//
+	// Together they make the gate's audit query writable from fields alone:
+	//
+	//	mg list --all --json | jq -r 'select(.declares_remainder
+	//	  and (.status=="done" or .status=="archived")
+	//	  and (.successor|length)==0) | .id'
+	//
+	// which is the check the ticket asked to be made possible: every item that
+	// declared a remainder and completed without naming anything to carry it.
+	// Empty arrays, never null, so `|length` and `[]` comparisons hold on every
+	// item rather than only on the ones that have links.
+	Successor         []string `json:"successor"`
+	Predecessor       []string `json:"predecessor"`
+	DeclaresRemainder bool     `json:"declares_remainder"`
 }
 
 func toJSONItem(item *workitem.Item, status string) listJSONItem {
@@ -77,6 +109,14 @@ func toJSONItem(item *workitem.Item, status string) listJSONItem {
 	depends := item.Depends
 	if depends == nil {
 		depends = []string{}
+	}
+	successor := workitem.SuccessorIDs(item)
+	if successor == nil {
+		successor = []string{}
+	}
+	predecessor := workitem.PredecessorIDs(item)
+	if predecessor == nil {
+		predecessor = []string{}
 	}
 	return listJSONItem{
 		ID:       item.ID,
@@ -92,6 +132,10 @@ func toJSONItem(item *workitem.Item, status string) listJSONItem {
 		Created:  item.Created,
 		Mtime:    item.Mtime,
 		Snooze:   item.SnoozeRaw,
+
+		Successor:         successor,
+		Predecessor:       predecessor,
+		DeclaresRemainder: workitem.DeclaresRemainder(item),
 	}
 }
 
@@ -168,7 +212,32 @@ Examples:
 On a terminal, each line is fitted to the terminal width: the id, type, assignee
 and snooze marker are always shown, and the title and tags are shortened (with a
 … marker) to make room. Piped or redirected output is never truncated, so
-scripts reading ` + "`mg list`" + ` see the full line, and --json is unaffected.`,
+scripts reading ` + "`mg list`" + ` see the full line, and --json is unaffected.
+
+--json emits one object per item (NDJSON). Alongside 'tags' it carries the
+structured carriers that live inside them as their own fields — 'successor',
+'predecessor' (both always arrays) and 'declares_remainder' — so a check does
+not have to know the tag spelling to be written. The audit the
+declares-remainder gate exists for is one of them:
+
+  mg list --all --json | jq -r 'select(.declares_remainder
+    and (.status=="done" or .status=="archived")
+    and (.successor|length)==0) | .id'
+
+  # every item that declared a remainder and completed naming nothing to
+  # carry it forward. Empty output means the gate has not been bypassed.
+
+That query asks whether a successor was NAMED, which is not the same as asking
+whether one still EXISTS. A link whose target was deleted afterwards passes it,
+so run the second half too rather than reading one empty result as clean:
+
+  mg list --all --json | jq -sr '[.[].id] as $ids
+    | .[] | select(.successor - $ids | length > 0)
+    | .id + " -> " + ((.successor - $ids) | join(","))'
+
+  # every item naming a successor that no longer exists. 'mg done' and
+  # 'mg archive' refuse a dangling link at close time, so a hit here is one
+  # that rotted after it was checked.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := resolveRoot()
 		if err != nil {

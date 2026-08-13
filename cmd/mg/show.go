@@ -149,6 +149,24 @@ item as "unknown", not as Daniel.`,
 		if len(item.Depends) > 0 {
 			fmt.Printf("%-10s %s\n", "Depends:", strings.Join(item.Depends, ", "))
 		}
+
+		// The successor: tag is already inside the Tags line above, so these
+		// lines are not here to reveal the id — they are here to RESOLVE it.
+		// `mg done` prints "Successor mg-4b01 (available): build the thing" at
+		// the moment of the link, and that line was the only place a
+		// wrong-but-real successor was ever visible; it scrolled away with the
+		// terminal that printed it. Reprinting it on demand is what makes the
+		// chain walkable later, which is the complaint mg-3386 actually had:
+		// given a closed item, what carried its remainder forward, and where has
+		// that got to since?
+		//
+		// A tag pointing at nothing prints UNRESOLVED rather than being skipped.
+		// The guards refuse a dangling successor at close time, so a dangling one
+		// HERE means the target was deleted afterwards — a link that has rotted
+		// since it was checked, which is exactly the state worth showing and the
+		// one a bare tag list cannot distinguish from a healthy link.
+		printLinks("Successor:", workitem.DescribeSuccessors(root, item))
+		printLinks("Predecessor:", workitem.DescribePredecessors(root, item))
 		if item.SnoozeRaw != "" {
 			// A gate you cannot see is a gate nobody audits. Malformed values
 			// are shown as they are stored and named as malformed, because a
@@ -216,6 +234,26 @@ func writeShowJSON(root string, item *workitem.Item, status string) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
+}
+
+// printLinks renders resolved successor/predecessor links under a label, one
+// per line, or nothing at all when there are none. The overwhelming majority of
+// items carry no links and a label printed for them is noise — the same reason
+// `mg done` prints no successor line on a completion that has none.
+//
+// "Predecessor:" is 12 characters — the longest label mg prints, and two wider
+// than the %-10s column the fixed fields above use. Both link lines take that
+// width so they align with EACH OTHER; the alternative is each line choosing
+// its own and the pair stepping against itself, which is worse than the pair
+// sitting two columns right of the block above.
+func printLinks(label string, refs []workitem.SuccessorRef) {
+	for _, r := range refs {
+		if r.Status == "" {
+			fmt.Printf("%-12s %s  ⚠ UNRESOLVED — nothing by that id exists now\n", label, r.ID)
+			continue
+		}
+		fmt.Printf("%-12s %s (%s): %s\n", label, r.ID, r.Status, r.Title)
+	}
 }
 
 // pctOfBudget rounds spent/budget to a whole percentage. A zero budget is

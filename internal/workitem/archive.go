@@ -187,6 +187,18 @@ func Archive(root string, maxAge time.Duration) (archived []*Item, skipped []Ski
 	}
 
 	for _, c := range movable {
+		// The sweep is the last moment an item is ever written, so it is the
+		// last chance to close its reverse link — and the only route by which a
+		// link filed BEFORE reciprocity existed becomes walkable from both ends.
+		// `mg done` reconciles too, so for anything completed since this shipped
+		// the call is a read that finds the tag already there and writes nothing.
+		//
+		// This is a side effect on OTHER items, never on which items this sweep
+		// moves, so ArchiveDryRun stays an honest preview of the archive without
+		// carrying it: the drift the dry run is written to avoid is a promise to
+		// archive something the real run refuses, and nothing here refuses.
+		reconcileBacklinks(root, c.item)
+
 		if err := archiveFile(root, c); err != nil {
 			return nil, nil, err
 		}
@@ -315,9 +327,14 @@ func ArchiveItem(root, id string, opts ArchiveOpts) (*Item, error) {
 	// reader will: the successor: tag is part of the archived record, not a
 	// fact that lived only in this process's argv.
 	if opts.Successor != "" {
-		if err := linkSuccessor(root, path, item, opts.Successor); err != nil {
+		if err := linkSuccessorBothWays(root, path, item, opts.Successor); err != nil {
 			return nil, err
 		}
+	} else {
+		// Same reason as in Done: a successor: tag recorded by any other route
+		// gets its reverse half here, so the chain is walkable from the archived
+		// record and from the item that inherited it alike.
+		reconcileBacklinks(root, item)
 	}
 
 	if guardErr := checkArchiveGuards(root, item); guardErr != nil {
