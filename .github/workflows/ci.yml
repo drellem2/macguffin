@@ -33,6 +33,12 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go test -race -count=1 ./...
+      # The $TMPDIR leak guard. It runs its own short `go test` slice with
+      # $TMPDIR pinned and counts what the run leaves behind, so it cannot be
+      # folded into the step above. It is here because a temp-dir leak has no
+      # other detector: nothing on the host that filled up reported the disk at
+      # all until an unrelated build died of Errno 28 (mg-cc3f).
+      - run: sh scripts/test-tmpdir-leak.sh
 
   # The shell suites. These were previously run by nothing: test.sh covered only
   # `go test ./...` and test-shadow.sh, and scripts/test-install.sh was in no

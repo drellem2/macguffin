@@ -287,6 +287,52 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Fixed
 
+- **The test harness no longer leaks temp directories into the shared `$TMPDIR`
+  (mg-cc3f).** New `internal/testtmp` (Go) and `scripts/lib/testtmp.sh` (shell):
+  one swept root, `$TMPDIR/macguffin-test-tmp`, with every harness directory
+  nested inside it and named for the process that owns it. The sweep reclaims by
+  **pid ownership** rather than by an age cutoff — a live owner's directory is
+  kept at any age, a dead owner's is removed immediately — because this box runs
+  several agents concurrently and an age rule would delete a *running* suite's
+  fixtures, which surfaces as a branch defect against code that is fine.
+
+  Nothing here is new invention; it is a port of pogo's remedy for the same
+  defect (mg-de3c, mg-60eb), which measured that the remaining producers were not
+  pogo's. On 2026-08-13 the host disk hit 100% capacity with 204Mi free and every
+  merge gate on the box began failing with `Errno 28` — a failure that presents
+  as a *random* branch defect, since the gate that dies is whichever one runs
+  when the disk crosses.
+
+  **The defect was not a missing cleanup — every cleanup was present, and every
+  one of them ran on the success path only.** `cmd/mg`'s `TestMain` removed its
+  neutral working directory after `m.Run()`, which a panic, a `-timeout` expiry
+  (Go implements that by panicking) or a kill skips entirely; its two error arms
+  called `os.Exit` and walked straight past the removal they were above.
+  `t.TempDir()` removes from a `t.Cleanup`, which the same aborts skip, and it
+  creates its directory directly in `$TMPDIR` — one entry per *test*. The shell
+  suites' `trap 'rm -rf "$tmpdir"' EXIT` named no signal, and `EXIT` alone does
+  not fire on `SIGTERM`. So the harness cleaned up perfectly when it passed and
+  leaked whenever it failed, which is when a suite is run most. Measured: an
+  aborted `go test ./cmd/mg/` left three entries in `$TMPDIR`; it now leaves one,
+  the root, and the next run reclaims what is inside it.
+
+  Fixed structurally rather than with another cleanup call. `testtmp.Run` owns
+  the directory and returns an exit *code* — the caller exits — so no arm can
+  leave past the teardown, and it points the test binary's `$TMPDIR` at its own
+  pid-named directory so `t.TempDir()` and every subprocess nest inside it too.
+  Removal defeats Go's read-only module cache (0444 files in 0555 directories,
+  which `os.RemoveAll` cannot unlink through) with a chmod pass, and **reports**
+  what it still could not delete: the original failure was not that the removal
+  stopped, it was that the teardown ignored the error and nothing said so.
+
+  `scripts/test-tmpdir-leak.sh` is the detector, wired into `./test.sh` and CI. It
+  counts `$TMPDIR` before and after a run, with a positive control first — the
+  count is worth nothing until it has been shown to move — and, because a clean
+  run leaked nothing even before this change, it aborts a run under `-timeout`
+  and `SIGKILL`s a shell suite and counts that. Those are the cases that fail on
+  the pre-fix tree. A leak of this kind has no other detector: nothing on this
+  host reported the disk at all until an unrelated build died.
+
 - **A fenced carrier example no longer refuses its own filing (mg-f928).** The
   one-fact-one-marker guard walked past the fence that ended the leading block and
   read the `workflow:` line inside it as a misplaced declaration, so

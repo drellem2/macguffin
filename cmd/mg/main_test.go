@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/drellem2/macguffin/internal/testtmp"
 )
 
 func TestCLI_Version(t *testing.T) {
@@ -2399,28 +2401,54 @@ var projectRoot string
 // exercise repo detection set cmd.Dir themselves (TestCLI_NewNoRepo,
 // TestCLI_RepoAutoDetectSkippedUnderPogo, the mg-0b57 tests); this makes that
 // explicit form mandatory rather than optional.
-func TestMain(m *testing.M) {
+// The neutral directory was also this repo's largest $TMPDIR leak, and the way
+// it leaked is worth reading before anyone reverts the shape below.
+//
+// It used to be an os.MkdirTemp("", "mg-test-cwd-") removed after m.Run(), which
+// is cleanup on the SUCCESS path: a panic, a -timeout expiry (Go implements that
+// by panicking) or a kill skips it entirely, so it leaked exactly when the suite
+// fails — which is when the suite is run most. Worse, the two error arms above
+// the removal called os.Exit and walked straight past it, so a failure to chdir
+// leaked the directory it had just created and said nothing.
+//
+// Both are fixed structurally rather than by adding another cleanup call.
+// testMain OWNS the directory and returns an exit code; the caller exits. There
+// is no arm on which control leaves this function past the cleanup, because
+// there is no exit inside it. testtmp.Run then nests the whole run — this
+// directory, every t.TempDir(), and every subprocess's temp files — under one
+// swept root that reclaims by pid ownership, so what survives a kill is one
+// entry the next run removes. See internal/testtmp (mg-cc3f).
+func TestMain(m *testing.M) { os.Exit(testtmp.Run("cmdmg", func() int { return testMain(m) })) }
+
+func testMain(m *testing.M) int {
 	root, err := findProjectRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mg tests: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	projectRoot = root
 
-	neutral, err := os.MkdirTemp("", "mg-test-cwd-")
+	// Inside the directory testtmp.Run pinned $TMPDIR to, so it is reclaimed
+	// with the rest of this process's temp state however the process ends.
+	neutral, err := os.MkdirTemp("", "cwd-")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mg tests: creating a neutral working directory: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
+	defer func() {
+		// Reported rather than ignored. A teardown that swallowed EACCES is how
+		// the largest thing in a leaked nest went unreclaimed with nothing
+		// saying so; this cannot fail the suite, but it must not be silent.
+		if err := testtmp.Remove(neutral); err != nil {
+			fmt.Fprintf(os.Stderr, "mg tests: %v\n", err)
+		}
+	}()
+
 	if err := os.Chdir(neutral); err != nil {
 		fmt.Fprintf(os.Stderr, "mg tests: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
-
-	code := m.Run()
-	// Explicit, not deferred: os.Exit does not run deferred functions.
-	os.RemoveAll(neutral)
-	os.Exit(code)
+	return m.Run()
 }
 
 // findProjectRoot walks up from the current directory to the module root.

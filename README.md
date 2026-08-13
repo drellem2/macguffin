@@ -996,6 +996,15 @@ mg new "safe to clobber"   # never touches ~/.macguffin
 Without this, `mg claim` and `mg done` operate on the shared store, and an `mg
 list --json | head -1` picks a live work item belonging to someone else.
 
+**Remove the scratch store when the script ends, and name the signals:** `trap
+'rm -rf "$MG_ROOT"' EXIT INT TERM HUP`. A bare `mktemp -d` leaves a directory
+nothing will ever delete, and a trap that names only `EXIT` does not fire on
+`SIGTERM` — so the store survives exactly the runs that were interrupted. That is
+not hypothetical bookkeeping: on 2026-08-13 accumulated scratch directories
+filled this project's build host to 100%, and the symptom was unrelated builds
+failing with `Errno 28`. macguffin's own harness solves the same problem for its
+suites in `internal/testtmp`.
+
 Two commands pass their arguments through verbatim (`mg event append`, `mg log`)
 and so do not bind `--root`; use `MG_ROOT` to redirect those. `mg event append`
 rejects `--root` outright rather than record it as event data.

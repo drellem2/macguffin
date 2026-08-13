@@ -8,8 +8,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 INSTALL_SCRIPT="${SCRIPT_DIR}/install.sh"
 UNINSTALL_SCRIPT="${SCRIPT_DIR}/uninstall.sh"
 
-tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
+# The swept root, not the shared $TMPDIR — see scripts/lib/testtmp.sh. The trap
+# below is still what reclaims the space on the ordinary path; what the helper
+# adds is the reclaim that does not depend on it, because a trap does not fire on
+# SIGKILL and this one did not name TERM/INT/HUP either (mg-cc3f).
+# shellcheck source=lib/testtmp.sh
+. "${SCRIPT_DIR}/scripts/lib/testtmp.sh"
+tmpdir="$(testtmp_dir test-shadow)" || exit 1
+trap 'testtmp_remove "$tmpdir"' EXIT INT TERM HUP
 
 INSTALL_DIR="${tmpdir}/bin"
 SHADOW_DIR="${tmpdir}/shadow"
