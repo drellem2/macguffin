@@ -23,6 +23,24 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- **`mg schedule` reports items sitting in `available/` with a closed gate
+  (mg-e7ff).** The mirror of the promotion detector, over the other directory.
+  `Unpromoted` asks whether a pending item with every gate open failed to be
+  promoted; `Undemoted` asks the question nothing asked before — whether an item
+  reached the dispatchable pool that its own gates say should not be there. Both
+  populations are supposed to be empty and both are silent when they are not,
+  but this half is the more dangerous one: a stuck pending item is merely late,
+  whereas a gated item in `available/` is indexed, listed, claimable, and
+  advertised by pogo's stall-watch and priority-wake as ready to dispatch.
+
+  It is the detector that would have found the release bug above without
+  somebody noticing by eye that two items with the same dependency were in
+  different directories. It **reports and does not repair**, deliberately: with
+  every placement path now consulting `gateOpen`, a member of this population
+  means one of them did not — a hand-edit, a crash between a rename and a write,
+  or a door nobody has found — and silently demoting it would restore
+  consistency while destroying the only evidence of which door it came through.
+
 - **`mg sidecar <id>` resolves an item's result, so nobody has to glob for it —
   and the help text that warned about globbing now names the hazard that
   actually bites (mg-6bc9).** There was no way to ask mg where an item's result
@@ -286,6 +304,36 @@ derived at all — no git, no tags, or a build from a source tarball.
   blockquoted quotations, and ordinary sentences with colons are unaffected.
 
 ### Fixed
+
+- **Releasing a claim asks the item's gates where it belongs, instead of always
+  returning it to `available/` (mg-e7ff).** `mg unclaim` — and every path that
+  shells out to it, which is pogo's `pogo agent stop`, its stop-on-merge and its
+  reap — moved the item out of `claimed/` and into `available/` unconditionally.
+  The `depends:` field was present and truthful the whole time; nothing read it
+  at that moment.
+
+  The order of operations that produces the failure is ordinary. `mg edit
+  --add-depends` deliberately does **not** demote a CLAIMED item — there is a
+  worker on it — so the edge is recorded and the item stays in `claimed/`. The
+  release was then the first moment anything could act on the edge, and it did
+  not. Measured on 2026-08-19: two items carried the *identical* unmet
+  dependency and sat in different directories. The one that acquired the edge
+  while available was demoted to `pending/` and held. The one that acquired it
+  while claimed came back to `available/` when its polecat was stopped, and
+  pogo's stall-watch and priority-wake advertised it as *"1 item high-priority,
+  unclaimed"* — advice to dispatch an item whose dependency was deliberately
+  unmet. Nothing errored; `mg schedule` could not report it, because its held
+  report reads `pending/` and the item was not in `pending/` to be read.
+
+  The release now consults `gateOpen`, the single predicate whose own
+  documentation says *"adding a gate now means editing this function"* and
+  enumerates its call sites. This was a call site that had never been added, so
+  the snooze gate was equally unread: a claimed item carrying a future wake time
+  also came straight back into the dispatchable pool. `mg unclaim` prints where
+  the item landed and which gate held it, rendered by the same code
+  `mg schedule` uses so the two cannot describe one dependency differently, and
+  the `work.unclaim` event's `to_status` now records the directory the item
+  actually reached rather than a hardcoded `available`.
 
 - **The test harness no longer leaks temp directories into the shared `$TMPDIR`
   (mg-cc3f).** New `internal/testtmp` (Go) and `scripts/lib/testtmp.sh` (shell):

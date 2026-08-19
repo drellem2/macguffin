@@ -32,6 +32,9 @@ What this command still does, and nothing else does:
   - the DEPENDENCY gate, which the per-invocation promoter leaves alone (it
     opens on ` + "`mg done`" + `, which sweeps at that instant);
   - the HELD report — every pending item and the gates holding it;
+  - the MISPLACED report — every AVAILABLE item whose gate is closed, which is
+    the inconsistency nothing else can see: it is advertised as ready and is
+    not;
   - the STRANDED report — items no completion can ever release, which automatic
     promotion by construction can never fix;
   - the spent-gate tidy-up, and the check that promotion is actually working.
@@ -150,6 +153,31 @@ is exactly what a correctly-waiting item looks like.`,
 				fmt.Printf("correct a bad snooze with `mg unsnooze` then `mg snooze --until`,\n")
 			}
 			fmt.Printf("or shelve the dependent so it stops claiming to be waiting.\n")
+		}
+
+		// THE OTHER DETECTOR, over the other directory (mg-e7ff). An item in
+		// available/ with a CLOSED gate is the exact inverse of the one below,
+		// and it is the more dangerous half: a stuck pending item is merely
+		// late, whereas a gated item sitting in available/ is INDEXED, listed,
+		// claimable, and advertised by stall-watch and priority-wake as
+		// high-priority and unclaimed. The advice they give is to dispatch an
+		// item whose dependency is deliberately unmet.
+		//
+		// It reports on stderr beside its twin, and it is loud for the same
+		// reason: with every placement path now consulting gateOpen, a member
+		// of this population can only mean one of them did not.
+		misplaced, err := workitem.Undemoted(root)
+		if err != nil {
+			return err
+		}
+		if len(misplaced) > 0 {
+			now := time.Now().UTC()
+			fmt.Fprintf(os.Stderr, "\nwarning: %d available item(s) have a CLOSED gate and are dispatchable anyway:\n", len(misplaced))
+			for _, h := range misplaced {
+				fmt.Fprintf(os.Stderr, "  %s  %s — %s\n", h.Item.ID, h.Gates(now), h.Item.Title)
+			}
+			fmt.Fprintf(os.Stderr, "These are advertised as ready and are not. Demote each with `mg edit <id> --add-depends=<same parent>`,\n")
+			fmt.Fprintf(os.Stderr, "which re-evaluates placement, or clear the gate if it no longer applies.\n")
 		}
 
 		// THE DETECTOR. An item still in pending/ with every gate open, the

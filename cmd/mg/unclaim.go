@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/drellem2/macguffin/internal/workitem"
 	"github.com/spf13/cobra"
@@ -11,8 +12,17 @@ var unclaimAssignee string
 
 var unclaimCmd = &cobra.Command{
 	Use:   "unclaim ID",
-	Short: "Release a claim, returning the work item to available/",
+	Short: "Release a claim, returning the work item to available/ — or to pending/ if a gate is closed",
 	Long: `Release a claim on a work item, returning it to available/.
+
+WHERE IT LANDS DEPENDS ON THE ITEM'S GATES, not on this command's name. An item
+whose ` + "`depends:`" + ` is unmet, or whose ` + "`snooze:`" + ` has not elapsed, goes to pending/
+and the release says so, naming the gate. That is the same rule ` + "`mg edit`" + ` applies
+when a dependency is added to an available item; the difference is that adding
+one to a CLAIMED item deliberately does not demote it, so the release is the
+moment the gate takes effect. Before mg-e7ff it did not: the item went to
+available/ unconditionally, and an item with a deliberately unmet dependency was
+advertised by pogo's stall-watch and priority-wake as ready to dispatch.
 
 Unclaim is an explicit, targeted operation: it ignores the recorded claimant
 PID. The recorded PID is unreliable because it may be the short-lived
@@ -70,6 +80,25 @@ about its own output does not care whether that output was code.`,
 		}
 		if res.Assignee != "" {
 			fmt.Printf("Waiting on %s\n", res.Assignee)
+		}
+
+		// Where it actually went, and why, whenever that is not the
+		// dispatchable pool. Said unprompted rather than left for `mg show`,
+		// because the operator running this is usually releasing a claim in
+		// order to hand the item on, and "it is in pending/ behind mg-12aa" is
+		// the difference between that hand-off working and the item looking
+		// lost. The reason is rendered by the same code `mg schedule` uses for
+		// its held report, so the two cannot describe one gate differently.
+		if res.Status == "pending" {
+			reason := res.Held.Gates(time.Now().UTC())
+			if reason == "" {
+				// Defensive: gateOpen said closed and the describer found
+				// nothing. Better a vague sentence than a dangling em-dash
+				// that reads as a rendering bug rather than a placement.
+				reason = "a gate on it is closed"
+			}
+			fmt.Printf("Held in pending/ — %s\n", reason)
+			fmt.Printf("It is NOT dispatchable and will not be advertised as ready. `mg schedule` releases it when the gate opens.\n")
 		}
 
 		// Printed at the callsite, in front of the operator who just made the

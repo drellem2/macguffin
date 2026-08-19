@@ -22,10 +22,17 @@ import (
 // independent: an item can be past its wake time and still waiting on a
 // parent, and either one can be the gate that is still closed.
 
-// Hold is a pending item the sweep could not promote, carried with every gate
-// of its that is still closed. Deps lists ONLY the unsatisfied dependencies —
-// a met parent is not holding anything and naming it would bury the one that
-// is.
+// Hold is an item with at least one closed gate, carried with every gate of its
+// that is still closed. Deps lists ONLY the unsatisfied dependencies — a met
+// parent is not holding anything and naming it would bury the one that is.
+//
+// Normally that item is in pending/, which is where Held reads. It is also the
+// shape of two other answers to the same question — what is holding this item —
+// asked at different moments: Undemoted asks it of available/, where a closed
+// gate is an inconsistency rather than the expected state, and Unclaim asks it
+// of the item it is about to release. All three render the gate the same way
+// because it is the same gate; a second renderer would let the sweep's report
+// and the release's report describe one dependency differently.
 type Hold struct {
 	Item *Item
 
@@ -98,33 +105,105 @@ func Held(root string) ([]Hold, error) {
 		return nil, err
 	}
 
-	now := snoozeNow()
 	var out []Hold
 	for _, item := range pending {
-		deps, err := classifyDeps(root, item.Depends)
+		h, err := holdFor(root, item)
 		if err != nil {
 			return nil, err
 		}
-		var unmet []Dep
-		for _, d := range deps {
-			if d.State != DepSatisfied {
-				unmet = append(unmet, d)
-			}
-		}
-
-		h := Hold{Item: item, Deps: unmet}
-		if item.SnoozeMalformed() {
-			h.BadSnooze = item.SnoozeRaw
-		} else if item.snoozeHolds(now) {
-			h.Snoozed = true
-		}
-
-		if len(h.Deps) == 0 && !h.Snoozed && h.BadSnooze == "" {
+		if !h.Closed() {
 			continue
 		}
 		out = append(out, h)
 	}
 
+	sortHolds(out)
+	return out, nil
+}
+
+// Undemoted is the mirror of Unpromoted, over the other directory: an item in
+// available/ with a CLOSED gate.
+//
+// Unpromoted asks whether promotion is failing. This asks the question nothing
+// asked before mg-e7ff — whether an item reached the dispatchable pool that its
+// own gates say should not be there. Both populations are supposed to be empty,
+// and both are silent when they are not: a gated item in available/ is indexed,
+// listed, claimable, and advertised by stall-watch and priority-wake as ready,
+// while its `depends:` line sits in the frontmatter saying otherwise. Nothing
+// reads the two together.
+//
+// It is a DETECTOR and not a repair, deliberately. Every path that places an
+// item now consults gateOpen, so a member of this population means one of them
+// did not — a hand-edit, a crash between a rename and a write, or a path nobody
+// has found yet. Silently demoting it would return the store to consistency and
+// destroy the only evidence of which door it came through, which is the same
+// trade Unpromoted already resolved the same way.
+//
+// Ordered like Held: soonest wake first, dependency-only holds last, ties by ID.
+func Undemoted(root string) ([]Hold, error) {
+	available, err := ListByStatus(root, "available")
+	if err != nil {
+		return nil, err
+	}
+
+	var out []Hold
+	for _, item := range available {
+		h, err := holdFor(root, item)
+		if err != nil {
+			return nil, err
+		}
+		if !h.Closed() {
+			continue
+		}
+		out = append(out, h)
+	}
+
+	sortHolds(out)
+	return out, nil
+}
+
+// Closed reports whether any gate on this item is still shut. A Hold with no
+// closed gate is not holding anything — it is the zero answer, which both
+// callers skip and Unclaim reports as an available landing.
+func (h Hold) Closed() bool {
+	return len(h.Deps) > 0 || h.Snoozed || h.BadSnooze != ""
+}
+
+// holdFor resolves every gate on one item and returns them as a Hold. It reads
+// the store and moves nothing.
+//
+// This is the single description of "what is holding this item", shared by the
+// pending sweep's report, the available/ inconsistency detector, and the claim
+// release that has to decide where the item goes. gateOpen is the PREDICATE;
+// this is the same question answered with the detail an operator needs in order
+// to act, and the two are kept adjacent on purpose — a Hold that reports no
+// closed gate and a gateOpen that returns false would be a contradiction, and
+// Unclaim would print an empty reason for a demotion.
+func holdFor(root string, item *Item) (Hold, error) {
+	deps, err := classifyDeps(root, item.Depends)
+	if err != nil {
+		return Hold{}, err
+	}
+	var unmet []Dep
+	for _, d := range deps {
+		if d.State != DepSatisfied {
+			unmet = append(unmet, d)
+		}
+	}
+
+	h := Hold{Item: item, Deps: unmet}
+	now := snoozeNow()
+	if item.SnoozeMalformed() {
+		h.BadSnooze = item.SnoozeRaw
+	} else if item.snoozeHolds(now) {
+		h.Snoozed = true
+	}
+	return h, nil
+}
+
+// sortHolds orders a hold report: soonest wake first, dependency-only holds
+// last, ties broken by ID so the report is stable across runs.
+func sortHolds(out []Hold) {
 	sort.Slice(out, func(i, j int) bool {
 		wi, wj := out[i].wake(), out[j].wake()
 		switch {
@@ -137,5 +216,4 @@ func Held(root string) ([]Hold, error) {
 		}
 		return out[i].Item.ID < out[j].Item.ID
 	})
-	return out, nil
 }

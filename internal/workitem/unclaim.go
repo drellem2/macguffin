@@ -22,6 +22,19 @@ type UnclaimResult struct {
 	// nothing tracks: the same condition `mg done` refuses to complete on. It
 	// is a fact about the item, not about the release — see Unclaim.
 	RemainderOwed bool
+
+	// Status is where the item ACTUALLY landed — "available" or "pending" —
+	// rather than where the command's name says it goes. A release is not
+	// unconditionally a return to the dispatchable pool (see Unclaim), and a
+	// caller that prints "returning to available/" from the verb alone would
+	// state the opposite of what happened.
+	Status string
+
+	// Held is every gate that was still closed when the claim came off, and is
+	// therefore the reason Status is "pending" rather than "available". Empty
+	// when the item landed available/. Deps names the unsatisfied dependencies
+	// with the parent's live status; Snoozed/BadSnooze cover the clock.
+	Held Hold
 }
 
 // UnclaimOption configures an optional behaviour of Unclaim.
@@ -52,7 +65,9 @@ func WithUnclaimAssignee(who string) UnclaimOption {
 	}
 }
 
-// Unclaim atomically releases a claim, moving the work item back to available/.
+// Unclaim atomically releases a claim, returning the work item to the directory
+// its GATES say it belongs in — available/ when every gate is open, pending/
+// when any is closed.
 // The PID recorded on the claim is reported but not consulted — the recorded
 // PID is unreliable because it may be the short-lived `mg claim` subprocess
 // rather than the owning agent. Releasing a claim is therefore an explicit,
@@ -88,6 +103,38 @@ func WithUnclaimAssignee(who string) UnclaimOption {
 // merge, so a guard that blocks the routine sweep is removed by whoever it
 // inconveniences (remainder.go records that failure). The caller keeps the
 // decision and stops making it blind.
+//
+// # WHERE THE ITEM LANDS IS ASKED, NOT ASSUMED (mg-e7ff)
+//
+// The destination used to be the literal string "available". That is right for
+// almost every release and wrong for the one that matters: an item whose gates
+// closed WHILE it was claimed. `mg edit --add-depends` deliberately does not
+// demote a claimed item — there is a worker on it — so the edge is recorded and
+// the item stays in claimed/. Releasing the claim was then the moment the
+// dependency stopped being enforced, because nothing on this path read it.
+//
+// Measured on 2026-08-19: two items carried the IDENTICAL unmet dependency and
+// sat in different directories. The one that acquired the edge while available
+// was demoted to pending/ and held. The one that acquired it while claimed came
+// back to available/ when its polecat was stopped, and stall-watch and
+// priority-wake then advertised it as "high-priority, unclaimed" — advice to
+// dispatch an item whose dependency was deliberately unmet. Nothing errored,
+// and `mg schedule` could not report it, because its held report reads pending/
+// and the item was not in pending/ to be read.
+//
+// gateOpen is reused rather than re-derived, for the reason its own doc gives:
+// every gate ANDs in one place, and adding a gate means editing that function
+// rather than finding the call sites. This was a call site that had never been
+// added. It answers the snooze gate too — a snoozed item that was claimed and
+// released no longer lands back in the dispatchable pool with a future wake
+// time on it.
+//
+// The failure direction is CLOSED here, unlike the dispatch gates in pogo that
+// consume this state. Those fail open because a guard that halts the fleet over
+// one bad path gets disarmed; this one is not a guard, it is a placement, and
+// the store cannot be read at all if doneIDSet fails — so refusing the release
+// leaves the item claimed, which is recoverable by re-running, rather than
+// released into a pool it may not belong in.
 func Unclaim(root, id string, opts ...UnclaimOption) (*UnclaimResult, error) {
 	var o unclaimOpts
 	for _, apply := range opts {
@@ -104,7 +151,6 @@ func Unclaim(root, id string, opts ...UnclaimOption) (*UnclaimResult, error) {
 
 	src := m.Path
 	pid := parseClaimPID(filepath.Base(src))
-	dst := filepath.Join(root, "work", "available", id+".md")
 
 	item, err := readFile(src)
 	if err != nil {
@@ -142,6 +188,24 @@ func Unclaim(root, id string, opts ...UnclaimOption) (*UnclaimResult, error) {
 	// whole change exists to end.
 	owed := requireRemainderDischarged(root, item) != nil
 
+	// Asked of the item as it will land, with the assignee already written, and
+	// BEFORE the rename — so a gate that is closed decides the destination
+	// rather than being discovered after the item is already dispatchable.
+	doneIDs, err := doneIDSet(root)
+	if err != nil {
+		return nil, fmt.Errorf("%s: claim NOT released — its gates could not be evaluated: %w", id, err)
+	}
+	landing := "available"
+	var held Hold
+	if !gateOpen(item, doneIDs, snoozeNow()) {
+		landing = "pending"
+		held, err = holdFor(root, item)
+		if err != nil {
+			return nil, fmt.Errorf("%s: claim NOT released — its gates could not be described: %w", id, err)
+		}
+	}
+	dst := filepath.Join(root, "work", landing, id+".md")
+
 	if err := os.Rename(src, dst); err != nil {
 		return nil, ioErr(fmt.Sprintf("%s: could not release claim: %s", id, fsErrText(err)))
 	}
@@ -154,7 +218,11 @@ func Unclaim(root, id string, opts ...UnclaimOption) (*UnclaimResult, error) {
 	kvs := map[string]string{
 		"item_id":     id,
 		"from_status": "claimed",
-		"to_status":   "available",
+		// The directory the item actually landed in. It was hardcoded
+		// "available" back when the destination was, and a log that said
+		// available while the file went to pending would be worse than the bug
+		// it records the fix for.
+		"to_status": landing,
 		// Every other transition records WHO (mg-3122); the release did not.
 		// The five releases of 2026-08-07 were reported afterwards as
 		// "attributed" by the agent that made them, and the log lines carry no
@@ -180,9 +248,22 @@ func Unclaim(root, id string, opts ...UnclaimOption) (*UnclaimResult, error) {
 	if owed {
 		kvs["remainder_owed"] = "true"
 	}
+	// Searchable form of "this release did NOT return the item to the
+	// dispatchable pool, and here is what held it". Emitted only when it
+	// happened, like remainder_owed above.
+	if landing == "pending" {
+		kvs["held_by"] = held.Gates(snoozeNow())
+	}
 	event.Emit(root, "work.unclaim", kvs)
 
-	return &UnclaimResult{ID: id, PID: pid, Assignee: item.Assignee, RemainderOwed: owed}, nil
+	return &UnclaimResult{
+		ID:            id,
+		PID:           pid,
+		Assignee:      item.Assignee,
+		RemainderOwed: owed,
+		Status:        landing,
+		Held:          held,
+	}, nil
 }
 
 // parseClaimPID extracts the PID suffix from a claimed filename of the form
