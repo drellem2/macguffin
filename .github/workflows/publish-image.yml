@@ -1,0 +1,106 @@
+# Publish the mg binary as a container artifact, so a consumer image can take it
+# with one `COPY --from=...@sha256:<digest> /mg` and needs no Go toolchain, no clone
+# of this repo and no credential. See Dockerfile.mg, and the consuming decision in
+# payitgov/agents docs/design/mg-artifact-delivery.md.
+#
+# THE IMAGE NAME IS OWNER-RELATIVE, AND THAT IS THE POINT. payitgov/macguffin is a
+# mirror of this repo refreshed with `git push --mirror`, which force-updates every
+# ref and deletes anything upstream does not have -- so a workflow committed to the
+# mirror survives only until the next refresh. Authoring it HERE means it reaches the
+# mirror like any other file, and the mirror's own Actions then publish
+# ghcr.io/payitgov/macguffin using the mirror's own GITHUB_TOKEN. One file serves both
+# repos and neither ever needs a credential for the other.
+name: Publish mg image
+
+on:
+  push:
+    tags: ["v*"]
+  # A tag that predates this workflow never fired the push trigger, so there would
+  # otherwise be no way to publish an EXISTING release without cutting a throwaway
+  # one. This lets the first adopter publish v0.3.0 as it stands.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing vN.N.N tag to publish (e.g. v0.3.0)"
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      # The tag arrives in the environment, never interpolated into the script body:
+      # `${{ }}` is expanded before the shell runs, so a value containing shell
+      # metacharacters would execute rather than be compared.
+      - name: resolve and validate the tag
+        id: tag
+        env:
+          RAW_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -eu
+          case "$RAW_TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "::error::refusing to publish '$RAW_TAG': artifacts are tag-granular and this is not a vN.N.N tag" >&2
+              exit 1
+              ;;
+          esac
+          echo "tag=$RAW_TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          # Full history AND tags: the version stamp is derived from `git describe`
+          # at build time, and Dockerfile.mg fails closed rather than shipping an
+          # unstamped mg. A shallow checkout here is a build failure, not a silent
+          # `dev` binary.
+          fetch-depth: 0
+
+      # No setup-qemu: Dockerfile.mg pins its builder to $BUILDPLATFORM and
+      # cross-compiles via $TARGETARCH, so both arches are built natively and there
+      # is nothing to emulate.
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        id: push
+        with:
+          context: .
+          file: Dockerfile.mg
+          push: true
+          # Multi-arch is required, not aspirational: the consuming pi-agent runtime
+          # is built for both, and a single-arch package would break one of them.
+          platforms: linux/amd64,linux/arm64
+          tags: ghcr.io/${{ github.repository_owner }}/macguffin:${{ steps.tag.outputs.tag }}
+
+      # Hand the consumer the exact line to paste. A digest is only useful if the
+      # person doing the pinning can find it without knowing to run
+      # `docker buildx imagetools inspect`, and it must be the INDEX digest -- a
+      # per-platform manifest digest pins the build to one arch and breaks the other.
+      - name: report the index digest to pin
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/macguffin
+          TAG: ${{ steps.tag.outputs.tag }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -eu
+          {
+            echo "### mg published"
+            echo
+            echo "\`$IMAGE:$TAG\` -> \`$DIGEST\`"
+            echo
+            echo "Pin the **index** digest, never a tag:"
+            echo
+            echo '```dockerfile'
+            echo "COPY --from=$IMAGE@$DIGEST /mg /usr/local/bin/mg"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "COPY --from=$IMAGE@$DIGEST /mg /usr/local/bin/mg"
