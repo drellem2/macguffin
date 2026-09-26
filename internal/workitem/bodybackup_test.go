@@ -512,3 +512,42 @@ func TestBodyBackup_StrayFilesAreNotOfferedAsBodies(t *testing.T) {
 		t.Fatalf("got %d restorable bodies, want 1 (strays must be ignored): %+v", len(backups), backups)
 	}
 }
+
+// TestBodyBackup_PruneWithinOneMillisecond is mg-0c8c: the Linux CI runner
+// saves bodies fast enough that every save in PruneIsExercised lands in the
+// same millisecond. Freezing the clock reproduces that on any host. Once a
+// prune has deleted the oldest stamp, that stamp was "unused" again, so the
+// next save reused it — sorted OLDEST, and was pruned on the spot: the newest
+// body was the one thrown away.
+func TestBodyBackup_PruneWithinOneMillisecond(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 8, 19, 10, 31, 59, 944_000_000, time.UTC)
+
+	const writes = bodyBackupKeep + 5
+	for i := 0; i < writes; i++ {
+		if _, err := saveBodyBackup(dir, fmt.Sprintf("version %d\n", i), now); err != nil {
+			t.Fatalf("saveBodyBackup %d: %v", i, err)
+		}
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	got := map[string]bool{}
+	for _, e := range entries {
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatalf("read %s: %v", e.Name(), err)
+		}
+		got[strings.TrimSpace(string(data))] = true
+	}
+	if len(got) != bodyBackupKeep {
+		t.Fatalf("kept %d backups, want %d", len(got), bodyBackupKeep)
+	}
+	for i := writes - bodyBackupKeep; i < writes; i++ {
+		if !got[fmt.Sprintf("version %d", i)] {
+			t.Errorf("version %d (one of the newest %d) was pruned", i, bodyBackupKeep)
+		}
+	}
+}

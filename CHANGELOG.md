@@ -305,6 +305,14 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Fixed
 
+- **A burst of body replacements keeps the ten newest backups, not the ten
+  oldest (mg-0c8c).** A backup's stamp only avoided names still on disk, so once
+  a prune had deleted the oldest stamp, the next save in the same millisecond
+  reused it, sorted oldest and was pruned immediately — the newest body was
+  discarded. A fast Linux machine puts every save in one millisecond, which is
+  why `TestBodyBackup_PruneIsExercised` failed on ubuntu CI from 2026-08-19 and
+  passed on macOS. A new stamp now always sorts after every existing one.
+
 - **Releasing a claim asks the item's gates where it belongs, instead of always
   returning it to `available/` (mg-e7ff).** `mg unclaim` — and every path that
   shells out to it, which is pogo's `pogo agent stop`, its stop-on-merge and its

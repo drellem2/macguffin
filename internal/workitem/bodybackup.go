@@ -143,27 +143,32 @@ func parseBackupName(name string) (stamp, hash string, ok bool) {
 	return stamp, hash, true
 }
 
-// nextBackupName picks a filename whose stamp is unused in dir, advancing the
-// clock by a millisecond at a time until it finds one.
+// nextBackupName picks a filename whose stamp sorts AFTER every backup already
+// in dir: now, or one millisecond past the newest existing stamp, whichever is
+// later.
 //
 // The point is not to avoid clobbering a file — two saves in the same
 // millisecond with different content already get different hash prefixes. It is
-// to keep the stamp UNIQUE, so that sorting names is sorting by write order.
-// Without it, two backups sharing a millisecond would be ordered by hash, and
-// "prune all but the ten most recent" would delete an arbitrary one.
+// to keep name order equal to write order, so that "prune all but the ten most
+// recent" prunes the oldest. Merely skipping stamps that are in use is not
+// enough: once a prune has deleted the oldest stamp, that stamp is free again,
+// and a save in the same millisecond would reuse it — sort oldest — and be
+// pruned on the spot, discarding the newest body instead of the oldest (mg-0c8c:
+// every save lands in one millisecond on a fast Linux runner). The same rule
+// keeps a clock stepped backwards from filing a new body under an old name.
 func nextBackupName(dir string, now time.Time, hash string) string {
-	used := map[string]bool{}
+	var newest string
 	if entries, err := os.ReadDir(dir); err == nil {
 		for _, e := range entries {
-			if stamp, _, ok := parseBackupName(e.Name()); ok {
-				used[stamp] = true
+			if stamp, _, ok := parseBackupName(e.Name()); ok && stamp > newest {
+				newest = stamp
 			}
 		}
 	}
 	stamp := now.UTC().Format(bodyBackupStamp)
-	for used[stamp] {
-		now = now.Add(time.Millisecond)
-		stamp = now.UTC().Format(bodyBackupStamp)
+	if stamp <= newest {
+		last, _ := time.Parse(bodyBackupStamp, newest) // parseBackupName vetted it
+		stamp = last.Add(time.Millisecond).UTC().Format(bodyBackupStamp)
 	}
 	return stamp + "-" + hash + ".md"
 }
