@@ -21,6 +21,33 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.4.0] - 2026-09-26
+
+Minor release rolling up the 39 commits merged since v0.3.0 (this release-prep
+commit excluded): 21 `feat`, 13 `fix` (one of them a combined
+`fix,feat,test,docs`), 2 `docs`, 1 `test`, 1 `style`, and 1 revert.
+
+**Semver rationale:** a minor (0.4.0) rather than a patch bump because the range
+adds new capabilities — `mg reclaim`, `mg mail reclaim`, sender filtering and a
+mailbox registry for `mg mail`, `mg show --sections`, last-touch attribution on
+edits, walkable successor links, resolvable result sidecars, assertable holds,
+snoozes that open on any `mg` command, and `mg schedule` reporting of held and
+undemoted items. No commit in the range carries a `BREAKING CHANGE` trailer or a
+`type!:` subject. The one deliberate tightening is that `mg mail send` to a name
+nothing registered now refuses (exit 3, `no_such_mailbox`, with `--create` as the
+explicit escape) instead of silently creating a phantom mailbox (mg-d639); while
+the major version is 0 that ships as a minor, and it is called out here so no
+script is surprised by it.
+
+The `fix` half of the range is mostly about listings and gates telling the truth:
+a promotion can no longer erase the item it promoted (`4d18247`), an empty
+mailbox is zero messages under `--json` (`2aed086`), `mg done` keeps its result
+through a refusal (`a910038`), releasing a claim asks the item's gates where it
+belongs (`bc0d0e2`), and main CI is green again after the backup-retention fix
+(`722cee3`).
+
 ### Added
 
 - **`mg schedule` reports items sitting in `available/` with a closed gate
@@ -2595,6 +2622,7 @@ unaffected. Only a consumer matching on the literal `1` would notice, and none d
 Released before this file existed. See the git history and the GitHub release
 notes at <https://github.com/drellem2/macguffin/releases>.
 
-[Unreleased]: https://github.com/drellem2/macguffin/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/drellem2/macguffin/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/drellem2/macguffin/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/drellem2/macguffin/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/drellem2/macguffin/compare/v0.1.4...v0.2.0
