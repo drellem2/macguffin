@@ -358,6 +358,20 @@ func unshelve(root, id string, claim bool, pid int) ([]*Item, error) {
 	}
 
 	event.Emit(root, "work.unshelve", kvs)
+	if subdir == "claimed" {
+		// A claim by a new owner emits work.claim, as Claim and Reclaim do:
+		// `mg spend` opens a claim interval only on work.claim, so a claim
+		// made here without one would bill the claimant's whole run to
+		// overhead until the item is released. work.unshelve stays as well,
+		// because the item also left shelved/.
+		event.Emit(root, "work.claim", map[string]string{
+			"item_id":     id,
+			"from_status": "shelved",
+			"to_status":   "claimed",
+			"actor":       kvs["actor"],
+			"pid":         kvs["pid"],
+		})
+	}
 
 	unshelved := []*Item{item}
 

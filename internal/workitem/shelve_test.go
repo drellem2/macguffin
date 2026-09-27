@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
 )
 
@@ -342,6 +343,16 @@ func TestUnshelveClaimTakesBackAClaimedItem(t *testing.T) {
 	if _, pid := statusWithPID(root, item.ID); pid != 5151 {
 		t.Errorf("claim pid = %d, want 5151", pid)
 	}
+
+	// A new claim emits work.claim, which is what opens a `mg spend` interval.
+	claims, err := event.List(root, event.ListOpts{Type: "work.claim"})
+	if err != nil {
+		t.Fatalf("event.List: %v", err)
+	}
+	last := claims[len(claims)-1].Extra
+	if last["item_id"] != item.ID || last["pid"] != "5151" || last["from_status"] != "shelved" {
+		t.Errorf("last work.claim = %v, want item %s, pid 5151, from_status shelved", last, item.ID)
+	}
 }
 
 func TestUnshelveClaimRefusesItemShelvedFromAvailable(t *testing.T) {
@@ -424,6 +435,12 @@ func TestUnshelveClaimWithUnmetDependencyGoesToPending(t *testing.T) {
 	}
 	if st, _ := Status(root, child.ID); st != "pending" {
 		t.Errorf("status = %q, want pending (unmet dependency, so no claim)", st)
+	}
+	claims, _ := event.List(root, event.ListOpts{Type: "work.claim"})
+	for _, c := range claims {
+		if c.Extra["item_id"] == child.ID && c.Extra["pid"] == "5151" {
+			t.Errorf("work.claim emitted for an item that landed in pending: %v", c.Extra)
+		}
 	}
 }
 

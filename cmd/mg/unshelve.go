@@ -26,7 +26,9 @@ available/, it moves the item straight into claimed/ as the caller's claim
 can claim it in between. It is a new claim, not the old owner's — shelve does
 not record the PID it drops. It refuses unless the item's latest shelve record
 says it was claimed, and an item with unmet dependencies still goes to
-pending/, unclaimed. Dependents come back as they would without --claim.`,
+pending/, unclaimed — and that still exits 0, because the unshelve itself
+succeeded: a script that needs the claim must check the output or 'mg show',
+not the exit status. Dependents come back as they would without --claim.`,
 	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := resolveRoot()
@@ -60,10 +62,15 @@ pending/, unclaimed. Dependents come back as they would without --claim.`,
 				// Say where the named item landed: --claim may have put it in
 				// pending/ rather than claimed/, and a caller who reads only
 				// "Unshelved" would go on to work an item it does not hold.
-				if st, err := workitem.Status(root, item.ID); err == nil && st == "claimed" {
+				switch st, err := workitem.Status(root, item.ID); {
+				case err != nil:
+					fmt.Printf("Unshelved %s: %s (could not confirm the claim: %v)\n", item.ID, item.Title, err)
+				case st == "claimed":
 					fmt.Printf("Unshelved and claimed %s: %s\n", item.ID, item.Title)
-				} else {
-					fmt.Printf("Unshelved %s: %s (not claimed: it is %s — its dependencies are unmet)\n", item.ID, item.Title, st)
+				case st == "pending":
+					fmt.Printf("Unshelved %s: %s (not claimed: it is pending — its gates are not open)\n", item.ID, item.Title)
+				default:
+					fmt.Printf("Unshelved %s: %s (not claimed: it is %s)\n", item.ID, item.Title, st)
 				}
 				continue
 			}
