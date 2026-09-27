@@ -10,7 +10,18 @@ FAILURES=""
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); FAILURES="${FAILURES}\n  - $1"; }
-clean() { rm -rf ~/.macguffin; }
+# Every run gets a throwaway HOME and MG_ROOT, and clean() never deletes: it
+# points MG_ROOT at a fresh empty store. This line used to recursively delete
+# the live store under the real home, and on 2026-09-27 it did (mg-9a40).
+# scratchstore refuses to proceed if HOME or MG_ROOT resolves to the real home.
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=lib/testtmp.sh
+. "${REPO_ROOT}/scripts/lib/testtmp.sh"
+# shellcheck source=lib/scratchstore.sh
+. "${REPO_ROOT}/scripts/lib/scratchstore.sh"
+scratchstore_setup event-test || exit 1
+trap 'testtmp_remove "$SCRATCHSTORE_DIR"' EXIT INT TERM HUP
+clean() { scratchstore_fresh || exit 1; }
 
 echo "=== MacGuffin Event Tests ==="
 echo "Binary: $MG"
@@ -25,7 +36,7 @@ echo "$OUT" | grep -q '"type":"agent.start"' && pass "output has correct type" |
 echo "$OUT" | grep -q '"ts"' && pass "output has timestamp" || fail "output missing timestamp"
 echo "$OUT" | grep -q '"agent":"crew-arch"' && pass "output has agent field" || fail "output missing agent field"
 echo "$OUT" | grep -q '"role":"crew"' && pass "output has role field" || fail "output missing role field"
-test -f ~/.macguffin/events.jsonl && pass "events.jsonl created" || fail "events.jsonl not created"
+test -f "$MG_ROOT"/events.jsonl && pass "events.jsonl created" || fail "events.jsonl not created"
 
 # ---------------------------------------------------------------------------
 echo "--- Event Append: multiple events ---"
@@ -34,7 +45,7 @@ $MG init >/dev/null 2>&1
 $MG event append agent.start --agent=cat-a3f >/dev/null 2>&1
 $MG event append work.claim --agent=cat-a3f --item=mg-abc >/dev/null 2>&1
 $MG event append work.done --agent=cat-a3f --item=mg-abc >/dev/null 2>&1
-LINES=$(wc -l < ~/.macguffin/events.jsonl | tr -d ' ')
+LINES=$(wc -l < "$MG_ROOT"/events.jsonl | tr -d ' ')
 test "$LINES" -eq 3 && pass "3 lines in events.jsonl" || fail "expected 3 lines, got $LINES"
 
 # ---------------------------------------------------------------------------
@@ -61,7 +72,9 @@ test "$COUNT" -eq 2 && pass "tail=2 returns 2 events" || fail "expected 2 events
 echo "--- Event List: empty workspace ---"
 clean
 $MG init >/dev/null 2>&1
-OUT=$($MG event list 2>&1)
+# stdout only: the "no events found" notice is on stderr, and a pipeline reading
+# this output should get nothing.
+OUT=$($MG event list 2>/dev/null)
 test -z "$OUT" && pass "empty workspace returns no output" || fail "expected no output, got: $OUT"
 
 # ---------------------------------------------------------------------------

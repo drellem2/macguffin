@@ -29,9 +29,9 @@
 #   not the harness, and it runs once on a user's machine rather than on every
 #   suite run on this box.
 #
-#   scripts/event_test.sh and scripts/e2e_milestones_test.sh create no temp
-#   directories at all — they operate on ~/.macguffin directly, which is a
-#   separate problem and not this one.
+#   scripts/event_test.sh and scripts/e2e_milestones_test.sh used to operate on
+#   the live store directly; they now take their scratch HOME and MG_ROOT from
+#   scripts/lib/scratchstore.sh, inside this same swept root (mg-9a40).
 #
 #   $TMPDIR entries of other provenance (tmp.*, and other agents' prefixes) are
 #   deliberately left alone. Reclaiming what has already leaked is a different,

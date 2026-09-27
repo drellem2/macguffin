@@ -9,6 +9,10 @@ sh scripts/test-build-version.sh
 sh scripts/test-install-guard.sh
 sh scripts/test-install-auth.sh
 
+# Nothing in the repo may recursively delete the real home or the live store.
+# A test script did, on 2026-09-27, and took every work item with it (mg-9a40).
+sh scripts/test-no-live-store-rm.sh
+
 # LAST, and after everything above has created its fixtures. The $TMPDIR leak
 # guard measures what a run leaves behind, so it is the one suite whose reading
 # is better for having the others run first (mg-cc3f).

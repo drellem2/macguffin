@@ -26,7 +26,13 @@ Two levels of testing are required for all new features:
 **2. Shell script E2E tests** (`scripts/*_test.sh`)
 - Cover the CLI surface: flags, output format, error cases, integration between commands.
 - Each test script follows the same pattern: `pass()`/`fail()` helpers, `clean()` to reset
-  `~/.macguffin`, and a summary at the end that exits non-zero on any failure.
+  the store, and a summary at the end that exits non-zero on any failure.
+- **A script never touches the real store.** Source `scripts/lib/scratchstore.sh` and call
+  `scratchstore_setup <purpose>` at the top: it exports a scratch `HOME` and `MG_ROOT` and
+  refuses to run if either resolves to the real home. `clean()` is `scratchstore_fresh`,
+  which switches to a new empty store rather than deleting one. `./test.sh` fails any file
+  that recursively deletes the home or a `.macguffin` store (`scripts/test-no-live-store-rm.sh`);
+  an earlier `clean()` did exactly that to the live store (mg-9a40).
 - Accept the binary path as `$1` (default `./mg`): `./scripts/event_test.sh ./mg`
 - See `scripts/e2e_milestones_test.sh` and `scripts/event_test.sh` for examples.
 

@@ -41,6 +41,25 @@ derived at all — no git, no tags, or a build from a source tarball.
   refuses an ID together with `--tag`, and `--claim` with `--tag`
   (drellem2/macguffin#32).
 
+### Fixed
+
+- The shell suites `scripts/e2e_milestones_test.sh` and `scripts/event_test.sh`
+  no longer touch the live store. Their `clean()` helper used to recursively
+  delete the default store under the real home, and on 2026-09-27 a manual run
+  deleted every work item and mailbox on the machine. They now run against a
+  scratch `$HOME` and `$MG_ROOT` from the new `scripts/lib/scratchstore.sh`,
+  `clean()` switches to a fresh empty store instead of deleting anything, and
+  both scripts refuse to start if either variable resolves to the real home or
+  its store. Stale expectations that had stopped them passing are updated
+  (`mail send --create`, `mail read --force`, and the empty-list notice now on
+  stderr) (mg-9a40).
+- `./test.sh` runs a new guard, `scripts/test-no-live-store-rm.sh`, that fails
+  if any file in the repo recursively removes the home directory or a
+  `.macguffin` store, whether by `rm`, `find -delete`, `os.RemoveAll` or
+  `rmtree`. Before scanning it checks itself: it must fire on each form it
+  claims to catch, including both pre-fix scripts, and must not fire on the safe
+  ones (mg-9a40).
+
 ## [0.4.0] - 2026-09-26
 
 Minor release rolling up the 39 commits merged since v0.3.0 (this release-prep
