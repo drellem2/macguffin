@@ -526,12 +526,26 @@ func TestUnshelveByTagNotFound(t *testing.T) {
 
 // Two tagged items where restoring the parent recursively restores the child:
 // the second must be neither an error nor a skip, and must be listed once.
+//
+// The shelf is read in filename (random ID) order, and the recursive path is
+// taken only when the parent is restored FIRST — so the fixture is rebuilt in a
+// fresh root until parent.ID sorts before child.ID. Without that, the dedupe
+// went unexercised about half the time (mg-76f6 round 1).
 func TestUnshelveByTagDedupesRecursiveRestore(t *testing.T) {
-	root := t.TempDir()
-	setupDirs(t, root)
-
-	parent, _ := Create(root, "mg-", "task", "parent", nil, WithTags([]string{"grp"}))
-	child, _ := Create(root, "mg-", "task", "child", []string{parent.ID}, WithTags([]string{"grp"}))
+	var root string
+	var parent, child *Item
+	for i := 0; ; i++ {
+		if i == 64 {
+			t.Fatal("could not build a fixture with parent.ID < child.ID in 64 tries")
+		}
+		root = t.TempDir()
+		setupDirs(t, root)
+		parent, _ = Create(root, "mg-", "task", "parent", nil, WithTags([]string{"grp"}))
+		child, _ = Create(root, "mg-", "task", "child", []string{parent.ID}, WithTags([]string{"grp"}))
+		if parent.ID < child.ID {
+			break
+		}
+	}
 	if _, _, err := ShelveByTag(root, "grp"); err != nil {
 		t.Fatalf("ShelveByTag: %v", err)
 	}

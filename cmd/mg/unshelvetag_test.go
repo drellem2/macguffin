@@ -59,10 +59,10 @@ func TestCLI_UnshelveTagRefusals(t *testing.T) {
 		{"ID and --tag", []string{"unshelve", id, "--tag=grp"}, 2, "not both"},
 		{"neither", []string{"unshelve"}, 2, "requires a work item ID or --tag"},
 		{"--claim with --tag", []string{"unshelve", "--tag=grp", "--claim"}, 2, "cannot be combined with --tag"},
-		{"no match", []string{"unshelve", "--tag=nope"}, -1, `no shelved items found with tag "nope"`},
+		{"no match", []string{"unshelve", "--tag=nope"}, 1, `no shelved items found with tag "nope"`},
 	} {
 		out, code := mgArchive(t, bin, root, tc.args...)
-		if code == 0 || (tc.code > 0 && code != tc.code) {
+		if code != tc.code {
 			t.Errorf("%s: exit %d, want %d\n%s", tc.name, code, tc.code, out)
 		}
 		if !strings.Contains(out, tc.want) {
