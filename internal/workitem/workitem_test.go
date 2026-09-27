@@ -15,9 +15,14 @@ func TestGenerateID(t *testing.T) {
 	if !strings.HasPrefix(id, "mg-") {
 		t.Errorf("ID should start with mg-, got %q", id)
 	}
-	// mg- plus 4 hex chars (2 bytes)
-	if len(id) != 7 {
-		t.Errorf("ID length should be 7 (mg-XXXX), got %d: %q", len(id), id)
+	// mg- plus 5 hex chars (drellem2/macguffin#33; it was 4 before)
+	if len(id) != 8 {
+		t.Errorf("ID length should be 8 (mg-XXXXX), got %d: %q", len(id), id)
+	}
+	for _, c := range strings.TrimPrefix(id, "mg-") {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			t.Errorf("ID suffix should be lowercase hex, got %q", id)
+		}
 	}
 
 	// Same inputs produce same ID
@@ -40,8 +45,8 @@ func TestGenerateID_CustomPrefix(t *testing.T) {
 	if !strings.HasPrefix(id, "po-") {
 		t.Errorf("ID should start with po-, got %q", id)
 	}
-	if len(id) != 7 {
-		t.Errorf("ID length should be 7 (po-XXXX), got %d: %q", len(id), id)
+	if len(id) != 8 {
+		t.Errorf("ID length should be 8 (po-XXXXX), got %d: %q", len(id), id)
 	}
 }
 

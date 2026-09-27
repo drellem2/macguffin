@@ -2,6 +2,7 @@ package workitem
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -98,18 +99,31 @@ func WithTags(tags []string) CreateOption {
 	}
 }
 
+// idHexLen is how many hex characters a newly minted ID carries after its
+// prefix. It was 4 (65,536 values) until drellem2/macguffin#33: the store the
+// ID space must stay ahead of includes the archive, not just in-flight work,
+// and one real store held ~3,200 items — about 5% of 65,536, which the birthday
+// bound turns into routine collisions. 5 hex characters is 1,048,576 values.
+//
+// Only MINTING has a width. Everything that reads an ID — Resolve, the
+// @YYYY-MM qualifier, depends, successor/predecessor tags, mailbox names —
+// matches the exact string it is given, so every 4-character ID ever minted
+// keeps resolving, and a store holds both widths side by side. A 4-char ID and
+// a 5-char ID are different strings and can never collide with each other.
+const idHexLen = 5
+
 // maxMintAttempts bounds the remint loop in Create. Each attempt draws a fresh
-// ID from a 65,536-value space, so even a store holding thousands of items
-// exhausts this only if the space is essentially full — at which point failing
-// loudly beats spinning.
+// ID from a 1,048,576-value space, so even a store holding tens of thousands
+// of items exhausts this only if the space is essentially full — at which
+// point failing loudly beats spinning.
 const maxMintAttempts = 64
 
 // nowFunc is the clock Create mints from. Overridden in tests to pin the
-// timestamp and thereby force an ID collision, which is otherwise a 1-in-65,536
-// event.
+// timestamp and thereby force an ID collision, which is otherwise a
+// 1-in-1,048,576 event.
 var nowFunc = func() time.Time { return time.Now().UTC() }
 
-// GenerateID produces a short hash ID with the given prefix (e.g. "mg-a3f0").
+// GenerateID produces a short hash ID with the given prefix (e.g. "mg-a3f0c").
 func GenerateID(prefix, title string, created time.Time) string {
 	return generateID(prefix, title, created, 0)
 }
@@ -118,8 +132,9 @@ func GenerateID(prefix, title string, created time.Time) string {
 // input. The ID is a DETERMINISTIC HASH of (title, created), not a random draw:
 // re-deriving it from the same inputs returns the same ID forever, so a retry
 // loop that does not perturb the input never terminates. The nonce is that
-// perturbation. nonce==0 reproduces the historical ID exactly, so every ID ever
-// minted stays derivable.
+// perturbation. nonce==0 hashes exactly what it always has, so every ID ever
+// minted stays derivable: a 4-character ID minted before the widening is the
+// first 4 characters of what nonce 0 now returns for the same (title, created).
 func generateID(prefix, title string, created time.Time, nonce int) string {
 	h := sha256.New()
 	h.Write([]byte(title))
@@ -128,7 +143,7 @@ func generateID(prefix, title string, created time.Time, nonce int) string {
 		fmt.Fprintf(h, "\x00nonce=%d", nonce)
 	}
 	sum := h.Sum(nil)
-	return fmt.Sprintf("%s%x", prefix, sum[:2])
+	return prefix + hex.EncodeToString(sum)[:idHexLen]
 }
 
 // Create writes a new work item file. Items with no dependencies go to

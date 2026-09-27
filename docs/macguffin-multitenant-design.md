@@ -29,9 +29,11 @@ client-mode. Single-machine users see nothing change unless they opt in.
    workspace's tickets. Both intra-org-many-workers and SaaS-many-orgs map
    to the same primitive — they differ only in workspace ownership.
 2. **6-character hex IDs with optional per-workspace prefix.** ~16.7M IDs
-   per workspace (≈250× current capacity); prefix composes with the existing
+   per workspace (≈250× the 4-char capacity this was written against; 16× the
+   current 5-char); prefix composes with the existing
    `--prefix` work (gh issue #2) for human-readability across workspaces.
-   Single-machine mode keeps 4-char default for backwards compatibility.
+   Single-machine mode keeps its own default for backwards compatibility
+   (4-char when this was written; 5-char since drellem2/macguffin#33).
 3. **Single repo, two binaries.** `cmd/mg/` (CLI) and `cmd/mg-server/`
    (daemon) share `internal/`. One source of truth, one release cycle,
    easy ops; no new repo.
@@ -76,11 +78,16 @@ next ~2000 LOC. Phase 3 (workspace isolation + admin tooling) ~1000 LOC.
   mail/             # maildir-style per-agent inboxes
 ```
 
-ID generation: 4-char hex, uniform random, retry-on-collision. Namespace
-~65k. Birthday-collision 50% at ~256 items in flight; current Daniel-
-workspace has hundreds of items across all statuses, so collisions are
-already rare but plausible at the bursty end (`mg new` 10× in a few
-seconds).
+ID generation: 5-char hex — the first 20 bits of sha256(title ‖ created),
+a deterministic hash, not a random draw. Namespace ~1M. Items minted before
+drellem2/macguffin#33 carry 4-char ids (~65k namespace); those stay valid and
+both widths coexist in one store. Since v0.3.0 `mg new` rejects a candidate
+that already names an item anywhere in the store (every status directory and
+archive partition) and remints with a nonce; before v0.3.0 there was no
+collision check at mint, so stores older than that can hold duplicated
+4-char ids. The birthday bound counts every item in the store, archive
+included — not items in flight: 50% at ~1,206 items for 5-char ids
+(~301 for 4-char).
 
 Concurrency: implicit — single-machine, single-process flock around the
 state directories during writes. Read paths are lock-free (markdown +
@@ -172,20 +179,34 @@ org-mode and it would be a betrayal to deprecate it.
 
 ## 3 · Q2 — ID entropy
 
-### Current: 4-char hex
+### Current: 5-char hex (4-char ids still valid)
 
-`mg-XXXX` — 16^4 = 65,536 namespace. Per the birthday paradox, 50%
-collision probability at √(2 × 65536 × ln 2) ≈ 301 concurrent in-flight
-items. mg already retries on collision in the `mg new` path, so users
-see no failures, but the retry cost grows quadratically with namespace
-fill, and gets worse with concurrent writers (which org-mode introduces).
+*Corrected against main after drellem2/macguffin#33. When this section was
+written it described 4-char ids and said mg "already retries on collision in
+the `mg new` path, so users see no failures" — there was no such retry then;
+it arrived in v0.3.0.*
+
+`mg-XXXXX` — 16^5 = 1,048,576 namespace. Per the birthday paradox, 50%
+collision probability at √(2 × 1048576 × ln 2) ≈ 1,206 items, where the
+count is every item the store holds — archive included, since archived ids
+share the namespace — not only items in flight. The previous width,
+`mg-XXXX` (65,536, ≈ 301 items), was outgrown by real stores of ~2,000–3,000
+items; ids minted at that width keep resolving.
+
+Since v0.3.0 a mint that draws an id already present anywhere in the store
+is rejected and reminted with a nonce, so a collision costs a retry, not a
+destroyed or duplicated record. Stores older than v0.3.0 may still hold
+duplicated 4-char ids from before that check. The check is a local
+filesystem scan; concurrent writers against one store (which org-mode
+introduces) still need the O_EXCL create that backs it.
 
 ### Options analyzed
 
 | Option | Namespace | Collision-at-50% | Length | Greppability | Notes |
 |--------|-----------|------------------|--------|--------------|-------|
-| 4-char (current) | 65,536 | 301 items | 7 chars (`mg-XXXX`) | excellent | Fine single-machine; fragile for orgs |
-| 6-char hex | 16.7M | 4,824 items | 9 chars | very good | ~250× more headroom |
+| 4-char (before #33) | 65,536 | 301 items | 7 chars (`mg-XXXX`) | excellent | Outgrown once the archive counts |
+| 5-char (current) | 1,048,576 | 1,206 items | 8 chars (`mg-XXXXX`) | excellent | Single-machine default since #33 |
+| 6-char hex | 16.7M | 4,824 items | 9 chars | very good | 256× the 4-char headroom, 16× the 5-char |
 | 8-char hex | 4.3B | 77,235 items | 11 chars | good | Overkill |
 | UUIDv7 | 2^128 | infinite | 36 chars | poor | Time-ordered + globally unique, but ugly |
 | 4-char hex + per-workspace prefix | 65,536 × N workspaces | 301 per workspace | varies | excellent within workspace | Composes with gh-issue-#2 |
@@ -201,7 +222,8 @@ Workspaces configure a default prefix (e.g. `acme-` → `acme-mg-XXXXXX`)
 for human-readability in cross-workspace contexts. Within a workspace,
 no prefix is needed — the workspace itself is the namespace.
 
-**Single-machine mode keeps 4-char hex** as the default. Users who want
+**Single-machine mode keeps its hex default** (4-char when this was
+written; 5-char since drellem2/macguffin#33). Users who want
 6-char can set `id_length = 6` in config. This avoids breaking existing
 greppability for current single-machine users.
 

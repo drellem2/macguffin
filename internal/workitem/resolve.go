@@ -14,8 +14,9 @@ import (
 // This file is the ONE place that turns a short work-item ID into a file on
 // disk. Before it existed, seven call sites (Read, FindPath, Status, Done,
 // Unclaim, Claim, Reopen) each walked work/ independently and each took the
-// first filesystem hit. None counted matches, so a duplicated short ID — 4 hex
-// digits is a 65,536-value space, and the birthday bound bites hard — resolved
+// first filesystem hit. None counted matches, so a duplicated short ID — IDs
+// were 4 hex digits then, a 65,536-value space where the birthday bound bites
+// hard, and every one of those IDs still resolves today — resolved
 // silently to whichever directory happened to be scanned first. Worse, `mg
 // show` walked twice (once for the body, once for the status) and could render
 // one item's body under another item's status.
@@ -317,7 +318,7 @@ func errAmbiguousID(root, id string, matches []Match) *mgerr.Error {
 			firstPart = m.Partition
 		}
 	}
-	hint := "Short IDs are 4 hex digits and can collide. Inspect the files above directly; mg will not guess between them."
+	hint := "Short IDs are only 4 or 5 hex digits, and IDs minted before v0.3.0 could be duplicated. Inspect the files above directly; mg will not guess between them."
 	// When the collision is between archived twins in different partitions,
 	// name the escape hatch at the moment it is needed: a partition qualifier
 	// picks one twin. (mg-0d0c: @partition is discoverable from the error.)

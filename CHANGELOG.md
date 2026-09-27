@@ -41,6 +41,17 @@ derived at all — no git, no tags, or a build from a source tarball.
   refuses an ID together with `--tag`, and `--claim` with `--tag`
   (drellem2/macguffin#32).
 
+### Changed
+
+- New work item ids are 5 hex characters (`mg-3e4c3`, ~1M ids) instead of 4
+  (~65k). Stores are measured including the archive, and real ones had grown to
+  thousands of items, where 4 characters collide routinely. Existing 4-character
+  ids keep working everywhere — show, edit, claim, done, archive, depends,
+  successor/predecessor links and the `@YYYY-MM` qualifier — and both widths
+  live in one store with no migration. The mint's store-wide uniqueness check
+  and O_EXCL create are unchanged. Anything outside mg that matches ids with a
+  fixed 4-character pattern must accept 5 (drellem2/macguffin#33).
+
 ### Fixed
 
 - The shell suites `scripts/e2e_milestones_test.sh` and `scripts/event_test.sh`

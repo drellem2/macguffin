@@ -2,7 +2,9 @@ package workitem
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +16,7 @@ import (
 
 // pinClock freezes the mint clock for the duration of a test. Create hashes
 // (title, created) into the short ID, so a pinned clock plus a repeated title
-// forces the collision that is otherwise a 1-in-65,536 event.
+// forces the collision that is otherwise a 1-in-1,048,576 event.
 func pinClock(t *testing.T, at time.Time) {
 	t.Helper()
 	prev := nowFunc
@@ -291,6 +293,26 @@ func TestGenerateID_NonceZeroIsHistorical(t *testing.T) {
 	}
 	if len(seen) < 4 {
 		t.Errorf("nonce barely perturbs the hash: 8 nonces produced %d distinct ids", len(seen))
+	}
+}
+
+// TestGenerateID_WideningExtendsHistorical pins what the 4→5 widening
+// (drellem2/macguffin#33) did and did not change: the hash input is the same,
+// only one more hex character of it is kept. So an item minted before the
+// widening is still derivable — its 4-char ID is the prefix of what the same
+// (title, created) mints now. The literal is sha256("t" ‖ fixedTime) and must
+// never change.
+func TestGenerateID_WideningExtendsHistorical(t *testing.T) {
+	now := fixedTime()
+	h := sha256.Sum256([]byte("t" + now.Format(time.RFC3339Nano)))
+	historical := fmt.Sprintf("mg-%x", h[:2]) // the pre-widening formula, verbatim
+
+	got := GenerateID("mg-", "t", now)
+	if len(got) != len("mg-")+5 {
+		t.Fatalf("GenerateID = %q, want mg- plus 5 hex chars", got)
+	}
+	if !strings.HasPrefix(got, historical) {
+		t.Errorf("GenerateID = %q does not extend the historical 4-char id %q", got, historical)
 	}
 }
 

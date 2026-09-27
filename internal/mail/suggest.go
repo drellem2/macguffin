@@ -13,14 +13,18 @@ import "sort"
 
 // suggestThreshold is the largest edit distance that still counts as "probably
 // the same name, mistyped", scaled to the length of what was typed. Agent names
-// here are short — a 4-hex work-item id, a crew name like "mayor" — so a fixed
-// threshold is either useless on the short ones or absurd on the long ones.
+// here are short — a 4- or 5-hex work-item id, a crew name like "mayor" — so a
+// fixed threshold is either useless on the short ones or absurd on the long ones.
 //
-// Short names get distance 1 and no more, because the id space is dense: a store
-// holding ~1200 four-hex mailboxes puts a couple of dozen of them within
+// Short names get distance 1 and no more, because the 4-hex id space is dense: a
+// store holding ~1200 four-hex mailboxes puts a couple of dozen of them within
 // distance 2 of any given id, and a list of two dozen "did you mean"s is not a
 // correction, it is a haystack. Distance 1 still catches the failure that
-// motivated this — "9ecf" typed for "v9ecf", one dropped character.
+// motivated this — "9ecf" typed for "v9ecf", one dropped character. The 5-hex
+// ids minted since drellem2/macguffin#33 live in a space 16× sparser, so a
+// 6-character prefixed name ("p485de") getting distance 2 does not reopen the
+// haystack: a 4-hex box is in range of it only by two pure deletions, and
+// few 5-hex boxes sit within one substitution plus one deletion of it.
 func suggestThreshold(n int) int {
 	switch {
 	case n <= 5:
