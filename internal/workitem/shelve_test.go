@@ -1,9 +1,13 @@
 package workitem
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/drellem2/macguffin/internal/mgerr"
 )
 
 func TestShelveBasic(t *testing.T) {
@@ -303,4 +307,156 @@ func TestShelveCannotShelveDone(t *testing.T) {
 	if err == nil {
 		t.Error("expected error shelving done item")
 	}
+}
+
+// --- mg unshelve --claim (drellem2/macguffin#34) ---
+
+func TestUnshelveClaimTakesBackAClaimedItem(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, _ := Create(root, "mg-", "task", "claimed, shelved, taken back", nil)
+	if _, err := Claim(root, item.ID, 4242); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if _, err := Shelve(root, item.ID); err != nil {
+		t.Fatalf("Shelve: %v", err)
+	}
+
+	got, err := UnshelveClaim(root, item.ID, 5151)
+	if err != nil {
+		t.Fatalf("UnshelveClaim: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != item.ID {
+		t.Fatalf("UnshelveClaim returned %v, want just %s", got, item.ID)
+	}
+
+	// A new claim, stamped with the CALLER's pid — not the 4242 shelve dropped.
+	claimed := filepath.Join(root, "work", "claimed", item.ID+".md.5151")
+	if _, err := os.Stat(claimed); err != nil {
+		t.Fatalf("expected claim file %s: %v", claimed, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "work", "available", item.ID+".md")); !os.IsNotExist(err) {
+		t.Errorf("item also present in available/ (err=%v)", err)
+	}
+	if _, pid := statusWithPID(root, item.ID); pid != 5151 {
+		t.Errorf("claim pid = %d, want 5151", pid)
+	}
+}
+
+func TestUnshelveClaimRefusesItemShelvedFromAvailable(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, _ := Create(root, "mg-", "task", "never claimed", nil)
+	if _, err := Shelve(root, item.ID); err != nil {
+		t.Fatalf("Shelve: %v", err)
+	}
+
+	_, err := UnshelveClaim(root, item.ID, 5151)
+	if err == nil {
+		t.Fatal("UnshelveClaim succeeded on an item shelved from available")
+	}
+	if code := mgerrCode(err); code != "not_shelved_from_claimed" {
+		t.Errorf("code = %q, want not_shelved_from_claimed (err: %v)", code, err)
+	}
+	if st, _ := Status(root, item.ID); st != "shelved" {
+		t.Errorf("refused unshelve moved the item: status = %q, want shelved", st)
+	}
+}
+
+// The LATEST shelve decides: an item shelved from claimed, restored, and
+// shelved again from available is not one --claim may take.
+func TestUnshelveClaimReadsTheLatestShelve(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	item, _ := Create(root, "mg-", "task", "shelved twice", nil)
+	Claim(root, item.ID, 4242)
+	Shelve(root, item.ID)
+	if _, err := Unshelve(root, item.ID); err != nil {
+		t.Fatalf("Unshelve: %v", err)
+	}
+	Shelve(root, item.ID) // now from available
+
+	if _, err := UnshelveClaim(root, item.ID, 5151); mgerrCode(err) != "not_shelved_from_claimed" {
+		t.Errorf("err = %v, want not_shelved_from_claimed", err)
+	}
+}
+
+func TestUnshelveClaimRefusesWhenTheLogHasNoRecord(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	// Moved into shelved/ by hand: no work.shelve record exists.
+	item, _ := Create(root, "mg-", "task", "hand-shelved", nil)
+	src := filepath.Join(root, "work", "available", item.ID+".md")
+	if err := os.Rename(src, filepath.Join(root, "work", "shelved", item.ID+".md")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := UnshelveClaim(root, item.ID, 5151); mgerrCode(err) != "unknown_prior_status" {
+		t.Errorf("err = %v, want unknown_prior_status", err)
+	}
+}
+
+func TestUnshelveClaimWithUnmetDependencyGoesToPending(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	parent, _ := Create(root, "mg-", "task", "parent", nil)
+	Claim(root, parent.ID, 0)
+	if _, _, err := Done(root, parent.ID, nil); err != nil {
+		t.Fatalf("Done parent: %v", err)
+	}
+	child, _ := Create(root, "mg-", "task", "child", []string{parent.ID})
+	if _, err := Claim(root, child.ID, 4242); err != nil {
+		t.Fatalf("Claim child: %v", err)
+	}
+	Shelve(root, child.ID)
+	// The dependency becomes unmet again while the child is on the shelf.
+	if _, err := Reopen(root, parent.ID); err != nil {
+		t.Fatalf("Reopen parent: %v", err)
+	}
+
+	if _, err := UnshelveClaim(root, child.ID, 5151); err != nil {
+		t.Fatalf("UnshelveClaim: %v", err)
+	}
+	if st, _ := Status(root, child.ID); st != "pending" {
+		t.Errorf("status = %q, want pending (unmet dependency, so no claim)", st)
+	}
+}
+
+// mg done on a shelved item that was claimed when shelved points at --claim;
+// a plain 'mg unshelve' would send it to available/, where it cannot be done.
+func TestDoneOnShelvedClaimedItemHintsClaim(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	claimed, _ := Create(root, "mg-", "task", "was claimed", nil)
+	Claim(root, claimed.ID, 4242)
+	Shelve(root, claimed.ID)
+
+	_, _, err := Done(root, claimed.ID, nil)
+	if err == nil {
+		t.Fatal("Done succeeded on a shelved item")
+	}
+	if want := "mg unshelve " + claimed.ID + " --claim"; !strings.Contains(mgerrHint(err), want) {
+		t.Errorf("hint = %q, want it to contain %q", mgerrHint(err), want)
+	}
+
+	avail, _ := Create(root, "mg-", "task", "was available", nil)
+	Shelve(root, avail.ID)
+	_, _, err = Done(root, avail.ID, nil)
+	if h := mgerrHint(err); strings.Contains(h, "--claim") || !strings.Contains(h, "mg unshelve "+avail.ID) {
+		t.Errorf("hint = %q, want the plain unshelve hint", h)
+	}
+}
+
+func mgerrHint(err error) string {
+	var me *mgerr.Error
+	if errors.As(err, &me) {
+		return me.Hint
+	}
+	return ""
 }

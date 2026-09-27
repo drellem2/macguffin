@@ -1,12 +1,15 @@
 package workitem
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/event"
+	"github.com/drellem2/macguffin/internal/mgerr"
 )
 
 // Shelve atomically moves a work item to shelved/. The item can be in any
@@ -220,6 +223,65 @@ func ShelveByTag(root, tag string) (shelved []*Item, skipped []SkippedItem, err 
 // Unshelve restores a shelved work item. Items with unmet dependencies go
 // to pending/; otherwise they go to available/. Returns all unshelved items.
 func Unshelve(root, id string) ([]*Item, error) {
+	return unshelve(root, id, false, 0)
+}
+
+// UnshelveClaim restores a shelved work item that was CLAIMED when it was
+// shelved, making it the caller's claim (stamped with pid; 0 means the calling
+// process) in a single rename, so it is never visible in available/ where a
+// dispatcher could hand it to someone else (drellem2/macguffin#34).
+//
+// It is a NEW claim, not a restore of the old one: shelve drops the claim's
+// PID, and mg never invents an owner (see restorableStatuses in unarchive.go).
+// The one thing it does take from the log is the permission — it refuses
+// unless the item's latest work.shelve says from_status=claimed, and it refuses
+// rather than guesses when the log does not say.
+//
+// An item whose gates are closed still goes to pending/, unclaimed, exactly as
+// a plain unshelve would put it: a claim on work that cannot start yet is not
+// something --claim may manufacture. Dependents come back exactly as a plain
+// unshelve brings them back — the claim applies to the named item only.
+func UnshelveClaim(root, id string, pid int) ([]*Item, error) {
+	return unshelve(root, id, true, pid)
+}
+
+// shelvedFrom returns the status id held when it was last shelved, read from
+// the work.shelve record in the event log, or "" when the log does not say.
+// Last record wins, as in archivedFrom: an item may be shelved, restored and
+// shelved again, and only the most recent transition describes it now.
+func shelvedFrom(root, id string) string {
+	entries, err := event.List(root, event.ListOpts{Type: "work.shelve"})
+	if err != nil {
+		return ""
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].Extra["item_id"] == id {
+			return entries[i].Extra["from_status"]
+		}
+	}
+	return ""
+}
+
+// errNotShelvedFromClaimed is the refusal UnshelveClaim returns when the log
+// does not say the item was claimed when it was shelved — either because it
+// says something else, or because it says nothing (from == "").
+func errNotShelvedFromClaimed(id, from string) *mgerr.Error {
+	hint := fmt.Sprintf("Run 'mg unshelve %s' and then 'mg claim %s'.", id, id)
+	if from == "" {
+		return mgerr.Conflict(
+			"unknown_prior_status",
+			fmt.Sprintf("%s: the store has no record of the status it held when it was shelved, so --claim cannot tell it was claimed.", id),
+			hint,
+		)
+	}
+	return mgerr.Conflict(
+		"not_shelved_from_claimed",
+		fmt.Sprintf("%s: was %s, not claimed, when it was shelved; --claim only takes back an item that was claimed.", id, from),
+		hint,
+	)
+}
+
+func unshelve(root, id string, claim bool, pid int) ([]*Item, error) {
 	m, err := ResolveUnique(root, id)
 	if err != nil {
 		return nil, err
@@ -232,6 +294,15 @@ func Unshelve(root, id string) ([]*Item, error) {
 	item, err := readFile(src)
 	if err != nil {
 		return nil, err
+	}
+
+	// Checked before the gates: an item that was never claimed is refused
+	// whether or not it could start now, so the answer does not depend on
+	// the state of its dependencies.
+	if claim {
+		if from := shelvedFrom(root, item.ID); from != "claimed" {
+			return nil, errNotShelvedFromClaimed(item.ID, from)
+		}
 	}
 
 	// Determine destination based on dependencies
@@ -247,22 +318,46 @@ func Unshelve(root, id string) ([]*Item, error) {
 		subdir = "pending"
 	}
 
-	dst := filepath.Join(root, "work", subdir, id+".md")
-	if err := os.Rename(src, dst); err != nil {
-		return nil, ioErr(fmt.Sprintf("%s: could not be unshelved: %s", id, fsErrText(err)))
+	kvs := map[string]string{
+		"item_id":     id,
+		"from_status": "shelved",
+		"actor":       actor(),
 	}
+	var dst string
+	if claim && subdir == "available" {
+		subdir = "claimed"
+		if pid == 0 {
+			pid = os.Getpid()
+		}
+		kvs["pid"] = strconv.Itoa(pid)
+		dst = filepath.Join(root, "work", "claimed", fmt.Sprintf("%s.md.%d", id, pid))
+		// One rename, straight from shelved/ to claimed/: the item is never in
+		// available/, so no dispatcher can claim it in between. renameNoReplace
+		// so a same-id record already at dst is refused, not destroyed.
+		if err := renameNoReplace(id, src, dst); err != nil {
+			var me *mgerr.Error
+			if errors.As(err, &me) {
+				return nil, me
+			}
+			if os.IsNotExist(err) {
+				return nil, explainUnshelveFailure(root, id)
+			}
+			return nil, ioErr(fmt.Sprintf("%s: could not be unshelved: %s", id, fsErrText(err)))
+		}
+	} else {
+		dst = filepath.Join(root, "work", subdir, id+".md")
+		if err := os.Rename(src, dst); err != nil {
+			return nil, ioErr(fmt.Sprintf("%s: could not be unshelved: %s", id, fsErrText(err)))
+		}
+	}
+	kvs["to_status"] = subdir
 
 	// The result sidecar must follow the .md out of shelved/.
 	if err := moveResultSidecar(filepath.Dir(src), filepath.Dir(dst), id); err != nil {
 		return nil, ioErr(fmt.Sprintf("%s: unshelved, but result sidecar could not follow: %s", id, fsErrText(err)))
 	}
 
-	event.Emit(root, "work.unshelve", map[string]string{
-		"item_id":     id,
-		"from_status": "shelved",
-		"to_status":   subdir,
-		"actor":       actor(),
-	})
+	event.Emit(root, "work.unshelve", kvs)
 
 	unshelved := []*Item{item}
 
@@ -273,7 +368,7 @@ func Unshelve(root, id string) ([]*Item, error) {
 	}
 
 	for _, dep := range dependents {
-		more, err := Unshelve(root, dep.ID)
+		more, err := unshelve(root, dep.ID, false, 0)
 		if err != nil {
 			continue
 		}

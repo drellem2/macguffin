@@ -21,7 +21,16 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- `mg unshelve <id> --claim [--pid N]` takes back an item that was claimed when
+  it was shelved, moving it from `shelved/` straight into `claimed/` as the
+  caller's claim in one rename — it is never visible in `available/`. It refuses
+  unless the item's latest `work.shelve` says `from_status=claimed`; an item with
+  unmet dependencies still goes to `pending/`. The default `mg unshelve` is
+  unchanged. `mg done` on a shelved item that was claimed now points at
+  `--claim` instead of the plain unshelve that would send it to `available/`
+  (drellem2/macguffin#34).
 
 ## [0.4.0] - 2026-09-26
 

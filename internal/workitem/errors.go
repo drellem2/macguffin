@@ -126,12 +126,30 @@ func explainDoneFailure(root, id string) *mgerr.Error {
 	case "done":
 		return mgerr.Conflict("already_done", fmt.Sprintf("%s: already done.", id), remediation("done", id))
 	case "shelved":
-		return mgerr.Conflict("item_shelved", fmt.Sprintf("%s: is shelved, not claimed.", id), remediation("shelved", id))
+		return mgerr.Conflict("item_shelved", fmt.Sprintf("%s: is shelved, not claimed.", id), shelvedDoneRemediation(root, id))
 	case "archived":
 		return mgerr.Conflict("item_archived", fmt.Sprintf("%s: is archived, not claimed.", id), remediation("archived", id))
 	default:
 		return mgerr.Conflict("claim_race", fmt.Sprintf("%s: could not be completed; its claim may have just changed. Run 'mg show %s' to check.", id, id), "").WithRetryable(true)
 	}
+}
+
+// shelvedDoneRemediation is the hint 'mg done' gives for a shelved item. The
+// generic 'mg unshelve' sends the item to available/, from which it cannot be
+// completed without a claim someone else may win first — so for an item that
+// was claimed when it was shelved, it points at 'mg unshelve --claim', which
+// takes it straight back into claimed/ (drellem2/macguffin#34).
+func shelvedDoneRemediation(root, id string) string {
+	key := id
+	if m, err := ResolveUnique(root, id); err == nil {
+		if item, err := readFile(m.Path); err == nil {
+			key = item.ID
+		}
+	}
+	if shelvedFrom(root, key) == "claimed" {
+		return fmt.Sprintf("It was claimed when it was shelved: run 'mg unshelve %s --claim' to take it back as your claim, then complete it.", id)
+	}
+	return remediation("shelved", id)
 }
 
 // explainUnclaimFailure produces a user-facing error when 'unclaim' could not
