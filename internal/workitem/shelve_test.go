@@ -477,3 +477,103 @@ func mgerrHint(err error) string {
 	}
 	return ""
 }
+
+func TestUnshelveByTag(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	a, _ := Create(root, "mg-", "task", "tagged one", nil, WithTags([]string{"grp"}))
+	b, _ := Create(root, "mg-", "task", "tagged two", nil, WithTags([]string{"grp", "other"}))
+	c, _ := Create(root, "mg-", "task", "shelved, untagged", nil)
+	for _, id := range []string{a.ID, b.ID, c.ID} {
+		if _, err := Shelve(root, id); err != nil {
+			t.Fatalf("Shelve %s: %v", id, err)
+		}
+	}
+
+	unshelved, skipped, err := UnshelveByTag(root, "grp")
+	if err != nil {
+		t.Fatalf("UnshelveByTag: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Errorf("skipped = %v, want none", skipped)
+	}
+	if len(unshelved) != 2 {
+		t.Fatalf("unshelved %d items, want 2", len(unshelved))
+	}
+	for _, id := range []string{a.ID, b.ID} {
+		if st, _ := Status(root, id); st != "available" {
+			t.Errorf("%s status = %q, want available", id, st)
+		}
+	}
+	if st, _ := Status(root, c.ID); st != "shelved" {
+		t.Errorf("untagged item status = %q, want it still shelved", st)
+	}
+}
+
+func TestUnshelveByTagNotFound(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	// An AVAILABLE item with the tag is not a match: only the shelf is searched.
+	Create(root, "mg-", "task", "tagged but not shelved", nil, WithTags([]string{"grp"}))
+
+	_, _, err := UnshelveByTag(root, "grp")
+	if err == nil || !strings.Contains(err.Error(), `no shelved items found with tag "grp"`) {
+		t.Errorf("err = %v, want the zero-match error", err)
+	}
+}
+
+// Two tagged items where restoring the parent recursively restores the child:
+// the second must be neither an error nor a skip, and must be listed once.
+func TestUnshelveByTagDedupesRecursiveRestore(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	parent, _ := Create(root, "mg-", "task", "parent", nil, WithTags([]string{"grp"}))
+	child, _ := Create(root, "mg-", "task", "child", []string{parent.ID}, WithTags([]string{"grp"}))
+	if _, _, err := ShelveByTag(root, "grp"); err != nil {
+		t.Fatalf("ShelveByTag: %v", err)
+	}
+
+	unshelved, skipped, err := UnshelveByTag(root, "grp")
+	if err != nil {
+		t.Fatalf("UnshelveByTag: %v", err)
+	}
+	if len(skipped) != 0 {
+		t.Errorf("skipped = %+v, want none", skipped)
+	}
+	if len(unshelved) != 2 {
+		t.Fatalf("unshelved %d items, want 2 (each once)", len(unshelved))
+	}
+	if st, _ := Status(root, child.ID); st != "pending" {
+		t.Errorf("child status = %q, want pending (its dependency is not done)", st)
+	}
+}
+
+// A cascade-shelved dependent comes back with its tagged parent even though it
+// does not carry the tag — the documented semantics.
+func TestUnshelveByTagRestoresUntaggedCascadeDependents(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	parent, _ := Create(root, "mg-", "task", "parent", nil, WithTags([]string{"grp"}))
+	dep, _ := Create(root, "mg-", "task", "untagged dependent", []string{parent.ID})
+	if _, err := Shelve(root, parent.ID); err != nil {
+		t.Fatalf("Shelve: %v", err)
+	}
+	if st, _ := Status(root, dep.ID); st != "shelved" {
+		t.Fatalf("dependent status = %q, want shelved by the cascade", st)
+	}
+
+	unshelved, _, err := UnshelveByTag(root, "grp")
+	if err != nil {
+		t.Fatalf("UnshelveByTag: %v", err)
+	}
+	if len(unshelved) != 2 {
+		t.Errorf("unshelved %d items, want 2", len(unshelved))
+	}
+	if st, _ := Status(root, dep.ID); st == "shelved" {
+		t.Errorf("untagged cascade dependent is still shelved")
+	}
+}

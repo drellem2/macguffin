@@ -220,6 +220,64 @@ func ShelveByTag(root, tag string) (shelved []*Item, skipped []SkippedItem, err 
 	return shelved, skipped, nil
 }
 
+// UnshelveByTag restores every shelved item carrying the given tag, mirroring
+// ShelveByTag (drellem2/macguffin#32). Returns the items it restored AND the
+// tagged items it could not restore, each with the reason.
+//
+// It routes every item through Unshelve rather than moving anything itself, so
+// the targeted form's routing holds here too: gates decide pending/ versus
+// available/, a snooze survives, and the dependents shelved along with each
+// item come back with it — INCLUDING dependents that do not carry the tag,
+// because that is how the shelve cascade put them on the shelf and how
+// 'mg unshelve <id>' brings them back.
+//
+// A tagged item an earlier item's restore already brought back is not a
+// failure: it went exactly where the operator asked. A real failure is
+// RETURNED rather than swallowed, as in ShelveByTag, so a restore that quietly
+// missed part of its own selection cannot pass for one that got all of it.
+func UnshelveByTag(root, tag string) (unshelved []*Item, skipped []SkippedItem, err error) {
+	items, err := ListByStatus(root, "shelved")
+	if err != nil {
+		return nil, nil, err
+	}
+	var toUnshelve []*Item
+	for _, item := range items {
+		for _, t := range item.Tags {
+			if t == tag {
+				toUnshelve = append(toUnshelve, item)
+				break
+			}
+		}
+	}
+
+	if len(toUnshelve) == 0 {
+		return nil, nil, fmt.Errorf("no shelved items found with tag %q", tag)
+	}
+
+	unshelvedSet := make(map[string]bool)
+	for _, item := range toUnshelve {
+		if unshelvedSet[item.ID] {
+			continue
+		}
+		if st, err := Status(root, item.ID); err == nil && st != "shelved" {
+			continue
+		}
+		restored, err := Unshelve(root, item.ID)
+		if err != nil {
+			skipped = append(skipped, SkippedItem{Item: item, Reason: err})
+			continue
+		}
+		for _, it := range restored {
+			if !unshelvedSet[it.ID] {
+				unshelvedSet[it.ID] = true
+				unshelved = append(unshelved, it)
+			}
+		}
+	}
+
+	return unshelved, skipped, nil
+}
+
 // Unshelve restores a shelved work item. Items with unmet dependencies go
 // to pending/; otherwise they go to available/. Returns all unshelved items.
 func Unshelve(root, id string) ([]*Item, error) {

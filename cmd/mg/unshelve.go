@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
 	"github.com/drellem2/macguffin/internal/workitem"
@@ -11,14 +12,25 @@ import (
 var (
 	unshelveClaim bool
 	unshelvePID   int
+	unshelveTag   string
 )
 
 var unshelveCmd = &cobra.Command{
-	Use:   "unshelve ID",
+	Use:   "unshelve [ID]",
 	Short: "Restore a shelved work item and its dependents",
 	Long: `Unshelve restores a previously shelved work item and any of its
 dependents that are also shelved. Items with unmet dependencies are
 placed in pending/; others go to available/.
+
+Use --tag to restore every shelved item with a given tag, mirroring
+'mg shelve --tag'. Each tagged item comes back exactly as 'mg unshelve <id>'
+would bring it back — so the dependents that were shelved along with it come
+back too, EVEN WHEN THEY DO NOT CARRY THE TAG: the shelve cascade put them on
+the shelf because of a tagged item, and they leave it the same way. An item
+that cannot be restored is reported on stderr, the rest still come back, and
+the command exits non-zero so a script cannot mistake a partial restore for a
+whole one.
+--tag cannot be combined with an ID or with --claim.
 
 --claim takes back an item that was CLAIMED when it was shelved: instead of
 available/, it moves the item straight into claimed/ as the caller's claim
@@ -29,7 +41,7 @@ says it was claimed, and an item with unmet dependencies still goes to
 pending/, unclaimed — and that still exits 0, because the unshelve itself
 succeeded: a script that needs the claim must check the output or 'mg show',
 not the exit status. Dependents come back as they would without --claim.`,
-	Args: usageArgs(cobra.ExactArgs(1)),
+	Args: usageArgs(cobra.MaximumNArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := resolveRoot()
 		if err != nil {
@@ -38,6 +50,31 @@ not the exit status. Dependents come back as they would without --claim.`,
 
 		if cmd.Flags().Changed("pid") && !unshelveClaim {
 			return mgerr.Usage("usage", "--pid only applies with --claim.", cmd.UseLine())
+		}
+
+		if cmd.Flags().Changed("tag") {
+			if len(args) > 0 {
+				return mgerr.Usage("usage",
+					"give a work item ID or --tag, not both.",
+					"Run 'mg unshelve <id>' or 'mg unshelve --tag=<tag>'.")
+			}
+			if unshelveClaim {
+				// A claim is taken on one item the caller means to work; a bulk
+				// one would hand them items they have not looked at.
+				return mgerr.Usage("usage",
+					"--claim takes back one named item and cannot be combined with --tag.",
+					"Run 'mg unshelve <id> --claim' on the item you mean.")
+			}
+			if strings.TrimSpace(unshelveTag) == "" {
+				return mgerr.Usage("usage", "--tag needs a tag.", "Run 'mg unshelve --tag=<tag>'.")
+			}
+			return unshelveByTag(cmd, root, unshelveTag)
+		}
+
+		if len(args) == 0 {
+			return mgerr.Usage("usage",
+				"requires a work item ID or --tag flag.",
+				"Run 'mg unshelve <id>' or 'mg unshelve --tag=<tag>'.")
 		}
 
 		var items []*workitem.Item
@@ -80,7 +117,33 @@ not the exit status. Dependents come back as they would without --claim.`,
 	},
 }
 
+// unshelveByTag runs the bulk form and reports both halves of what it did.
+func unshelveByTag(cmd *cobra.Command, root, tag string) error {
+	items, skipped, err := workitem.UnshelveByTag(root, tag)
+	if err != nil {
+		return err
+	}
+	out := cmd.OutOrStdout()
+	for _, item := range items {
+		fmt.Fprintf(out, "Unshelved %s: %s\n", item.ID, item.Title)
+	}
+	if len(skipped) > 0 {
+		w := cmd.ErrOrStderr()
+		fmt.Fprintf(w, "Could not unshelve %d tagged item(s):\n", len(skipped))
+		for _, s := range skipped {
+			fmt.Fprintf(w, "  %s: %s\n", s.Item.ID, s.Item.Title)
+			fmt.Fprintf(w, "    %s\n", s.Reason)
+		}
+		fmt.Fprintln(w, "They are still shelved.")
+		return mgerr.Conflict("unshelve_partial",
+			fmt.Sprintf("%d of the items tagged %q could not be unshelved.", len(skipped), tag),
+			"Retry each with 'mg unshelve <id>' to see why.")
+	}
+	return nil
+}
+
 func init() {
+	unshelveCmd.Flags().StringVar(&unshelveTag, "tag", "", "unshelve all shelved items with this tag (and the dependents shelved with them)")
 	unshelveCmd.Flags().BoolVar(&unshelveClaim, "claim", false, "take back an item that was claimed when shelved, as the caller's claim")
 	unshelveCmd.Flags().IntVar(&unshelvePID, "pid", 0, "with --claim: PID of the owning process (default: $POGO_PID, else current process)")
 }

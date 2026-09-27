@@ -33,6 +33,13 @@ derived at all — no git, no tags, or a build from a source tarball.
   unchanged. `mg done` on a shelved item that was claimed now points at
   `--claim` instead of the plain unshelve that would send it to `available/`
   (drellem2/macguffin#34).
+- `mg unshelve --tag T` restores every shelved item carrying the tag, mirroring
+  `mg shelve --tag`. Each comes back as `mg unshelve <id>` would bring it back,
+  so the dependents shelved with it return too, even untagged ones. An item
+  already restored by an earlier item's cascade is not an error; an item that
+  cannot be restored is named on stderr and the command exits non-zero. It
+  refuses an ID together with `--tag`, and `--claim` with `--tag`
+  (drellem2/macguffin#32).
 
 ## [0.4.0] - 2026-09-26
 
