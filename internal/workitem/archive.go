@@ -1,6 +1,7 @@
 package workitem
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/drellem2/macguffin/internal/event"
+	"github.com/drellem2/macguffin/internal/mgerr"
 )
 
 // archiveCandidate is one done item eligible for archiving, carried with the
@@ -76,9 +78,14 @@ func archiveFile(root string, c archiveCandidate) error {
 		return fmt.Errorf("creating archive dir %s: %w", archiveDir, err)
 	}
 
-	// Move the .md file
+	// Move the .md file. Never os.Rename: a legacy same-id twin may already be
+	// in this partition, and rename would silently replace it (mg-1096).
 	dstPath := filepath.Join(archiveDir, name)
-	if err := os.Rename(c.path, dstPath); err != nil {
+	if err := renameNoReplace(c.item.ID, c.path, dstPath); err != nil {
+		var me *mgerr.Error
+		if errors.As(err, &me) {
+			return me
+		}
 		return fmt.Errorf("archiving %s: %w", c.item.ID, err)
 	}
 
@@ -354,6 +361,10 @@ func ArchiveItem(root, id string, opts ArchiveOpts) (*Item, error) {
 	}
 
 	if err := archiveFile(root, archiveCandidate{path: path, item: item, doneTime: info.ModTime()}); err != nil {
+		var me *mgerr.Error
+		if errors.As(err, &me) {
+			return nil, me
+		}
 		return nil, ioErr(fmt.Sprintf("%s: could not be archived: %s", id, fsErrText(err)))
 	}
 

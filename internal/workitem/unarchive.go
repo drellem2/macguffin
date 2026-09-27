@@ -1,6 +1,7 @@
 package workitem
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -118,7 +119,13 @@ func Unarchive(root, id, status string) (*Item, string, error) {
 		return nil, "", ioErr(fmt.Sprintf("%s: could not be unarchived: %s", item.ID, fsErrText(err)))
 	}
 	dst := filepath.Join(dstDir, item.ID+".md")
-	if err := os.Rename(src, dst); err != nil {
+	// Never os.Rename here: a legacy same-id twin may already live at dst, and
+	// rename would silently replace it (mg-1096).
+	if err := renameNoReplace(item.ID, src, dst); err != nil {
+		var me *mgerr.Error
+		if errors.As(err, &me) {
+			return nil, "", me
+		}
 		return nil, "", ioErr(fmt.Sprintf("%s: could not be unarchived: %s", item.ID, fsErrText(err)))
 	}
 
