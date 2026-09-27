@@ -68,15 +68,18 @@ RE_FIND_HOME="${_B}find[[:space:]]+${_HOMEARG}[^|;]*-delete"
 RE_API='(RemoveAll|rmtree|rmSync|rimraf)[[:space:]]*\(.*(\.macguffin|UserHomeDir|Getenv\("HOME"\)|expanduser|homedir\(|DefaultRoot\()'
 
 # live_rm_scan DIR prints every hit as path:line:text and returns 0 iff there
-# was at least one. In a git tree it reads tracked plus untracked-not-ignored
-# files, so a new file is guarded before it is committed and build output is
-# not; anywhere else it reads every regular file. -I skips binaries.
+# was at least one. In a git tree it reads TRACKED files only — what a branch
+# carries, which is what the gate is deciding on. Not untracked ones: the
+# refinery's worktree holds an unignored .pogo/search/code_search_index that
+# still quoted the pre-fix scripts, and the first submission of this guard
+# failed its own gate on that tooling artefact. Outside a git tree it reads
+# every regular file. -I skips binaries.
 live_rm_scan() {
     _dir=$1
     _out="$WORK/scan.$$.out"
     if git -C "$_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
         [ "$(cd "$_dir" && pwd -P)" = "$(cd "$(git -C "$_dir" rev-parse --show-toplevel)" && pwd -P)" ]; then
-        (cd "$_dir" && git ls-files -z -co --exclude-standard |
+        (cd "$_dir" && git ls-files -z |
             xargs -0 grep -nIE -e "$RE_RM_HOME" -e "$RE_RM_STORE" -e "$RE_FIND_HOME" -e "$RE_API" -- \
             >"$_out") || :
     else
@@ -147,6 +150,17 @@ if git -C "$REPO_ROOT" cat-file -e "${PREFIX}^{commit}" 2>/dev/null; then
 else
     echo "  SKIP: pre-fix commit $PREFIX not in this clone (shallow?) — synthetic cases above still ran"
 fi
+
+# In a git tree, a tracked hit fires and an untracked one does not.
+d="$WORK/gitcase"
+mkdir -p "$d"
+git -C "$d" init -q
+printf 'clean() { %s -rf ~/.macguffin; }\n' "$R" >"$d/untracked.sh"
+live_rm_scan "$d" >/dev/null && fail "fires on an UNTRACKED file in a git tree" ||
+    pass "an untracked file in a git tree is not scanned"
+git -C "$d" add untracked.sh
+live_rm_scan "$d" >/dev/null && pass "fires once that file is tracked" ||
+    fail "does NOT fire on a tracked file in a git tree"
 
 echo "=== Self-test: the scanner does not fire on the safe forms ==="
 d="$WORK/neg"
