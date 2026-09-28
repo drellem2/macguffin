@@ -3,6 +3,8 @@ package workitem
 import (
 	"strconv"
 	"strings"
+
+	"github.com/drellem2/macguffin/internal/event"
 )
 
 // FieldChange is one metadata field an update moved, with the value on either
@@ -89,4 +91,34 @@ func diffMeta(before, after metaSnapshot) []FieldChange {
 		}
 	}
 	return changes
+}
+
+// emitTagWrite records a tag write made OUTSIDE Update — the successor: and
+// predecessor: tags `mg done --successor` and `mg archive --successor` put on
+// two items (drellem2/macguffin#38). Those writes changed a field `mg edit`
+// would have logged, and logged nothing, so a tag on the item could not be
+// dated or attributed afterwards.
+//
+// The line is the same shape Update emits for a metadata-only edit, so a
+// consumer reading work.edited needs no second parser: mode=metadata,
+// fields=tags, tags_before/tags_after in the comma-joined form, actor the
+// invoker, and equal body hashes as the positive statement that no body moved.
+func emitTagWrite(root string, item *Item, tagsBefore []string) {
+	body := composeBody(item)
+	hash := BodyHash(body)
+	lines := strconv.Itoa(countBodyLines(body))
+	event.Emit(root, "work.edited", map[string]string{
+		"item_id":          item.ID,
+		"actor":            actor(),
+		"mode":             "metadata",
+		"guarded":          "false",
+		"body_hash_before": hash,
+		"body_hash_after":  hash,
+		"lines_before":     lines,
+		"lines_after":      lines,
+		"body_read_state":  recordedReadState("metadata", ""),
+		"fields":           "tags",
+		"tags_before":      strings.Join(tagsBefore, ","),
+		"tags_after":       strings.Join(item.Tags, ","),
+	})
 }

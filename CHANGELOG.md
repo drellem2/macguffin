@@ -23,6 +23,14 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- **Every tag write is attributable (drellem2/macguffin#38).** `work.created`
+  now records the item's initial `tags`, and the `successor:`/`predecessor:`
+  tags written by `mg done --successor` and `mg archive --successor` each emit
+  `work.edited` (`mode=metadata`, `fields=tags`, `tags_before`/`tags_after`,
+  `actor` = the invoker). Before, those writes left only `work.done` in the
+  log. The predecessor backlink stays best-effort and its event can never fail
+  the done. Consumers switching on `work.edited` see these two new sources.
+
 - `mg unshelve <id> --claim [--pid N]` takes back an item that was claimed when
   it was shelved, moving it from `shelved/` straight into `claimed/` as the
   caller's claim in one rename — it is never visible in `available/`. It emits

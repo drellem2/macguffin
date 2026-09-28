@@ -277,6 +277,15 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 		if item.Assignee != "" {
 			created["assignee"] = item.Assignee
 		}
+		// The initial tags ride on the event for the same reason
+		// work.edited carries tags_before/tags_after: without them a tag's
+		// history begins at its first edit, and a tag set at filing could
+		// not be dated at all (drellem2/macguffin#38). They are the tags as
+		// written — after reconcileWorkflowMarkers — in work.edited's
+		// comma-joined form, and omitted when there are none.
+		if len(item.Tags) > 0 {
+			created["tags"] = strings.Join(item.Tags, ",")
+		}
 		event.Emit(root, "work.created", created)
 
 		return item, nil

@@ -238,10 +238,15 @@ func linkPredecessor(root, successorID, predecessorID string) error {
 			return nil
 		}
 	}
+	tagsBefore := append([]string(nil), target.Tags...)
 	target.Tags = append(target.Tags, tag)
 
 	if err := os.WriteFile(match.Path, []byte(Render(target)), 0o644); err != nil {
 		return fmt.Errorf("%s", fsErrText(err))
 	}
+	// Emitted only after the write lands, so a failed backlink logs
+	// work.backlink_failed and never a tag change that did not happen.
+	// event.Emit returns nothing, so this cannot fail the caller's done.
+	emitTagWrite(root, target, tagsBefore)
 	return nil
 }

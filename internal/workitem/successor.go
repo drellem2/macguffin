@@ -184,11 +184,13 @@ func linkSuccessor(root, path string, item *Item, successor string) error {
 			return nil
 		}
 	}
+	tagsBefore := append([]string(nil), item.Tags...)
 	item.Tags = append(item.Tags, tag)
 
 	if err := os.WriteFile(path, []byte(Render(item)), 0o644); err != nil {
 		return ioErr(fmt.Sprintf("%s: could not record successor %s: %s", item.ID, successor, fsErrText(err)))
 	}
+	emitTagWrite(root, item, tagsBefore)
 	return nil
 }
 

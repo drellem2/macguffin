@@ -798,6 +798,16 @@ Tracked fields: `title`, `type`, `repo`, `assignee`, `priority`, `budget`,
   changes nothing on disk and manufactures no audit line; a log that records
   non-events is a slower way to be untrustworthy.
 
+Tags written by mg itself are logged the same way. `mg done --successor` and
+`mg archive --successor` put a `successor:` tag on the item and a
+`predecessor:` tag on its successor; each write emits its own `work.edited`
+with `mode=metadata`, `fields=tags` and `tags_before`/`tags_after`, attributed
+to the invoker. The predecessor backlink stays best-effort: when it cannot be
+written, the log gets `work.backlink_failed` instead and the done still
+succeeds. `work.created` carries the item's initial `tags` (comma-joined, as
+`tags_after` is; omitted when there are none), so a tag's history starts at
+filing rather than at its first edit.
+
 #### Lost updates are *unmeasurable*, not measured-as-zero
 
 `body_hash_before` looks like it answers "did this write clobber someone?" It
