@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/event"
+	"github.com/drellem2/macguffin/internal/mgerr"
 )
 
 // UnclaimResult describes a released claim.
@@ -167,6 +168,9 @@ func Unclaim(root, id string, opts ...UnclaimOption) (*UnclaimResult, error) {
 	// available/ carrying a misspelled hold is a dispatchable ticket whose
 	// assignee field reads, to a human, as held. See assigneegate.go.
 	if o.setAssignee {
+		if err := mgerr.CheckUTF8("assignee", o.assignee); err != nil {
+			return nil, err
+		}
 		if err := ValidateAssignee(o.assignee); err != nil {
 			return nil, err
 		}

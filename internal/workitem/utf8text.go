@@ -12,6 +12,7 @@ import (
 func checkNewItemUTF8(item *Item) error {
 	for _, f := range []struct{ name, val string }{
 		{"title", item.Title},
+		{"type", item.Type},
 		{"body", item.Body},
 		{"assignee", item.Assignee},
 		{"repo", item.Repo},
@@ -20,6 +21,9 @@ func checkNewItemUTF8(item *Item) error {
 		if err := mgerr.CheckUTF8(f.name, f.val); err != nil {
 			return err
 		}
+	}
+	if err := checkTagsUTF8("depends", item.Depends); err != nil {
+		return err
 	}
 	return checkTagsUTF8("tags", item.Tags)
 }
@@ -36,6 +40,7 @@ func checkUpdateUTF8(fields UpdateField) error {
 		{"title", fields.Title},
 		{"body", fields.Body},
 		{"append-body", fields.AppendBody},
+		{"type", fields.Type},
 		{"assignee", fields.Assignee},
 		{"repo", fields.Repo},
 	} {
@@ -46,14 +51,28 @@ func checkUpdateUTF8(fields UpdateField) error {
 			return err
 		}
 	}
-	if err := checkTagsUTF8("tags", fields.Tags); err != nil {
-		return err
+	// --rm-depends and --rm-tags are deliberately NOT checked: they introduce
+	// no text, and removing a damaged entry by its exact bytes is how an item
+	// written before this check gets repaired.
+	for _, l := range []struct {
+		name string
+		vals []string
+	}{
+		{"depends", fields.Depends},
+		{"add-depends", fields.AddDepends},
+		{"tags", fields.Tags},
+		{"add-tags", fields.AddTags},
+	} {
+		if err := checkTagsUTF8(l.name, l.vals); err != nil {
+			return err
+		}
 	}
-	return checkTagsUTF8("add-tags", fields.AddTags)
+	return nil
 }
 
-// checkTagsUTF8 names the offending tag by index, so the byte offset points
-// into one tag rather than into a joined string the caller never wrote.
+// checkTagsUTF8 names the offending entry of a list field (tags, depends) by
+// index, so the byte offset points into one entry rather than into a joined
+// string the caller never wrote.
 func checkTagsUTF8(field string, tags []string) error {
 	for i, tag := range tags {
 		if err := mgerr.CheckUTF8(fmt.Sprintf("%s[%d]", field, i), tag); err != nil {

@@ -52,6 +52,15 @@ derived at all — no git, no tags, or a build from a source tarball.
   introduces is checked: an item already damaged on disk stays editable, and a
   full `--body` replacement repairs it. There is no read-side scan or repair
   (drellem2/macguffin#41).
+- **The write-time UTF-8 refusal covers every remaining free-text write flag
+  (mg-a6f1c).** `mg new --type`/`--depends`, `mg edit --type`/`--depends`/
+  `--add-depends`, `mg unclaim --assignee`, `mg shelve --override`,
+  `mg mail send --in-reply-to` (and the References it seeds) and
+  `mg event append` (event type and every `--key=value` argument) still accepted
+  invalid bytes and exited 0 -- the item and mail paths stored the byte, the
+  event paths stored U+FFFD in its place. They now exit 2 (`invalid_utf8`) the
+  same way. `--rm-depends`/`--rm-tags` are deliberately unchecked: they add no
+  text, and removing a damaged entry by its exact bytes is how it is repaired.
 - **`./build.sh` builds into `./bin/mg` and no longer installs (mg-e42de).** It
   ran `go install ./cmd/mg`, and the refinery gate runs `./build.sh` on the
   branch being merged, so every gate -- and every polecat build -- replaced the

@@ -30,6 +30,13 @@ import (
 func Shelve(root, id string, opts ...ShelveOption) ([]*Item, error) {
 	o := newShelveOpts(opts)
 
+	// The override reason is recorded verbatim on work.shelve_forced; invalid
+	// UTF-8 there would be silently rewritten to U+FFFD by the JSON encoder
+	// (drellem2/macguffin#41). Checked up front, whether or not a guard fires.
+	if err := mgerr.CheckUTF8("override", o.override); err != nil {
+		return nil, err
+	}
+
 	path, status, err := FindPath(root, id)
 	if err != nil {
 		return nil, err

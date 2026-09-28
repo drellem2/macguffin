@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/event"
+	"github.com/drellem2/macguffin/internal/mgerr"
 	"github.com/spf13/cobra"
 )
 
@@ -56,9 +57,19 @@ Example:
 		}
 
 		eventType := args[0]
+		// Invalid UTF-8 is refused rather than handed to the JSON encoder,
+		// which would silently store U+FFFD in its place (drellem2/macguffin#41).
+		if err := mgerr.CheckUTF8("event type", eventType); err != nil {
+			return err
+		}
 		kvs := make(map[string]string)
 
-		for _, arg := range args[1:] {
+		for i, arg := range args[1:] {
+			// Named by position, so the offset points into the argument
+			// exactly as the caller typed it, "--" included.
+			if err := mgerr.CheckUTF8(fmt.Sprintf("argument %d", i+2), arg); err != nil {
+				return err
+			}
 			if !strings.HasPrefix(arg, "--") {
 				return fmt.Errorf("unexpected positional argument %q (use --key=value)", arg)
 			}

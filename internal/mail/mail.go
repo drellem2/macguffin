@@ -305,8 +305,14 @@ func SendWithOpts(mailRoot, recipient, from, subject, body string, opts SendOpts
 	// decodes a bad byte to U+FFFD and lets it through, so it cannot catch this.
 	for _, f := range []struct{ name, val string }{
 		{"from", from}, {"subject", subject}, {"body", body},
+		{"in-reply-to", opts.InReplyTo},
 	} {
 		if err := mgerr.CheckUTF8(f.name, f.val); err != nil {
+			return "", err
+		}
+	}
+	for i, ref := range opts.References {
+		if err := mgerr.CheckUTF8(fmt.Sprintf("references[%d]", i), ref); err != nil {
 			return "", err
 		}
 	}
