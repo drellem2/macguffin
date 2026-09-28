@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
@@ -18,9 +19,13 @@ var (
 var unshelveCmd = &cobra.Command{
 	Use:   "unshelve [ID]",
 	Short: "Restore a shelved work item and its dependents",
-	Long: `Unshelve restores a previously shelved work item and any of its
-dependents that are also shelved. Items with unmet dependencies are
-placed in pending/; others go to available/.
+	Long: `Unshelve restores a previously shelved work item and the dependents
+that were shelved WITH it — by the shelve cascade, or filed onto it while it
+was shelved. Items with unmet dependencies are placed in pending/; others go
+to available/. A dependent that was shelved ON ITS OWN stays shelved: lifting
+the item does not lift a hold someone put on the dependent. Each one left is
+named ("Left shelved <id>: ...") so you can see what did not move; restore it
+with its own 'mg unshelve <id>'.
 
 Use --tag to restore every shelved item with a given tag, mirroring
 'mg shelve --tag'. Each tagged item comes back exactly as 'mg unshelve <id>'
@@ -77,24 +82,24 @@ not the exit status. Dependents come back as they would without --claim.`,
 				"Run 'mg unshelve <id>' or 'mg unshelve --tag=<tag>'.")
 		}
 
-		var items []*workitem.Item
+		var res workitem.UnshelveResult
 		if unshelveClaim {
 			pid, err := resolveOwnerPID(unshelvePID)
 			if err != nil {
 				return err
 			}
-			items, err = workitem.UnshelveClaim(root, args[0], pid)
+			res, err = workitem.UnshelveClaimReport(root, args[0], pid)
 			if err != nil {
 				return err
 			}
 		} else {
-			items, err = workitem.Unshelve(root, args[0])
+			res, err = workitem.UnshelveReport(root, args[0])
 			if err != nil {
 				return err
 			}
 		}
 
-		for i, item := range items {
+		for i, item := range res.Restored {
 			if i == 0 && unshelveClaim {
 				// Say where the named item landed: --claim may have put it in
 				// pending/ rather than claimed/, and a caller who reads only
@@ -113,20 +118,33 @@ not the exit status. Dependents come back as they would without --claim.`,
 			}
 			fmt.Printf("Unshelved %s: %s\n", item.ID, item.Title)
 		}
+		printLeftShelved(cmd.OutOrStdout(), res.Left)
 		return nil
 	},
 }
 
+// printLeftShelved names the shelved dependents an unshelve deliberately did
+// not restore. It is not a failure — the hold is theirs — so it goes to stdout
+// and the exit status stays 0; but it is printed, because an unshelve that
+// names only what moved reads the same as one that moved everything.
+func printLeftShelved(w io.Writer, left []workitem.LeftShelved) {
+	for _, l := range left {
+		fmt.Fprintf(w, "Left shelved %s: %s (%s) — 'mg unshelve %s' restores it\n",
+			l.Item.ID, l.Item.Title, l.Reason, l.Item.ID)
+	}
+}
+
 // unshelveByTag runs the bulk form and reports both halves of what it did.
 func unshelveByTag(cmd *cobra.Command, root, tag string) error {
-	items, skipped, err := workitem.UnshelveByTag(root, tag)
+	res, skipped, err := workitem.UnshelveByTagReport(root, tag)
 	if err != nil {
 		return err
 	}
 	out := cmd.OutOrStdout()
-	for _, item := range items {
+	for _, item := range res.Restored {
 		fmt.Fprintf(out, "Unshelved %s: %s\n", item.ID, item.Title)
 	}
+	printLeftShelved(out, res.Left)
 	if len(skipped) > 0 {
 		w := cmd.ErrOrStderr()
 		fmt.Fprintf(w, "Could not unshelve %d tagged item(s):\n", len(skipped))
