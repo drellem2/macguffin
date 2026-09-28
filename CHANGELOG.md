@@ -62,6 +62,17 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Fixed
 
+- **`mg unshelve` restores only the dependents shelved WITH the item
+  (mg-3066c).** It brought back every shelved dependent, so one an operator had
+  shelved on its own was silently un-held when its parent came back. A dependent
+  now returns only when its latest `work.shelve` names a restored item in
+  `cascaded_from`, or when it has no `work.shelve` for its current stay (it was
+  filed onto the already-shelved parent). Every dependent left behind is named
+  -- `Left shelved <id>: <title> (<reason>)` -- and the exit status stays 0.
+  `work.unshelve` now carries `cascaded_from`, mirroring `work.shelve`. A
+  `work.shelve` written before cascades were recorded cannot tell the two
+  apart, so that dependent stays and is named with that reason.
+
 - The shell suites `scripts/e2e_milestones_test.sh` and `scripts/event_test.sh`
   no longer touch the live store. Their `clean()` helper used to recursively
   delete the default store under the real home, and on 2026-09-27 a manual run

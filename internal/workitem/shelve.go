@@ -227,7 +227,8 @@ func ShelveByTag(root, tag string) (shelved []*Item, skipped []SkippedItem, err 
 // It routes every item through Unshelve rather than moving anything itself, so
 // the targeted form's routing holds here too: gates decide pending/ versus
 // available/, a snooze survives, and the dependents shelved along with each
-// item come back with it — INCLUDING dependents that do not carry the tag,
+// item come back with it (and ONLY those — a dependent shelved on its own
+// stays, see UnshelveReport) — INCLUDING dependents that do not carry the tag,
 // because that is how the shelve cascade put them on the shelf and how
 // 'mg unshelve <id>' brings them back.
 //
@@ -236,9 +237,16 @@ func ShelveByTag(root, tag string) (shelved []*Item, skipped []SkippedItem, err 
 // RETURNED rather than swallowed, as in ShelveByTag, so a restore that quietly
 // missed part of its own selection cannot pass for one that got all of it.
 func UnshelveByTag(root, tag string) (unshelved []*Item, skipped []SkippedItem, err error) {
+	res, skipped, err := UnshelveByTagReport(root, tag)
+	return res.Restored, skipped, err
+}
+
+// UnshelveByTagReport is UnshelveByTag, reporting as well the shelved
+// dependents that no tagged item's restore brought back (see UnshelveReport).
+func UnshelveByTagReport(root, tag string) (res UnshelveResult, skipped []SkippedItem, err error) {
 	items, err := ListByStatus(root, "shelved")
 	if err != nil {
-		return nil, nil, err
+		return UnshelveResult{}, nil, err
 	}
 	var toUnshelve []*Item
 	for _, item := range items {
@@ -251,10 +259,15 @@ func UnshelveByTag(root, tag string) (unshelved []*Item, skipped []SkippedItem, 
 	}
 
 	if len(toUnshelve) == 0 {
-		return nil, nil, fmt.Errorf("no shelved items found with tag %q", tag)
+		return UnshelveResult{}, nil, fmt.Errorf("no shelved items found with tag %q", tag)
 	}
 
+	tagged := make(map[string]bool, len(toUnshelve))
+	for _, item := range toUnshelve {
+		tagged[item.ID] = true
+	}
 	unshelvedSet := make(map[string]bool)
+	var left []LeftShelved
 	for _, item := range toUnshelve {
 		if unshelvedSet[item.ID] {
 			continue
@@ -262,26 +275,78 @@ func UnshelveByTag(root, tag string) (unshelved []*Item, skipped []SkippedItem, 
 		if st, err := Status(root, item.ID); err == nil && st != "shelved" {
 			continue
 		}
-		restored, err := Unshelve(root, item.ID)
+		r, err := UnshelveReport(root, item.ID)
 		if err != nil {
 			skipped = append(skipped, SkippedItem{Item: item, Reason: err})
 			continue
 		}
-		for _, it := range restored {
+		for _, it := range r.Restored {
 			if !unshelvedSet[it.ID] {
 				unshelvedSet[it.ID] = true
-				unshelved = append(unshelved, it)
+				res.Restored = append(res.Restored, it)
 			}
 		}
+		left = append(left, r.Left...)
 	}
 
-	return unshelved, skipped, nil
+	// One item's restore may leave a dependent that a later tagged item's
+	// restore brings back; report only what is still on the shelf, each once.
+	// A tagged item is never reported here: the operator selected it, and it
+	// is either restored or in skipped with its own reason.
+	leftSeen := make(map[string]bool)
+	for _, l := range left {
+		if unshelvedSet[l.Item.ID] || tagged[l.Item.ID] || leftSeen[l.Item.ID] {
+			continue
+		}
+		if st, err := Status(root, l.Item.ID); err == nil && st != "shelved" {
+			continue
+		}
+		leftSeen[l.Item.ID] = true
+		res.Left = append(res.Left, l)
+	}
+
+	return res, skipped, nil
 }
 
 // Unshelve restores a shelved work item. Items with unmet dependencies go
-// to pending/; otherwise they go to available/. Returns all unshelved items.
+// to pending/; otherwise they go to available/. Returns all unshelved items:
+// the named one first, then the dependents that were shelved WITH it (see
+// UnshelveReport for the ones it deliberately leaves behind).
 func Unshelve(root, id string) ([]*Item, error) {
-	return unshelve(root, id, false, 0)
+	res, err := UnshelveReport(root, id)
+	return res.Restored, err
+}
+
+// LeftShelved is a shelved dependent an unshelve did NOT restore, with why.
+type LeftShelved struct {
+	Item   *Item
+	Reason string
+}
+
+// UnshelveResult is what one unshelve did: the items it restored, the named
+// item first, and the shelved dependents it found and left where they are.
+//
+// Left is part of the result rather than a log line because the whole point of
+// leaving an item is that the operator should SEE what did not move: an
+// unshelve that names only what it restored reads identically to one that
+// restored everything (mg-3066c).
+type UnshelveResult struct {
+	Restored []*Item
+	Left     []LeftShelved
+}
+
+// UnshelveReport is Unshelve, reporting the dependents it left shelved as well.
+//
+// A shelved dependent comes back only when it was shelved WITH the chain being
+// restored: its latest work.shelve names an item of that chain in
+// cascaded_from. One shelved ON ITS OWN — deliberately, before or after its
+// parent — stays shelved, because restoring it would silently lift a hold
+// nobody asked to lift (the one-way door of drellem2/macguffin#34, pointed the
+// other way). A dependent with no work.shelve for its current stay on the
+// shelf was never held by anyone: it was FILED onto an already-shelved parent,
+// born under the hold, and it comes back with the parent as README says.
+func UnshelveReport(root, id string) (UnshelveResult, error) {
+	return unshelveTop(root, id, false, 0)
 }
 
 // UnshelveClaim restores a shelved work item that was CLAIMED when it was
@@ -300,7 +365,99 @@ func Unshelve(root, id string) ([]*Item, error) {
 // something --claim may manufacture. Dependents come back exactly as a plain
 // unshelve brings them back — the claim applies to the named item only.
 func UnshelveClaim(root, id string, pid int) ([]*Item, error) {
-	return unshelve(root, id, true, pid)
+	res, err := UnshelveClaimReport(root, id, pid)
+	return res.Restored, err
+}
+
+// UnshelveClaimReport is UnshelveClaim, reporting the dependents it left
+// shelved as well — by the same rule as UnshelveReport.
+func UnshelveClaimReport(root, id string, pid int) (UnshelveResult, error) {
+	return unshelveTop(root, id, true, pid)
+}
+
+// unshelveTop runs one operator-level unshelve: it reads the shelve records
+// once, restores the chain, and settles which dependents were left.
+func unshelveTop(root, id string, claim bool, pid int) (UnshelveResult, error) {
+	st := &unshelveRun{
+		records: currentShelveRecords(root),
+		chain:   make(map[string]bool),
+		left:    make(map[string]LeftShelved),
+	}
+	restored, err := unshelve(root, id, claim, pid, "", st)
+	if err != nil {
+		return UnshelveResult{}, err
+	}
+	res := UnshelveResult{Restored: restored}
+	// A dependent looked at before the chain member it was shelved with had
+	// come back is recorded as left, then restored when that member's turn
+	// came. Only what is STILL left is reported.
+	for _, lid := range st.leftOrder {
+		if !st.chain[lid] {
+			res.Left = append(res.Left, st.left[lid])
+		}
+	}
+	return res, nil
+}
+
+// unshelveRun is the state of one operator-level unshelve.
+type unshelveRun struct {
+	// records maps an item id to the work.shelve that put it on the shelf
+	// THIS time; see currentShelveRecords. nil when the log is unreadable.
+	records map[string]map[string]string
+	// chain is every item this unshelve has restored so far.
+	chain     map[string]bool
+	left      map[string]LeftShelved
+	leftOrder []string
+}
+
+// currentShelveRecords returns, per item, the payload of the work.shelve that
+// put it where it is now: its latest work.shelve, unless a work.unshelve for
+// it came later — then its current stay on the shelf has no work.shelve at all
+// (it was filed, or moved, there under a hold) and it has no entry.
+//
+// It returns nil when the log cannot be read: the caller must not read "no
+// entry" as "never deliberately shelved" when it could not look.
+func currentShelveRecords(root string) map[string]map[string]string {
+	entries, err := event.List(root, event.ListOpts{})
+	if err != nil {
+		return nil
+	}
+	recs := make(map[string]map[string]string)
+	for _, e := range entries {
+		switch e.Type {
+		case "work.shelve":
+			recs[e.Extra["item_id"]] = e.Extra
+		case "work.unshelve":
+			delete(recs, e.Extra["item_id"])
+		}
+	}
+	return recs
+}
+
+// shelvedWithChain decides whether a shelved dependent comes back with the
+// chain being restored, and when it does not, says why.
+func (st *unshelveRun) shelvedWithChain(depID string) (bool, string) {
+	if st.records == nil {
+		return false, "the event log could not be read, so mg cannot tell whether it was shelved with this item"
+	}
+	rec, ok := st.records[depID]
+	if !ok {
+		// Filed onto an already-shelved parent: never held on its own.
+		return true, ""
+	}
+	if from := rec["cascaded_from"]; from != "" {
+		if st.chain[from] {
+			return true, ""
+		}
+		return false, fmt.Sprintf("shelved along with %s, not with this item", from)
+	}
+	if _, ok := rec["dependents"]; !ok {
+		// Written before shelve recorded cascades (mg-2cf0): a cascaded and a
+		// deliberate shelve look the same, and leaving it is the error that
+		// can be undone with one command.
+		return false, "its shelve record predates cascade tracking, so mg cannot tell it was shelved with this item"
+	}
+	return false, "shelved on its own"
 }
 
 // shelvedFrom returns the status id held when it was last shelved, read from
@@ -339,7 +496,10 @@ func errNotShelvedFromClaimed(id, from string) *mgerr.Error {
 	)
 }
 
-func unshelve(root, id string, claim bool, pid int) ([]*Item, error) {
+// unshelve restores one item and, recursively, the dependents shelved with it.
+// cascadedFrom names the chain member whose restore pulled this item in, and
+// is "" for the item the operator named.
+func unshelve(root, id string, claim bool, pid int, cascadedFrom string, st *unshelveRun) ([]*Item, error) {
 	m, err := ResolveUnique(root, id)
 	if err != nil {
 		return nil, err
@@ -380,6 +540,11 @@ func unshelve(root, id string, claim bool, pid int) ([]*Item, error) {
 		"item_id":     id,
 		"from_status": "shelved",
 		"actor":       actor(),
+	}
+	// Mirrors work.shelve: the restore that pulled this item in is stated in
+	// the payload, not inferred from line order.
+	if cascadedFrom != "" {
+		kvs["cascaded_from"] = cascadedFrom
 	}
 	var dst string
 	if claim && subdir == "available" {
@@ -432,15 +597,27 @@ func unshelve(root, id string, claim bool, pid int) ([]*Item, error) {
 	}
 
 	unshelved := []*Item{item}
+	st.chain[item.ID] = true
 
-	// Unshelve dependents that were shelved along with this item
+	// Unshelve the dependents that were shelved along with this item — and
+	// ONLY those: a dependent shelved on its own stays, and is reported.
 	dependents, err := findShelvedDependents(root, id)
 	if err != nil {
 		return unshelved, nil
 	}
 
 	for _, dep := range dependents {
-		more, err := unshelve(root, dep.ID, false, 0)
+		if st.chain[dep.ID] {
+			continue
+		}
+		if ok, why := st.shelvedWithChain(dep.ID); !ok {
+			if _, seen := st.left[dep.ID]; !seen {
+				st.leftOrder = append(st.leftOrder, dep.ID)
+			}
+			st.left[dep.ID] = LeftShelved{Item: dep, Reason: why}
+			continue
+		}
+		more, err := unshelve(root, dep.ID, false, 0, item.ID, st)
 		if err != nil {
 			continue
 		}
