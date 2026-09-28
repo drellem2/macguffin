@@ -167,3 +167,130 @@ func TestDoneSuccessor_BacklinkFailureDoesNotFailDone(t *testing.T) {
 		t.Errorf("work.edited events on the design = %d, want 1", n)
 	}
 }
+
+// assertOneTagEdit checks that id has exactly one work.edited, and that it is a
+// metadata tag change from before to after attributed to the invoker.
+func assertOneTagEdit(t *testing.T, root, id, before, after string) {
+	t.Helper()
+	edits := eventsFor(t, root, "work.edited", id)
+	if len(edits) != 1 {
+		t.Fatalf("%s: work.edited events = %d, want 1", id, len(edits))
+	}
+	e := edits[0]
+	want := map[string]string{
+		"actor":       probeInvoker,
+		"mode":        "metadata",
+		"fields":      "tags",
+		"tags_before": before,
+		"tags_after":  after,
+	}
+	for k, v := range want {
+		if e[k] != v {
+			t.Errorf("%s: %s = %q, want %q", id, k, e[k], v)
+		}
+	}
+	if e["body_hash_before"] == "" || e["body_hash_before"] != e["body_hash_after"] {
+		t.Errorf("%s: body hashes %q/%q, want equal and non-empty", id, e["body_hash_before"], e["body_hash_after"])
+	}
+}
+
+// TestDonePlain_ReconciledBacklinkEmitsTagEdit: plain `mg done` (no
+// --successor) reconciles the reverse half of a successor: tag filed by
+// another route, and that predecessor: write is a tag change like any other.
+// The design's own tags are untouched, so it gets no work.edited.
+func TestDonePlain_ReconciledBacklinkEmitsTagEdit(t *testing.T) {
+	asInvoker(t)
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	follow, err := Create(root, "mg-", "task", "Follow-up", nil, WithAssignee(probeAssignee))
+	if err != nil {
+		t.Fatalf("Create follow-up: %v", err)
+	}
+	design, err := Create(root, "mg-", "task", "Design", nil,
+		WithTags([]string{SuccessorTag(follow.ID)}), WithAssignee(probeAssignee))
+	if err != nil {
+		t.Fatalf("Create design: %v", err)
+	}
+	if _, err := Claim(root, design.ID, 4242); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if _, _, err := Done(root, design.ID, nil); err != nil {
+		t.Fatalf("Done: %v", err)
+	}
+
+	assertOneTagEdit(t, root, follow.ID, "", PredecessorTag(design.ID))
+	if n := len(eventsFor(t, root, "work.edited", design.ID)); n != 0 {
+		t.Errorf("work.edited events on the design = %d, want 0 (its tags did not change)", n)
+	}
+}
+
+// doneTask files and completes a plain task, returning it.
+func doneTask(t *testing.T, root, title string) *Item {
+	t.Helper()
+	item, err := Create(root, "mg-", "task", title, nil)
+	if err != nil {
+		t.Fatalf("Create %s: %v", title, err)
+	}
+	if _, err := Claim(root, item.ID, 4242); err != nil {
+		t.Fatalf("Claim %s: %v", title, err)
+	}
+	if _, _, err := Done(root, item.ID, nil); err != nil {
+		t.Fatalf("Done %s: %v", title, err)
+	}
+	return item
+}
+
+// TestArchiveSuccessor_EmitsTagEditsOnBothItems: `mg archive --successor`
+// shares linkSuccessorBothWays with done, so both of its tag writes log.
+func TestArchiveSuccessor_EmitsTagEditsOnBothItems(t *testing.T) {
+	asInvoker(t)
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	design := doneTask(t, root, "Design")
+	follow, err := Create(root, "mg-", "task", "Follow-up", nil)
+	if err != nil {
+		t.Fatalf("Create follow-up: %v", err)
+	}
+	if _, err := ArchiveItem(root, design.ID, ArchiveOpts{Successor: follow.ID}); err != nil {
+		t.Fatalf("ArchiveItem: %v", err)
+	}
+
+	assertOneTagEdit(t, root, design.ID, "", SuccessorTag(follow.ID))
+	assertOneTagEdit(t, root, follow.ID, "", PredecessorTag(design.ID))
+}
+
+// TestArchivePlain_ReconciledBacklinkEmitsTagEdit: plain `mg archive <id>`
+// closes the reverse link of a successor: tag the done run never reciprocated
+// (here written straight to the done file, as a pre-reciprocity link would be),
+// and that write logs as a tag change.
+func TestArchivePlain_ReconciledBacklinkEmitsTagEdit(t *testing.T) {
+	asInvoker(t)
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	design := doneTask(t, root, "Design")
+	follow, err := Create(root, "mg-", "task", "Follow-up", nil)
+	if err != nil {
+		t.Fatalf("Create follow-up: %v", err)
+	}
+	donePath := filepath.Join(root, "work", "done", design.ID+".md")
+	onDisk, err := readFile(donePath)
+	if err != nil {
+		t.Fatalf("read done item: %v", err)
+	}
+	onDisk.Tags = append(onDisk.Tags, SuccessorTag(follow.ID))
+	if err := os.WriteFile(donePath, []byte(Render(onDisk)), 0o644); err != nil {
+		t.Fatalf("write successor tag: %v", err)
+	}
+
+	if _, err := ArchiveItem(root, design.ID, ArchiveOpts{}); err != nil {
+		t.Fatalf("ArchiveItem: %v", err)
+	}
+
+	assertOneTagEdit(t, root, follow.ID, "", PredecessorTag(design.ID))
+	if n := len(eventsFor(t, root, "work.edited", design.ID)); n != 0 {
+		t.Errorf("work.edited events on the design = %d, want 0 (its tags did not change)", n)
+	}
+}

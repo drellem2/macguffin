@@ -27,9 +27,12 @@ derived at all — no git, no tags, or a build from a source tarball.
   now records the item's initial `tags`, and the `successor:`/`predecessor:`
   tags written by `mg done --successor` and `mg archive --successor` each emit
   `work.edited` (`mode=metadata`, `fields=tags`, `tags_before`/`tags_after`,
-  `actor` = the invoker). Before, those writes left only `work.done` in the
-  log. The predecessor backlink stays best-effort and its event can never fail
-  the done. Consumers switching on `work.edited` see these two new sources.
+  `actor` = the invoker). So does the `predecessor:` backlink that plain
+  `mg done` and `mg archive` write when reconciling a `successor:` tag filed
+  by another route (`mg edit --add-tags`, `mg new --tags`). Before, those
+  writes left only `work.done` in the log. The predecessor backlink stays
+  best-effort and its event can never fail the done or the archive. Consumers
+  switching on `work.edited` see these new sources.
 
 - `mg unshelve <id> --claim [--pid N]` takes back an item that was claimed when
   it was shelved, moving it from `shelved/` straight into `claimed/` as the
