@@ -64,6 +64,35 @@ func TestEmitCreated(t *testing.T) {
 	}
 }
 
+func TestEmitCreatedCarriesAssignee(t *testing.T) {
+	root := t.TempDir()
+	setupDirs(t, root)
+
+	if _, err := Create(root, "mg-", "bug", "Assigned", nil, WithAssignee("alice")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := Create(root, "mg-", "bug", "Unassigned", nil); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var created []event.Entry
+	for _, e := range readEvents(t, root) {
+		if e.Type == "work.created" {
+			created = append(created, e)
+		}
+	}
+	if len(created) != 2 {
+		t.Fatalf("expected 2 work.created events, got %d", len(created))
+	}
+	if got := created[0].Extra["assignee"]; got != "alice" {
+		t.Errorf("assignee = %q, want alice", got)
+	}
+	// Absent, not empty: a consumer tells "unassigned" from "field present".
+	if v, ok := created[1].Extra["assignee"]; ok {
+		t.Errorf("unassigned item's work.created carries assignee=%q; want the field omitted", v)
+	}
+}
+
 func TestEmitCreatedWithDeps(t *testing.T) {
 	root := t.TempDir()
 	setupDirs(t, root)

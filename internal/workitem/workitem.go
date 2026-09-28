@@ -259,11 +259,20 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 			return nil, ioErr(fmt.Sprintf("could not create work item: %s", fsErrText(err)))
 		}
 
-		event.Emit(root, "work.created", map[string]string{
+		created := map[string]string{
 			"item_id":   id,
 			"to_status": subdir,
 			"actor":     actor(),
-		})
+		}
+		// The assignee rides on the event so a consumer (pogo's wakewatch)
+		// learns who the item is for without reading the item file — a read
+		// that costs a disk hit per creation and loses the pointer if the
+		// item moves between event and read (mg-77ad). Omitted when unset,
+		// so "no field" keeps meaning "no assignee".
+		if item.Assignee != "" {
+			created["assignee"] = item.Assignee
+		}
+		event.Emit(root, "work.created", created)
 
 		return item, nil
 	}
