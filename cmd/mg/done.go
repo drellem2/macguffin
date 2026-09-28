@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/drellem2/macguffin/internal/mgerr"
 	"github.com/drellem2/macguffin/internal/workitem"
 	"github.com/spf13/cobra"
 )
@@ -91,6 +92,11 @@ before.`,
 
 		var resultJSON json.RawMessage
 		if doneResult != "" {
+			// json.Valid accepts invalid UTF-8 inside a string, so it is
+			// checked separately (drellem2/macguffin#41).
+			if err := mgerr.CheckUTF8("result", doneResult); err != nil {
+				return err
+			}
 			raw := json.RawMessage(doneResult)
 			if !json.Valid(raw) {
 				return fmt.Errorf("invalid JSON for --result: %s", doneResult)

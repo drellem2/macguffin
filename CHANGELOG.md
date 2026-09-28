@@ -43,6 +43,15 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Changed
 
+- **Invalid UTF-8 is refused at write time.** `mg new`, `mg edit` (`--title`,
+  `--body`/`--body-file`, `--append-body`/`--append-body-file`, `--tags`,
+  `--add-tags`, `--assignee`, `--repo`), `mg mail send` (from, subject, body) and
+  `mg done --result` used to store whatever bytes they were given and exit 0.
+  They now exit 2 (`invalid_utf8`) with a message naming the field and the byte
+  offset of the first bad byte, and nothing is written. Only the text a write
+  introduces is checked: an item already damaged on disk stays editable, and a
+  full `--body` replacement repairs it. There is no read-side scan or repair
+  (drellem2/macguffin#41).
 - **`./build.sh` builds into `./bin/mg` and no longer installs (mg-e42de).** It
   ran `go install ./cmd/mg`, and the refinery gate runs `./build.sh` on the
   branch being merged, so every gate -- and every polecat build -- replaced the

@@ -213,6 +213,13 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 		}
 	}
 
+	// Text this edit introduces must be valid UTF-8 (drellem2/macguffin#41).
+	// Before any field is applied, so a refusal leaves the item byte-identical;
+	// the stored body is not checked, so a damaged item can still be repaired.
+	if err := checkUpdateUTF8(fields); err != nil {
+		return nil, nil, err
+	}
+
 	// The title as stored, i.e. as Parse derived it from the body's first
 	// heading. The guard below compares against this.
 	titleBefore := item.Title

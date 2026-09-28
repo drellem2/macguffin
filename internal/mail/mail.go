@@ -300,6 +300,16 @@ func SendWithOpts(mailRoot, recipient, from, subject, body string, opts SendOpts
 	if err := checkMailbox(recipient); err != nil {
 		return "", err
 	}
+	// Invalid UTF-8 is refused before anything is written
+	// (drellem2/macguffin#41). checkHeaderValue ranges over runes, which
+	// decodes a bad byte to U+FFFD and lets it through, so it cannot catch this.
+	for _, f := range []struct{ name, val string }{
+		{"from", from}, {"subject", subject}, {"body", body},
+	} {
+		if err := mgerr.CheckUTF8(f.name, f.val); err != nil {
+			return "", err
+		}
+	}
 	if err := checkHeaderValue("From", from); err != nil {
 		return "", err
 	}

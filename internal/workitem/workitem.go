@@ -230,6 +230,11 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 			opt(item)
 		}
 
+		// Invalid UTF-8 is refused before any write (drellem2/macguffin#41).
+		if err := checkNewItemUTF8(item); err != nil {
+			return nil, err
+		}
+
 		// One fact, one marker: a workflow tag and the body's leading
 		// `workflow:` line must agree, and the body is the source of truth
 		// (see workflowmarker.go). Refuses BEFORE any write, so a rejected
