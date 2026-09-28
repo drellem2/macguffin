@@ -43,6 +43,14 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Changed
 
+- **`./build.sh` builds into `./bin/mg` and no longer installs (mg-e42de).** It
+  ran `go install ./cmd/mg`, and the refinery gate runs `./build.sh` on the
+  branch being merged, so every gate -- and every polecat build -- replaced the
+  host's live `~/go/bin/mg` with an unmerged, often `.dirty`, branch build, even
+  for a branch that then failed its gate. Installing is now explicit:
+  `./build.sh --install`, run from a checkout you mean to deploy. `MG_BUILD_DIR`
+  overrides the output directory; an unknown argument is refused (exit 2).
+
 - New work item ids are 5 hex characters (`mg-3e4c3`, ~1M ids) instead of 4
   (~65k). Stores are measured including the archive, and real ones had grown to
   thousands of items, where 4 characters collide routinely. Existing 4-character

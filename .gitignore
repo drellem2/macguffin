@@ -12,3 +12,6 @@
 
 # OS files
 .DS_Store
+
+# Build output (./build.sh)
+/bin/

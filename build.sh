@@ -1,5 +1,18 @@
 #!/bin/sh
-# Build and install the mg binary to $GOPATH/bin
+# build.sh -- check formatting and compile mg into ./bin/mg.
+#
+# build.sh does NOT `go install` by default. It runs in polecat worktrees and as
+# the refinery's merge gate, on the branch being merged, so an install here
+# replaced the fleet's live ~/go/bin/mg with an unmerged -- and, from a gate's
+# worktree, often ".dirty" -- branch build. It happened even when the branch
+# then FAILED its gate, because the install ran first (mg-e42de). Installing is
+# something you do on purpose, from a checkout you mean to deploy:
+#
+#   ./build.sh              # gofmt check + build into ./bin/mg
+#   ./build.sh --install    # ...and also `go install ./cmd/mg` into GOBIN
+#
+# Environment:
+#   MG_BUILD_DIR   Output directory for the built binary. Default: ./bin
 set -e
 
 cd "$(dirname "$0")"
@@ -93,7 +106,27 @@ derive_version() {
     printf 'v%s.%s.%s-dev.%s+%s\n' "$maj" "$min" "$((pat + 1))" "$dist" "$meta"
 }
 
+usage() {
+    cat <<'EOF'
+Usage:
+  ./build.sh              # gofmt check + build into ./bin/mg
+  ./build.sh --install    # ...and also `go install ./cmd/mg` into GOBIN
+
+Environment:
+  MG_BUILD_DIR   Output directory for the built binary. Default: ./bin
+EOF
+}
+
 main() {
+    do_install=0
+    for arg in "$@"; do
+        case "$arg" in
+            --install) do_install=1 ;;
+            -h|--help) usage; return 0 ;;
+            *) echo "build.sh: unknown argument: $arg" >&2; usage >&2; exit 2 ;;
+        esac
+    done
+
     # Check formatting
     unformatted=$(gofmt -l .)
     if [ -n "$unformatted" ]; then
@@ -108,20 +141,27 @@ main() {
     # status is suppressed on purpose rather than tripping `set -e`.
     version=$(derive_version .) || version=
 
-    # go install honours GOBIN over GOPATH/bin; report where it actually went.
-    dest="${GOBIN:-$(go env GOPATH)/bin}"
-
     if [ -n "$version" ]; then
         commit=$(git rev-parse --short HEAD)
         date=$(git log -1 --format=%cs)
-        go install -ldflags \
-            "-X main.version=${version} -X main.commit=${commit} -X main.date=${date}" \
-            ./cmd/mg
-        echo "Installed: ${dest}/mg (${version})"
+        ldflags="-X main.version=${version} -X main.commit=${commit} -X main.date=${date}"
+        label="$version"
     else
-        go install ./cmd/mg
-        echo "Installed: ${dest}/mg (unstamped; reports 'dev')"
+        ldflags=
+        label="unstamped; reports 'dev'"
     fi
+
+    out="${MG_BUILD_DIR:-./bin}"
+    mkdir -p "$out"
+    go build -ldflags "$ldflags" -o "${out}/mg" ./cmd/mg
+    echo "Built: ${out}/mg (${label})"
+
+    [ "$do_install" = 1 ] || return 0
+
+    # go install honours GOBIN over GOPATH/bin; report where it actually went.
+    dest="${GOBIN:-$(go env GOPATH)/bin}"
+    go install -ldflags "$ldflags" ./cmd/mg
+    echo "Installed: ${dest}/mg (${label})"
 }
 
 [ -n "${MG_BUILD_SKIP_MAIN:-}" ] || main "$@"

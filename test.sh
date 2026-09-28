@@ -6,6 +6,7 @@ cd "$(dirname "$0")"
 go test ./...
 sh scripts/test-shadow.sh
 sh scripts/test-build-version.sh
+sh scripts/test-build-noinstall.sh
 sh scripts/test-install-guard.sh
 sh scripts/test-install-auth.sh
 

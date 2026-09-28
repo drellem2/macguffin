@@ -92,8 +92,13 @@ sh uninstall.sh                        # removes binary + shadow symlink
 Requires Go 1.24+ to build from source:
 
 ```bash
-go install ./cmd/mg
+./build.sh              # gofmt check + build into ./bin/mg (installs nothing)
+./build.sh --install    # ...and also install into GOBIN (~/go/bin by default)
 ```
+
+`./build.sh` deliberately does not install by default: it is also the merge
+gate, and a gate that installs replaces the host's live `mg` with the branch
+under review.
 
 ## Quick Start
 
