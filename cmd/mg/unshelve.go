@@ -22,7 +22,9 @@ var unshelveCmd = &cobra.Command{
 	Long: `Unshelve restores a previously shelved work item and the dependents
 that were shelved WITH it — by the shelve cascade, or filed onto it while it
 was shelved. Items with unmet dependencies are placed in pending/; others go
-to available/. A dependent that was shelved ON ITS OWN stays shelved: lifting
+to available/. The named item is reported first; the dependents restored with
+it are listed after it under "Also unshelved N dependent item(s):", so a
+cascaded id never reads as the one you asked for. A dependent that was shelved ON ITS OWN stays shelved: lifting
 the item does not lift a hold someone put on the dependent. Each one left is
 named ("Left shelved <id>: ...") so you can see what did not move; restore it
 with its own 'mg unshelve <id>'.
@@ -99,28 +101,47 @@ not the exit status. Dependents come back as they would without --claim.`,
 			}
 		}
 
-		for i, item := range res.Restored {
-			if i == 0 && unshelveClaim {
-				// Say where the named item landed: --claim may have put it in
-				// pending/ rather than claimed/, and a caller who reads only
-				// "Unshelved" would go on to work an item it does not hold.
-				switch st, err := workitem.Status(root, item.ID); {
-				case err != nil:
-					fmt.Printf("Unshelved %s: %s (could not confirm the claim: %v)\n", item.ID, item.Title, err)
-				case st == "claimed":
-					fmt.Printf("Unshelved and claimed %s: %s\n", item.ID, item.Title)
-				case st == "pending":
-					fmt.Printf("Unshelved %s: %s (not claimed: it is pending — its gates are not open)\n", item.ID, item.Title)
-				default:
-					fmt.Printf("Unshelved %s: %s (not claimed: it is %s)\n", item.ID, item.Title, st)
-				}
-				continue
+		// The named item is always first in Restored; the rest are the
+		// dependents the restore pulled in, reported under their own label.
+		out := cmd.OutOrStdout()
+		item := res.Restored[0]
+		if unshelveClaim {
+			// Say where the named item landed: --claim may have put it in
+			// pending/ rather than claimed/, and a caller who reads only
+			// "Unshelved" would go on to work an item it does not hold.
+			switch st, err := workitem.Status(root, item.ID); {
+			case err != nil:
+				fmt.Fprintf(out, "Unshelved %s: %s (could not confirm the claim: %v)\n", item.ID, item.Title, err)
+			case st == "claimed":
+				fmt.Fprintf(out, "Unshelved and claimed %s: %s\n", item.ID, item.Title)
+			case st == "pending":
+				fmt.Fprintf(out, "Unshelved %s: %s (not claimed: it is pending — its gates are not open)\n", item.ID, item.Title)
+			default:
+				fmt.Fprintf(out, "Unshelved %s: %s (not claimed: it is %s)\n", item.ID, item.Title, st)
 			}
-			fmt.Printf("Unshelved %s: %s\n", item.ID, item.Title)
+		} else {
+			fmt.Fprintf(out, "Unshelved %s: %s\n", item.ID, item.Title)
 		}
-		printLeftShelved(cmd.OutOrStdout(), res.Left)
+		reportUnshelveCascade(out, res.Restored[1:])
+		printLeftShelved(out, res.Left)
 		return nil
 	},
+}
+
+// reportUnshelveCascade names the dependents an unshelve restored that the
+// operator did not name, under a label, mirroring reportCascade in shelve.go.
+// Printed with the same unlabelled "Unshelved <id>" line as the requested item,
+// a cascaded id read as if the caller had passed it, so the command looked like
+// it had acted on the wrong item (drellem2/macguffin#39). Every id is listed,
+// not counted, for the reason mg-2cf0 gave on the shelve side.
+func reportUnshelveCascade(w io.Writer, dependents []*workitem.Item) {
+	if len(dependents) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "Also unshelved %d dependent item(s):\n", len(dependents))
+	for _, d := range dependents {
+		fmt.Fprintf(w, "  %s: %s\n", d.ID, d.Title)
+	}
 }
 
 // printLeftShelved names the shelved dependents an unshelve deliberately did
