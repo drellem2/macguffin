@@ -35,6 +35,14 @@ release:
 
 homebrew_casks:
   - name: mg
+    # Generate the cask but do NOT push it to drellem2/homebrew-tap (mg-b0f0a).
+    # HOMEBREW_TAP_GITHUB_TOKEN returns 401, and a failed tap push turns the
+    # release run red AFTER the GitHub release and its assets are already
+    # published (v0.4.0). The cask is still written to
+    # dist/homebrew/Casks/mg.rb, and release.yml uploads it as the
+    # `homebrew-cask` workflow artifact so the tap can be updated by hand.
+    # To flip back: rotate the token (mg-f940), then delete this line.
+    skip_upload: true
     binaries:
       - mg
     repository:

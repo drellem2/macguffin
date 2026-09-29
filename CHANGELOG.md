@@ -54,6 +54,14 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Changed
 
+- **A release no longer pushes the Homebrew cask to `drellem2/homebrew-tap`**
+  (`skip_upload: true`, until the tap token is rotated — mg-f940). The tap
+  token returns 401, which turned the v0.4.0 release run red after the GitHub
+  release and its assets had already published. goreleaser still generates the
+  cask, and the release workflow uploads it as the `homebrew-cask` artifact, so
+  the tap can be updated by hand; until it is, `brew install --cask
+  drellem2/tap/mg` installs the last cask pushed there.
+
 - **Invalid UTF-8 is refused at write time.** `mg new`, `mg edit` (`--title`,
   `--body`/`--body-file`, `--append-body`/`--append-body-file`, `--tags`,
   `--add-tags`, `--assignee`, `--repo`), `mg mail send` (from, subject, body) and

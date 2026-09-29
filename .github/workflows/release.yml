@@ -24,3 +24,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+      # The cask is generated but not pushed to the tap (skip_upload in
+      # .goreleaser.yml, mg-b0f0a). Keep it as an artifact so the tap can be
+      # updated by hand. No continue-on-error on the goreleaser step: a failed
+      # GitHub release must still fail this run.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: homebrew-cask
+          path: dist/homebrew/**
+          if-no-files-found: error
