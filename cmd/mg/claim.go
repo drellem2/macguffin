@@ -35,7 +35,16 @@ func resolveOwnerPID(flagPID int) (int, error) {
 var claimCmd = &cobra.Command{
 	Use:   "claim ID",
 	Short: "Atomically claim a work item by ID",
-	Args:  usageArgs(cobra.ExactArgs(1)),
+	Long: `Atomically claim a work item by ID, moving it from available/ to claimed/.
+
+A claim succeeds ONLY from available/; there is no gate bypass. Any other item
+is refused with exit 4 (conflict) and an error naming where it is: a pending
+item (an unmet ` + "`depends:`" + ` or an unelapsed ` + "`snooze:`" + `) is refused as "not available
+yet", a shelved item as "is shelved", and a claimed, done or archived item as
+such, each with the command that moves it on. A pending item becomes claimable
+when ` + "`mg done`" + ` on its last dependency, or an elapsed snooze, promotes it.
+`,
+	Args: usageArgs(cobra.ExactArgs(1)),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		root, err := resolveRoot()
 		if err != nil {
