@@ -15,10 +15,9 @@
 // Every rename(2), link(2) and O_EXCL create on a work-item path in macguffin
 // lives in this package — the guard test in store/fsstore enforces it. The
 // primitives below (MoveItem, MoveNoReplace, CreateExclusive, RewriteExisting,
-// MoveFile) are what internal/workitem's lifecycle logic calls at the single
-// instant each operation becomes true, and the store.Backend methods in fs.go
-// are built from the same primitives. Two implementations of "the atomic step"
-// would be two chances to disagree about it.
+// MoveFile) are what the store.Backend methods in fs.go are built from.
+// internal/workitem does not call them: it reaches the store only through
+// store.Backend (see internal/workitem/backendguard_test.go).
 package fsstore
 
 import (

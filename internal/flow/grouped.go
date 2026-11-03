@@ -1,8 +1,6 @@
 package flow
 
 import (
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -193,29 +191,13 @@ func LoadGroupRecs(root string, now time.Time) ([]GroupRec, error) {
 		}
 	}
 
-	doneDir := filepath.Join(root, "work", "done")
-	entries, err := os.ReadDir(doneDir)
-	if err == nil {
-		for _, e := range entries {
-			name := e.Name()
-			if !strings.HasSuffix(name, ".md") {
-				continue
-			}
-			info, err := e.Info()
-			if err != nil {
-				continue
-			}
-			mtime := info.ModTime()
+	// Through the storage backend like the active statuses above, never a
+	// directory read: Mtime is the stored record's modification time, the
+	// completion-time proxy this has always used.
+	if done, err := workitem.ListByStatus(root, "done"); err == nil {
+		for _, it := range done {
+			mtime := it.Mtime
 			if now.Sub(mtime) > recentDoneWindow*4 {
-				continue
-			}
-			path := filepath.Join(doneDir, name)
-			data, err := os.ReadFile(path)
-			if err != nil {
-				continue
-			}
-			it, err := workitem.Parse(string(data))
-			if err != nil {
 				continue
 			}
 			out = append(out, GroupRec{

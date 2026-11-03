@@ -101,7 +101,8 @@ func (s State) Satisfies(expect State) bool {
 //
 //   - fsstore records PID as the claimed/<id>.md.<pid> suffix (the Holder) —
 //     exactly what a claim has always recorded, with no on-disk change — and
-//     ignores the rest.
+//     ignores the rest. A zero PID records no holder (a bare claimed/<id>.md,
+//     which is what `mg reopen` has always produced).
 //   - a shared backend can record all of it on the item's state line.
 //
 // Name is the attributed identity (MG_ACTOR / POGO_AGENT_NAME / OS user — the

@@ -57,18 +57,10 @@ func errResultsUnsupported(id string) *mgerr.Error {
 // since moved on, corrupting the audit trail (a .result.json sitting in
 // available/ next to no .md claims the item is done when it is really archived).
 // This class of bug — mg status transitions orphaning the sidecar — is exactly
-// what mg-ab67 fixed; every rename of an <id>.md must be paired with a call
-// here so it cannot recur.
-//
-// It is a no-op when the item has no sidecar (the common case for items that
-// were never marked done), so callers can invoke it unconditionally after the
-// .md rename. dstDir is created if it does not already exist. Following the
-// convention of Archive/Unarchive, the .md rename is the authoritative,
-// status-defining move; the sidecar is moved immediately after and any failure
-// is surfaced loudly rather than swallowed.
-//
-// The move itself is the backend's: every Transition and Archive carries the
-// sidecar (fsstore.MoveSidecar), so mg no longer calls this between moves.
+// what mg-ab67 fixed. The move is now the backend's, not mg's: every
+// Transition, Archive and Unarchive of the filesystem backend carries the
+// sidecar (fsstore.MoveSidecar) immediately after the status-defining rename,
+// surfacing any failure loudly, so no call site in mg can forget it.
 
 // mergeResultSidecar combines a freshly supplied --result with a result already
 // on disk at priorPath, returning the bytes Done should write.

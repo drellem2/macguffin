@@ -23,6 +23,17 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- mg's own commands now reach a non-filesystem backend (#47, second step).
+  Every lifecycle operation in `internal/workitem` goes through `store.Backend`
+  with a `store.Actor` built at the CLI edge. That covers create, claim, done,
+  edit, archive and every other move, plus promotion. Before this change, only
+  the event log followed the backend. The filesystem layout is unchanged.
+  `mgcli.Run` is `Main` without the exit. New optional backend extensions:
+  `store.Twins`, `store.IDLister`, `store.Unarchiver` and `store.Local`.
+  Companion files (result sidecars, saved bodies, the sweep stamp) exist only on
+  a `Local` backend. On any other backend, `mg done --result` is refused instead
+  of dropped.
+
 - A storage-backend seam (#47). The exported `store` package names what mg needs
   from a store: Create, Get, List, the atomic `Transition` with a typed
   `ErrLost`, a guarded `Edit`, Archive, an event-log hook and capabilities.
@@ -106,6 +117,15 @@ derived at all — no git, no tags, or a build from a source tarball.
   fixed 4-character pattern must accept 5 (drellem2/macguffin#33).
 
 ### Fixed
+
+- **Five read-modify-write sites no longer re-create an item a concurrent move
+  took away (mg-b979b).** These were the same `os.WriteFile` shape mg-698a8
+  fixed in `mg edit`, at five sites: `mg snooze`, `mg unsnooze`, the
+  predecessor and successor link writes, and `mg unclaim --assignee`. A claim,
+  unclaim or re-stamp landing between a site's read and its write left the item
+  stored twice. Each site is now a hash-guarded `Backend.Edit`, re-run against
+  the item where it now is. Each has a race test that failed with two records on
+  the old write.
 
 - **`mg unshelve` restores only the dependents shelved WITH the item
   (mg-3066c).** It brought back every shelved dependent, so one an operator had

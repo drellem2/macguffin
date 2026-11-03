@@ -1,7 +1,14 @@
 package mgcli
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"os"
+	"strconv"
 	"sync"
+	"time"
+
+	"github.com/drellem2/macguffin/internal/workitem"
 
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/store"
@@ -36,6 +43,13 @@ func useBackend(open store.Opener) {
 	backendCache = map[string]backendEntry{}
 	backendMu.Unlock()
 
+	// internal/workitem reaches every item through the same cached backend:
+	// one instance per root per process, shared by the event log and the
+	// lifecycle, so a backend with in-process state (an in-memory store, a
+	// connection) is one store, not two.
+	workitem.SetOpener(backendFor)
+	workitem.SetActor(cliActor)
+
 	event.SetLogOpener(func(root string) store.EventLog {
 		b, err := backendFor(root)
 		if err != nil {
@@ -43,6 +57,27 @@ func useBackend(open store.Opener) {
 		}
 		return b.Events()
 	})
+}
+
+// processNonce is unique to this process's run of mg: on a shared store every
+// agent may authenticate as one user, and two claims by "the same" user need
+// something per attempt to be told apart (store.Actor).
+var processNonce = func() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(b[:])
+}()
+
+// cliActor is the store.Actor for this invocation's writes, built here at the
+// CLI edge: the attributed name the audit log uses (MG_ACTOR /
+// POGO_AGENT_NAME / OS user), this host, this process, this run's nonce. A
+// command acting for another process (`mg claim --pid`) overrides the PID by
+// passing it down explicitly.
+func cliActor() store.Actor {
+	host, _ := os.Hostname()
+	return store.Actor{Name: workitem.Actor(), Host: host, PID: os.Getpid(), Nonce: processNonce}
 }
 
 // backendFor returns the backend for root, opening it on first use.

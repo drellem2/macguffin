@@ -322,6 +322,14 @@ func SnoozeItem(root, id string, until time.Time) (*Item, string, error) {
 	// The backend carries any result sidecar along.
 	if status != "pending" {
 		if err := transition(root, m.ID, m.State(), inStatus("pending"), writer(0)); err != nil {
+			if isLost(err) {
+				// Moved (claimed, most likely) between the write and the move:
+				// the wake time followed the item, but it was NOT filed in
+				// pending/, and saying "snoozed" would be false.
+				return nil, "", mgerr.Conflict("snooze_raced",
+					fmt.Sprintf("%s: moved while it was being snoozed; it was not filed in pending/.", id),
+					fmt.Sprintf("Run 'mg show %s' to see where it is now, then re-run the snooze if it still applies.", id)).WithRetryable(true)
+			}
 			return nil, "", ioErr(fmt.Sprintf("%s: could not be moved to pending: %s", id, fsErrText(err)))
 		}
 	}

@@ -227,10 +227,41 @@ another backend by calling `mgcli.Main` with its own `store.Opener`. A backend
 can turn off the per-command snooze promoter (`Capabilities.AutoPromote`) and
 run one sweeper (`mg schedule`) instead.
 
-Current limit: mg's lifecycle logic in `internal/workitem` still runs on
-filesystem paths, through `fsstore`'s primitives. The event log and the
-promoter capability already follow the backend handed to `mgcli.Main`. Item
-operations do not yet.
+**mg's lifecycle goes through the backend.** `internal/workitem` creates,
+reads, lists, moves, rewrites and archives every item through the
+`store.Backend` that `mgcli.Main` was handed (installed with
+`workitem.SetOpener`, cached once per root per process). That covers new,
+claim, reclaim, unclaim, done, reopen, edit, shelve, unshelve, snooze,
+unsnooze, promotion (`mg schedule` and the per-command promoter) and archive.
+Each lifecycle move is a `Transition` that expects the exact state that was
+resolved. Each read-modify-write is `modifyItem`: an `Edit` guarded by the hash
+of what was read, re-run against the item where it now is when the guard
+refuses. The `store.Actor` for every write is built at the CLI edge (mgcli: the
+attributed name, host, PID and a per-process nonce). `mg claim --pid` overrides
+only the PID.
+
+Optional extensions the filesystem backend provides, which mg uses when they are
+present:
+
+- `store.Twins` (legacy same-id twins, `id@partition`)
+- `store.IDLister` (bulk id enumeration without reading documents)
+- `store.Unarchiver`
+- `store.Local`, which names the local directories for **companion files**: the
+  result sidecar, saved prior bodies and the sweep stamp
+
+On a backend without `Local`, those companion features are unavailable.
+`mg done --result` is refused before anything moves rather than dropped. No body
+backup is taken, and no sweep stamp is kept.
+
+Two guard tests hold this:
+
+- `internal/workitem/backendguard_test.go`: no `fsstore` symbol but `Open`, and
+  no `"work"` path literal, in `internal/workitem`, `internal/flow`, `mgcli` or
+  `cmd/mg`. No raw file I/O in `internal/workitem` outside the named companion
+  files.
+- `internal/memstore`: an in-memory backend that passes `storetest` and runs
+  the CLI's new → claim → done → archive through `mgcli.Run` against an empty
+  workspace root.
 
 ## Notification: How Agents React
 

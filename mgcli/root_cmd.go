@@ -116,12 +116,23 @@ var (
 // its own backend by calling it with that backend's store.Opener. See package
 // store for what a backend must provide.
 //
-// Main is the single exit seam for the whole binary. rootCmd sets
+// Main is Run on the process's own arguments, followed by os.Exit.
+func Main(open store.Opener, b Build) {
+	os.Exit(Run(open, b, os.Args[1:]))
+}
+
+// Run is Main without the exit: it runs one mg invocation with args (as if
+// typed after "mg") against open's backend and returns the process exit code.
+// It exists so an in-process caller — a backend's own test running mg's real
+// command lifecycle against an in-memory store — can run several invocations
+// against one backend instance, which a process per command cannot share.
+//
+// Run is the single exit seam for the whole binary. rootCmd sets
 // SilenceErrors+SilenceUsage, so EVERY error — RunE returns, cobra usage
 // errors, everything — funnels here. It coerces the error into the typed
 // taxonomy, renders it (JSON to stderr when --json was requested, otherwise
-// human text), and exits with the category's frozen code (§5).
-func Main(open store.Opener, b Build) {
+// human text), and returns the category's frozen code (§5).
+func Run(open store.Opener, b Build, args []string) int {
 	if b.Version != "" {
 		version = b.Version
 	}
@@ -133,6 +144,7 @@ func Main(open store.Opener, b Build) {
 	}
 	rootCmd.Version = versionString()
 	useBackend(open)
+	rootCmd.SetArgs(args)
 
 	err := rootCmd.Execute()
 
@@ -145,7 +157,7 @@ func Main(open store.Opener, b Build) {
 	finishAutoPromote(os.Stderr)
 
 	if err == nil {
-		os.Exit(0)
+		return 0
 	}
 	e := mgerr.Coerce(err)
 	if outputJSON {
@@ -153,5 +165,5 @@ func Main(open store.Opener, b Build) {
 	} else {
 		writeHumanError(os.Stderr, e)
 	}
-	os.Exit(e.ExitCode())
+	return e.ExitCode()
 }
