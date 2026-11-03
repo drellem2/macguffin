@@ -147,6 +147,11 @@ mg mail send <agent> --from=me --body="Check the auth refactor."
 # Reply to a message, threading it to the original
 mg mail reply <agent>/<msg-id> --body="Looks good."
 
+# ...or with a multi-line / metacharacter-bearing body, same --body-file as send
+mg mail reply <agent>/<msg-id> --body-file - <<'EOF'
+Merged. `go test ./...` is green; $PATH untouched.
+EOF
+
 # A recipient mg has never seen is REFUSED (exit 3) and the near neighbours are
 # named — mail has bad addresses now. A name counts as known when a mailbox of
 # that name exists, or a work item is called that.

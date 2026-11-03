@@ -1086,8 +1086,17 @@ the subject ("Re: " + the original's, unless --subject overrides), In-Reply-To,
 and a References chain extending the original's. Nothing is inferred from
 history — the message you name is the only input.
 
---from defaults to AGENT, the mailbox you are replying from. Only --body is
-required.
+--from defaults to AGENT, the mailbox you are replying from. Only a body is
+required: --body inline, or --body-file to read it verbatim from a file ("-"
+for stdin). The two are mutually exclusive, exactly as on 'mg mail send'.
+Reach for --body-file for anything multi-line or carrying backticks, $VAR or
+$(cmd) — the shell expands those inside --body="..." before mg runs:
+
+  mg mail reply mayor/MSG-ID --body-file - <<'EOF'
+  body text with backticks and $VARS, all literal
+  EOF
+
+A --body-file that cannot be read is an error, never an empty body.
 
 Like 'mail read', reply marks the original read (new/ -> cur/), so replying out
 of another agent's mailbox needs --force. It does NOT archive the original;
@@ -1109,8 +1118,16 @@ make visible.`,
 		if err != nil {
 			return err
 		}
-		if mailSendBody == "" {
-			return mgerr.Usage("missing_required", "--body is required", "")
+		// Same --body / --body-file pair as 'mail send', same reader: replies
+		// are where multi-line answers go, so they need the shell-free path
+		// most (mg-543f8). An empty body is refused whichever flag supplied it.
+		body, _, err := bodyFromFlags(cmd, mailSendBody, mailSendBodyFile)
+		if err != nil {
+			return err
+		}
+		if body == "" {
+			return mgerr.Usage("missing_required", "a body is required (--body or --body-file)",
+				"pass --body-file - with a quoted heredoc (<<'EOF') for a multi-line reply")
 		}
 
 		mr, err := mailRoot()
@@ -1172,7 +1189,7 @@ make visible.`,
 			return unknownRecipientError(mr, root, recipient)
 		}
 
-		newID, err := mail.SendWithOpts(mr, recipient, from, subject, mailSendBody, opts)
+		newID, err := mail.SendWithOpts(mr, recipient, from, subject, body, opts)
 		if err != nil {
 			return err
 		}
@@ -1589,7 +1606,8 @@ func init() {
 
 	mailReplyCmd.Flags().StringVar(&mailSendFrom, "from", "", "sender name (defaults to AGENT, the mailbox replied from)")
 	mailReplyCmd.Flags().StringVar(&mailSendSubject, "subject", "", `subject (defaults to "Re: " + the original's)`)
-	mailReplyCmd.Flags().StringVar(&mailSendBody, "body", "", "message body (required)")
+	mailReplyCmd.Flags().StringVar(&mailSendBody, "body", "", "message body (required unless --body-file)")
+	mailReplyCmd.Flags().StringVar(&mailSendBodyFile, "body-file", "", "read the message body verbatim from a file (\"-\" for stdin); mutually exclusive with --body")
 	mailReplyCmd.Flags().BoolVar(&mailReplyForce, "force", false, "allow replying out of another agent's mailbox (marks the original read for its owner)")
 	mailReplyCmd.Flags().BoolVar(&mailSendCreate, "create", false, "deliver to a sender mg has never seen, registering the mailbox (without this, an unknown recipient is refused)")
 	mailReplyCmd.Flags().BoolVar(&mailJSON, "json", false, "emit a single JSON object instead of human-formatted output")

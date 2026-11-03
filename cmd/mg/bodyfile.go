@@ -10,10 +10,10 @@ import (
 )
 
 // bodyFromFlags resolves the --body / --body-file pair shared by 'mg mail
-// send', 'mg new' and 'mg edit'. It returns the body text and whether either
-// flag was given at all, so a caller that distinguishes an explicitly empty
-// --body (clear the field) from an absent one (leave it alone) — 'mg edit'
-// does — keeps that distinction under --body-file too.
+// send', 'mg mail reply', 'mg new' and 'mg edit'. It returns the body text
+// and whether either flag was given at all, so a caller that distinguishes an
+// explicitly empty --body (clear the field) from an absent one (leave it
+// alone) — 'mg edit' does — keeps that distinction under --body-file too.
 //
 // WHY --body-file EXISTS. The shell expands `backticks`, $VAR and $(cmd) inside
 // --body="..." BEFORE mg is executed, so main() receives an already-mangled

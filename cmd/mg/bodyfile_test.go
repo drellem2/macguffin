@@ -243,3 +243,110 @@ func showBody(t *testing.T, bin string, env []string, id string) string {
 	}
 	return string(out)
 }
+
+// seedReplyTarget delivers one message from mayor into arch's box and returns
+// its id, so a reply out of arch/ goes back to mayor.
+func seedReplyTarget(t *testing.T, bin string, env []string) string {
+	t.Helper()
+	mailRegisterBoxes(t, bin, env, "mayor")
+	if _, _, err := runMail(t, bin, env, "send", "--create", "arch", "--from=mayor", "--subject=q", "--body=question"); err != nil {
+		t.Fatalf("seed send failed: %v", err)
+	}
+	return soleMsgID(t, env, "arch")
+}
+
+// TestCLI_MailReplyBodyFileVerbatimThroughShell: 'mg mail reply --body-file'
+// delivers the file's bytes verbatim through a real shell, with the same
+// inline control as the send test so the assertion cannot pass on an inert
+// fixture (mg-543f8).
+func TestCLI_MailReplyBodyFileVerbatimThroughShell(t *testing.T) {
+	bin, env := mailInit(t)
+	orig := seedReplyTarget(t, bin, env)
+	path := writeBodyFile(t, t.TempDir(), "reply.md", hazardBody)
+	arch := asAgent(env, "arch")
+
+	out, stderr, err := runSh(t, arch, bin+" mail reply arch/"+orig+" --body-file "+path)
+	if err != nil {
+		t.Fatalf("reply --body-file failed: %v\n%s\n%s", err, out, stderr)
+	}
+	fileMsgID := lastMsgID(t, out)
+
+	out, stderr, err = runSh(t, arch, bin+" mail reply arch/"+orig+` --body="`+hazardBody+`"`)
+	if err != nil {
+		t.Fatalf("reply --body failed: %v\n%s\n%s", err, out, stderr)
+	}
+	inlineMsgID := lastMsgID(t, out)
+
+	want := strings.TrimSpace(hazardBody)
+	if got := readBodyJSON(t, bin, env, "mayor", fileMsgID); got != want {
+		t.Errorf("reply --body-file must deliver the file's bytes verbatim.\n want: %q\n  got: %q", want, got)
+	}
+	if got := readBodyJSON(t, bin, env, "mayor", inlineMsgID); got == want {
+		t.Fatalf("control failed: the shell did not mangle --body, so this test cannot prove --body-file bypasses it")
+	}
+
+	// Threading is unchanged by the new body path.
+	if file := msgFile(t, env, "mayor", fileMsgID); !strings.Contains(file, "In-Reply-To: "+orig+"\n") {
+		t.Errorf("reply --body-file lost threading:\n%s", file)
+	}
+}
+
+// TestCLI_MailReplyBodyFileStdin: "-" reads the body from stdin, fed by a
+// quoted heredoc through a real shell — the form the pogo prompts document.
+func TestCLI_MailReplyBodyFileStdin(t *testing.T) {
+	bin, env := mailInit(t)
+	orig := seedReplyTarget(t, bin, env)
+
+	line := bin + " mail reply arch/" + orig + " --body-file - <<'EOF'\n" + hazardBody + "EOF\n"
+	out, stderr, err := runSh(t, asAgent(env, "arch"), line)
+	if err != nil {
+		t.Fatalf("reply --body-file - failed: %v\n%s\n%s", err, out, stderr)
+	}
+	if got, want := readBodyJSON(t, bin, env, "mayor", lastMsgID(t, out)), strings.TrimSpace(hazardBody); got != want {
+		t.Errorf("reply --body-file - must deliver stdin verbatim.\n want: %q\n  got: %q", want, got)
+	}
+}
+
+// TestCLI_MailReplyBodyFileRefusals: both flags, an unreadable path, an empty
+// file, and no body at all are each refused — and none of them marks the
+// original read or delivers anything.
+func TestCLI_MailReplyBodyFileRefusals(t *testing.T) {
+	bin, env := mailInit(t)
+	orig := seedReplyTarget(t, bin, env)
+	arch := asAgent(env, "arch")
+	dir := t.TempDir()
+	path := writeBodyFile(t, dir, "msg.md", "from a file\n")
+	empty := writeBodyFile(t, dir, "empty.md", "")
+	missing := filepath.Join(dir, "nope.md")
+
+	cases := []struct {
+		name    string
+		args    []string
+		mention string
+	}{
+		{"both flags", []string{"--body=inline", "--body-file=" + path}, "--body-file"},
+		{"missing file", []string{"--body-file=" + missing}, "nope.md"},
+		{"empty file", []string{"--body-file=" + empty}, "--body-file"},
+		{"no body", nil, "--body"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := append([]string{"reply", "arch/" + orig}, tc.args...)
+			out, errOut, err := runMail(t, bin, arch, args...)
+			if err == nil {
+				t.Fatalf("reply %v must fail, got exit 0:\n%s", tc.args, out)
+			}
+			if !strings.Contains(out+errOut, tc.mention) {
+				t.Errorf("error should mention %q, got: %s%s", tc.mention, out, errOut)
+			}
+		})
+	}
+
+	// Nothing was delivered and the original is still unread.
+	if entries, err := os.ReadDir(mailboxDir(t, env, "mayor", "new")); err == nil && len(entries) > 0 {
+		t.Errorf("a refused reply delivered %d message(s) to mayor", len(entries))
+	}
+	if _, err := os.Stat(filepath.Join(mailboxDir(t, env, "arch", "new"), orig)); err != nil {
+		t.Errorf("a refused reply marked the original read: %v", err)
+	}
+}
