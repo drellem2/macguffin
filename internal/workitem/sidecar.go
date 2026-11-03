@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // resultSidecarName is the filename of a work item's result sidecar, written by
@@ -33,17 +34,7 @@ func resultSidecarName(id string) string { return id + ".result.json" }
 // status-defining move; the sidecar is moved immediately after and any failure
 // is surfaced loudly rather than swallowed.
 func moveResultSidecar(srcDir, dstDir, id string) error {
-	src := filepath.Join(srcDir, resultSidecarName(id))
-	if _, err := os.Stat(src); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	if err := os.MkdirAll(dstDir, 0o755); err != nil {
-		return err
-	}
-	return os.Rename(src, filepath.Join(dstDir, resultSidecarName(id)))
+	return fsstore.MoveSidecar(srcDir, dstDir, id)
 }
 
 // mergeResultSidecar combines a freshly supplied --result with a result already

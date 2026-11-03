@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // renameNoReplace moves src to dst, refusing when dst already exists.
@@ -28,14 +28,10 @@ import (
 // A refusal is a conflict (exit 4) naming both paths. Any other failure is
 // returned as the raw filesystem error for the caller to sanitize.
 func renameNoReplace(id, src, dst string) error {
-	if err := os.Link(src, dst); err != nil {
+	if err := fsstore.MoveNoReplace(src, dst); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return errDestinationExists(id, src, dst)
 		}
-		return err
-	}
-	if err := os.Remove(src); err != nil {
-		_ = os.Remove(dst)
 		return err
 	}
 	return nil

@@ -6,10 +6,55 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/drellem2/macguffin/store"
+	"github.com/drellem2/macguffin/store/fsstore"
 )
 
-const eventsFile = "events.jsonl"
+const eventsFile = fsstore.EventsFile
+
+// The event log is reached through the storage backend's hook
+// (store.EventLog), not by opening events.jsonl here: a backend whose events
+// live somewhere other than a local file (a shared store's own history) plugs
+// in with SetLogOpener, and every Append/List/Read/Stat in mg follows it. The
+// default is the filesystem log, <root>/events.jsonl, exactly as before.
+var (
+	logMu     sync.RWMutex
+	logOpener func(root string) store.EventLog
+)
+
+// SetLogOpener installs the backend hook that maps a workspace root to its
+// event log. nil restores the filesystem default. mgcli.Main calls it once,
+// before any command runs.
+func SetLogOpener(open func(root string) store.EventLog) {
+	logMu.Lock()
+	logOpener = open
+	logMu.Unlock()
+}
+
+// Log returns the event log for root through the installed hook.
+func Log(root string) store.EventLog {
+	logMu.RLock()
+	open := logOpener
+	logMu.RUnlock()
+	if open != nil {
+		return open(root)
+	}
+	return fsstore.EventLog(root)
+}
+
+// Read returns the raw log for root (one JSON object per line), or nil when
+// there is none yet.
+func Read(root string) ([]byte, error) {
+	return Log(root).ReadEvents()
+}
+
+// Stat describes root's event log without reading it.
+func Stat(root string) (store.EventsInfo, error) {
+	return Log(root).StatEvents()
+}
 
 // LogPath returns the path to the events log file under root.
 func LogPath(root string) string {
@@ -74,16 +119,9 @@ func Append(root string, eventType string, kvs map[string]string) (Entry, error)
 		return Entry{}, fmt.Errorf("marshalling event: %w", err)
 	}
 
-	p := filepath.Join(root, eventsFile)
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return Entry{}, fmt.Errorf("opening %s: %w", p, err)
-	}
-	defer f.Close()
-
 	data = append(data, '\n')
-	if _, err := f.Write(data); err != nil {
-		return Entry{}, fmt.Errorf("writing event: %w", err)
+	if err := Log(root).AppendEvent(data); err != nil {
+		return Entry{}, err
 	}
 
 	return entry, nil
@@ -98,13 +136,9 @@ type ListOpts struct {
 
 // List reads events from <root>/events.jsonl with optional filtering.
 func List(root string, opts ListOpts) ([]Entry, error) {
-	p := filepath.Join(root, eventsFile)
-	data, err := os.ReadFile(p)
+	data, err := Read(root)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading %s: %w", p, err)
+		return nil, err
 	}
 
 	var entries []Entry

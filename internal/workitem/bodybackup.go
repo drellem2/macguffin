@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // BODY BACKUPS — the recovery half of the record a replace-mode edit leaves.
@@ -254,7 +255,7 @@ func moveBodyBackups(srcParent, dstParent, id string) error {
 		if e.IsDir() {
 			continue
 		}
-		if err := os.Rename(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+		if err := fsstore.MoveFile(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
 			return err
 		}
 	}

@@ -85,7 +85,7 @@ list_entries() { find "$1" -mindepth 1 -maxdepth 1 -exec basename {} \; 2>/dev/n
 # run_slice runs a fixture-creating suite with $TMPDIR pinned to its argument.
 #
 # The slice is chosen to touch every adopter in seconds: ./internal/... is all
-# seven package TestMains, the cmd/mg names reach the TestMain that owned the
+# seven package TestMains, the mgcli names (the CLI suite, moved from cmd/mg in mg-698a8) reach the TestMain that owned the
 # largest leak (and t.TempDir, via buildBinary), and test-shadow.sh is the shell
 # half. A new leak in any of them fails this file by name.
 #
@@ -98,7 +98,7 @@ run_slice() {
     (
         cd "$REPO_ROOT" &&
         TMPDIR="$tmp" go test -count=1 -timeout 5m ./internal/... >"$log" 2>&1 &&
-        TMPDIR="$tmp" go test -count=1 -timeout 5m -run 'TestCLI_Version$|TestCLI_VersionFlag$' ./cmd/mg/ >>"$log" 2>&1 &&
+        TMPDIR="$tmp" go test -count=1 -timeout 5m -run 'TestCLI_Version$|TestCLI_VersionFlag$' ./mgcli/ >>"$log" 2>&1 &&
         TMPDIR="$tmp" sh scripts/test-shadow.sh >>"$log" 2>&1
     )
 }
@@ -244,7 +244,7 @@ echo ""
 echo "Test 7: an ABORTED run leaks nothing into \$TMPDIR, and the next run reclaims it"
 abort="${WORK}/abort"
 mkdir -p "$abort"
-if (cd "$REPO_ROOT" && TMPDIR="$abort" go test -count=1 -timeout 10ms -run 'TestCLI_Version$' ./cmd/mg/ >"${WORK}/abort.log" 2>&1); then
+if (cd "$REPO_ROOT" && TMPDIR="$abort" go test -count=1 -timeout 10ms -run 'TestCLI_Version$' ./mgcli/ >"${WORK}/abort.log" 2>&1); then
     fail "SETUP: the run under -timeout 10ms PASSED, so nothing was aborted and this case measured nothing"
 else
     n=$(count_entries "$abort")

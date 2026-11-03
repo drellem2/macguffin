@@ -1,6 +1,7 @@
 package workitem
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/store"
+	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // UpdateField represents which field to update and how.
@@ -147,7 +150,47 @@ func Update(root, id string, fields UpdateField) (*Item, error) {
 // A residual window remains between this function's own read and its own write
 // — microseconds inside one process, against the caller-scale window that
 // produced every observed incident. Closing it would require the locking above.
+// editBeforeWrite is a TEST SEAM: when set, it runs between the edit's read of
+// the stored item and its write, which is where a concurrent transition has to
+// land for the read-then-write window to matter. Nothing in mg sets it.
+var editBeforeWrite func()
+
+// THE WRITE ITSELF (mg-698a8). The write used to be os.WriteFile on the path
+// resolved at the top, and os.WriteFile opens O_CREATE|O_TRUNC. A claim (a
+// rename out of available/) landing between this function's read and its write
+// therefore RE-CREATED the item at the path it had just left: one item in two
+// status directories, the stale copy claimable again, exit 0. That was inferred
+// by the storage-seam design memo and is now reproduced and pinned by
+// TestUpdate_ClaimBetweenReadAndWriteDoesNotRecreateOldPath. The write now goes
+// through the filesystem backend's guarded rewrite (fsstore.RewriteExisting):
+// no O_CREATE, and the stored bytes must still be the bytes this function read.
+// When either fails — the item moved, or its content changed — nothing is
+// written and the whole read-modify-write runs again against the item where it
+// now is, a bounded number of times.
 func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChange, error) {
+	for attempt := 1; ; attempt++ {
+		item, change, err := updateOnce(root, id, fields)
+		if err != errEditRaced {
+			return item, change, err
+		}
+		if attempt == maxEditAttempts {
+			return nil, nil, mgerr.Conflict("edit_raced",
+				fmt.Sprintf("%s: the item kept changing or moving while this edit was being written (%d attempts). Nothing was written by the last attempt.", id, attempt),
+				fmt.Sprintf("Re-run the edit; 'mg show %s' shows where the item is now.", id))
+		}
+	}
+}
+
+// maxEditAttempts bounds UpdateWithBodyChange's retry when its write loses a
+// race. Each lost race means another writer made progress, so a handful is
+// plenty; failing loudly beats spinning.
+const maxEditAttempts = 3
+
+// errEditRaced is updateOnce's internal signal that its guarded write found
+// the item moved or changed since its read. It never escapes this file.
+var errEditRaced = errors.New("edit raced a concurrent write")
+
+func updateOnce(root, id string, fields UpdateField) (*Item, *BodyChange, error) {
 	itemPath, status, err := FindPath(root, id)
 	if err != nil {
 		return nil, nil, err
@@ -406,7 +449,14 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 	}
 
 	content := Render(item)
-	if err := os.WriteFile(itemPath, []byte(content), 0o644); err != nil {
+	if editBeforeWrite != nil {
+		editBeforeWrite()
+	}
+	if err := fsstore.RewriteExisting(itemPath, store.HashOf(data), []byte(content)); err != nil {
+		var changed *store.ErrChanged
+		if os.IsNotExist(err) || errors.As(err, &changed) {
+			return nil, nil, errEditRaced
+		}
 		return nil, nil, ioErr(fmt.Sprintf("%s: could not be saved: %s", id, fsErrText(err)))
 	}
 
@@ -494,7 +544,7 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 			}
 			if !gateOpen(item, doneIDs, snoozeNow()) {
 				dst := filepath.Join(root, "work", "pending", filepath.Base(itemPath))
-				if err := os.Rename(itemPath, dst); err != nil {
+				if err := fsstore.MoveItem(itemPath, dst); err != nil {
 					return nil, nil, ioErr(fmt.Sprintf("%s: saved, but could not be moved to pending: %s", id, fsErrText(err)))
 				}
 				if err := moveResultSidecar(filepath.Dir(itemPath), filepath.Dir(dst), id); err != nil {
@@ -512,7 +562,7 @@ func UpdateWithBodyChange(root, id string, fields UpdateField) (*Item, *BodyChan
 			// nothing about a wake time that has not arrived.
 			if gateOpen(item, doneIDs, snoozeNow()) {
 				dst := filepath.Join(root, "work", "available", filepath.Base(itemPath))
-				if err := os.Rename(itemPath, dst); err != nil {
+				if err := fsstore.MoveItem(itemPath, dst); err != nil {
 					return nil, nil, ioErr(fmt.Sprintf("%s: saved, but could not be promoted to available: %s", id, fsErrText(err)))
 				}
 				if err := moveResultSidecar(filepath.Dir(itemPath), filepath.Dir(dst), id); err != nil {

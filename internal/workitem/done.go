@@ -11,6 +11,7 @@ import (
 
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // DoneOption configures an optional behaviour of Done.
@@ -138,7 +139,7 @@ func Done(root, id string, resultJSON json.RawMessage, opts ...DoneOption) (*Ite
 	dstPath := filepath.Join(doneDir, id+".md")
 
 	// rename(2) is atomic on local filesystems.
-	if err := os.Rename(srcPath, dstPath); err != nil {
+	if err := fsstore.MoveItem(srcPath, dstPath); err != nil {
 		return nil, nil, ioErr(fmt.Sprintf("%s: could not be completed: %s", id, fsErrText(err)))
 	}
 

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/drellem2/macguffin/internal/event"
@@ -90,7 +89,7 @@ func LastTouch(root, id string) *Touch {
 	if id == "" {
 		return nil
 	}
-	data, err := os.ReadFile(event.LogPath(root))
+	data, err := event.Read(root)
 	if err != nil {
 		return nil
 	}

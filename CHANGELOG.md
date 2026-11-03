@@ -23,6 +23,14 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- A storage-backend seam (#47). The exported `store` package names what mg needs
+  from a store: Create, Get, List, the atomic `Transition` with a typed
+  `ErrLost`, a guarded `Edit`, Archive, an event-log hook and capabilities.
+  `store/fsstore` is the filesystem backend: the default, with the on-disk
+  layout unchanged. `store/storetest` is a contract suite any backend can run.
+  The CLI moved into the exported `mgcli` package, so another module can build
+  mg with `mgcli.Main(opener, build)`. No behaviour change.
+
 - **Every tag write is attributable (drellem2/macguffin#38).** `work.created`
   now records the item's initial `tags`, and the `successor:`/`predecessor:`
   tags written by `mg done --successor` and `mg archive --successor` each emit

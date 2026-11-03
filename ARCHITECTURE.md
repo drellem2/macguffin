@@ -201,6 +201,37 @@ spawned it, so a single `mg reap` could release the claims of healthy,
 actively-working agents. PID liveness is no longer consulted — to release a
 claim, the operator must name the work item.
 
+## Storage Backend Seam
+
+The layout above belongs to the **filesystem backend** (`store/fsstore`). It is
+mg's default and its only built-in backend. The operations mg needs from a
+store are named in the exported `store` package, by what they mean to mg:
+`Create`, `Get`, `List`, `Transition(id, expect, to, actor)`,
+`Edit(id, ifUnchanged, content, actor)`, `Archive`, an event-log hook
+(`Events`) and `Capabilities`.
+
+- **Transition is the atomic primitive.** Of two concurrent transitions out of
+  one state, exactly one succeeds. The other gets a typed `*store.ErrLost`
+  naming the state the item is actually in. On the filesystem this is the
+  rename(2) above.
+- **Edit never changes state, and never recreates an item a transition moved
+  away.** The filesystem rewrite opens without `O_CREATE`.
+- Every `os.Rename`, `os.Link` and `O_EXCL` on a work-item path lives in
+  `store/fsstore`, and a guard test enforces it. Mail is a separate maildir
+  store and is not part of the seam.
+- `store/storetest` is the contract suite any backend runs.
+
+The CLI lives in the exported `mgcli` package. `cmd/mg` is a thin main that
+calls `mgcli.Main(fsstore.Open, build)`. A separate module can build mg against
+another backend by calling `mgcli.Main` with its own `store.Opener`. A backend
+can turn off the per-command snooze promoter (`Capabilities.AutoPromote`) and
+run one sweeper (`mg schedule`) instead.
+
+Current limit: mg's lifecycle logic in `internal/workitem` still runs on
+filesystem paths, through `fsstore`'s primitives. The event log and the
+promoter capability already follow the backend handed to `mgcli.Main`. Item
+operations do not yet.
+
 ## Notification: How Agents React
 
 Three mechanisms, from simplest to most responsive:
@@ -356,7 +387,7 @@ item looks like.
 **So the opener is the binary, not a schedule.** Every `mg` process promotes
 pending items whose wake time has passed, on a goroutine started and joined
 before the user's command runs (`internal/workitem/autopromote.go`,
-`cmd/mg/autopromote.go`). Readiness used to depend on
+`mgcli/autopromote.go`). Readiness used to depend on
 mayor's `mg-schedule-sweep` cron: when that schedule was lost, the next sweep
 reported `the previous sweep ran 4d 9h ago`, and the only reason anyone noticed
 four days of open-but-shut gates is that the sweep printed its own staleness. An

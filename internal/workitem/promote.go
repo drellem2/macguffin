@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/drellem2/macguffin/internal/event"
+	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // promote releases one pending item to available/. It is THE promotion, used by
@@ -46,7 +47,7 @@ func promote(root, srcPath, dstName string, item *Item) (bool, error) {
 
 	// The single atomic instant. Everything before it is advisory; everything
 	// after it is done by the one process that won.
-	if err := os.Rename(srcPath, dst); err != nil {
+	if err := fsstore.MoveItem(srcPath, dst); err != nil {
 		if os.IsNotExist(err) {
 			return false, nil // another promoter got there first
 		}
@@ -106,18 +107,10 @@ func clearSpentSnooze(root, path, id string) (bool, error) {
 	// out from under us since the read above, this must fail rather than
 	// re-create a file at a path the item no longer occupies — that is the
 	// duplicate-item bug this whole ordering exists to avoid.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
+	if err := fsstore.RewriteExisting(path, "", []byte(Render(item))); err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
-		return false, fmt.Errorf("clearing the snooze on %s: %w", id, err)
-	}
-	if _, err := f.Write([]byte(Render(item))); err != nil {
-		f.Close()
-		return false, fmt.Errorf("clearing the snooze on %s: %w", id, err)
-	}
-	if err := f.Close(); err != nil {
 		return false, fmt.Errorf("clearing the snooze on %s: %w", id, err)
 	}
 

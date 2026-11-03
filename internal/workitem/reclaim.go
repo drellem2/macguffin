@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/drellem2/macguffin/internal/event"
+	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // ReclaimResult describes a re-stamped claim.
@@ -65,7 +66,7 @@ func Reclaim(root, id string, pid int) (*ReclaimResult, error) {
 	// Same directory, so this is a rename(2) within claimed/ — atomic, and the
 	// item is in claimed/ before and after with no state in between. The result
 	// sidecar needs no follow-up move for the same reason.
-	if err := os.Rename(src, dst); err != nil {
+	if err := fsstore.MoveItem(src, dst); err != nil {
 		if os.IsNotExist(err) {
 			// The claim vanished under us — diagnose where the item really is.
 			return nil, explainReclaimFailure(root, id)

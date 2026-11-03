@@ -10,6 +10,7 @@ import (
 
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // Shelve atomically moves a work item to shelved/. The item can be in any
@@ -115,7 +116,7 @@ func shelveCascade(root, id, cascadedFrom string) ([]*Item, error) {
 	}
 
 	dst := filepath.Join(root, "work", "shelved", id+".md")
-	if err := os.Rename(path, dst); err != nil {
+	if err := fsstore.MoveItem(path, dst); err != nil {
 		return nil, ioErr(fmt.Sprintf("%s: could not be shelved: %s", id, fsErrText(err)))
 	}
 
@@ -576,7 +577,7 @@ func unshelve(root, id string, claim bool, pid int, cascadedFrom string, st *uns
 		}
 	} else {
 		dst = filepath.Join(root, "work", subdir, id+".md")
-		if err := os.Rename(src, dst); err != nil {
+		if err := fsstore.MoveItem(src, dst); err != nil {
 			return nil, ioErr(fmt.Sprintf("%s: could not be unshelved: %s", id, fsErrText(err)))
 		}
 	}

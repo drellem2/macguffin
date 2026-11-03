@@ -11,6 +11,7 @@ import (
 
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // Snooze is "not now, come back at <time>" — and it is an ATTRIBUTE on
@@ -319,7 +320,7 @@ func SnoozeItem(root, id string, until time.Time) (*Item, string, error) {
 	// and snoozing releases the claim the same way shelving does.
 	dst := filepath.Join(root, "work", "pending", id+".md")
 	if path != dst {
-		if err := os.Rename(path, dst); err != nil {
+		if err := fsstore.MoveItem(path, dst); err != nil {
 			return nil, "", ioErr(fmt.Sprintf("%s: could not be moved to pending: %s", id, fsErrText(err)))
 		}
 		if err := moveResultSidecar(filepath.Dir(path), filepath.Dir(dst), id); err != nil {
@@ -373,7 +374,7 @@ func UnsnoozeItem(root, id string) (*Item, string, error) {
 		}
 		if gateOpen(item, doneIDs, snoozeNow()) {
 			dst := filepath.Join(root, "work", "available", id+".md")
-			if err := os.Rename(path, dst); err != nil {
+			if err := fsstore.MoveItem(path, dst); err != nil {
 				return nil, "", ioErr(fmt.Sprintf("%s: unsnoozed, but could not be promoted: %s", id, fsErrText(err)))
 			}
 			if err := moveResultSidecar(filepath.Dir(path), filepath.Dir(dst), id); err != nil {

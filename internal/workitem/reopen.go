@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/drellem2/macguffin/internal/event"
+	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // Reopen atomically moves a work item from done/ back to claimed/.
@@ -23,7 +24,7 @@ func Reopen(root, id string) (*Item, error) {
 	dst := filepath.Join(root, "work", "claimed", id+".md")
 
 	// rename(2) is atomic on local filesystems.
-	if err := os.Rename(src, dst); err != nil {
+	if err := fsstore.MoveItem(src, dst); err != nil {
 		if os.IsNotExist(err) {
 			return nil, explainReopenFailure(root, id)
 		}

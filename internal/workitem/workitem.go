@@ -16,6 +16,7 @@ import (
 
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // Item represents a work item with YAML frontmatter fields.
@@ -302,15 +303,7 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 // writeNew creates path exclusively — it never truncates an existing file.
 // The fs.ErrExist it returns on collision is what drives the remint loop.
 func writeNew(path, content string) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return err
-	}
-	if _, err := f.WriteString(content); err != nil {
-		f.Close()
-		return err
-	}
-	return f.Close()
+	return fsstore.CreateExclusive(path, []byte(content))
 }
 
 // Render serialises an Item back to markdown with YAML frontmatter.

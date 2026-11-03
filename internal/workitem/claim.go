@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/drellem2/macguffin/internal/event"
+	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // Claim atomically moves a work item from available/ to claimed/ using rename(2).
@@ -30,7 +31,7 @@ func Claim(root, id string, pid int) (*Item, error) {
 
 	// rename(2) is atomic on local filesystems.
 	// If two processes race, exactly one succeeds; the other gets ENOENT.
-	if err := os.Rename(src, dst); err != nil {
+	if err := fsstore.MoveItem(src, dst); err != nil {
 		if os.IsNotExist(err) {
 			// The source wasn't in available/ — diagnose where it really is.
 			return nil, explainClaimFailure(root, id)

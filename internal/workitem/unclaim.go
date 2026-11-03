@@ -9,6 +9,7 @@ import (
 
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // UnclaimResult describes a released claim.
@@ -210,7 +211,7 @@ func Unclaim(root, id string, opts ...UnclaimOption) (*UnclaimResult, error) {
 	}
 	dst := filepath.Join(root, "work", landing, id+".md")
 
-	if err := os.Rename(src, dst); err != nil {
+	if err := fsstore.MoveItem(src, dst); err != nil {
 		return nil, ioErr(fmt.Sprintf("%s: could not release claim: %s", id, fsErrText(err)))
 	}
 
