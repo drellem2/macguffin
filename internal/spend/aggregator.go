@@ -1,6 +1,7 @@
 package spend
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,6 +44,13 @@ type Run struct {
 	// defaults to readAgentRegistry (which shells out to
 	// `pogo agent list --json`).
 	AgentRegistry AgentRegistryReader
+
+	// Rebuild drops the existing store before scanning. The removal runs
+	// under the harvest lock, so a rebuild can never interleave with another
+	// process's harvest (drellem2/macguffin#30). A rebuild WAITS for the lock
+	// rather than skipping, because the caller asked for the store to be
+	// rewritten and a skip would silently leave it as it was.
+	Rebuild bool
 }
 
 // Result reports what an aggregator pass did.
@@ -52,6 +60,11 @@ type Result struct {
 	NewItemRecords     int
 	NewAgentRecords    int
 	SkippedDup         int
+
+	// HarvestSkipped is true when another harvest held the lock, so this
+	// pass scanned and wrote nothing. The store is still readable — it just
+	// reflects the other harvest's progress rather than this one's.
+	HarvestSkipped bool
 }
 
 // claimInterval represents the period during which an actor had an item
@@ -162,6 +175,28 @@ func (r *Run) Aggregate() (Result, error) {
 			return res, err
 		}
 		projects = p
+	}
+
+	// One exclusive lock spans SeenSet -> scan -> append (and --rebuild's
+	// removal). Without it two overlapping invocations both read the same
+	// seen-set, both classify the same messages as new, and both append —
+	// the doubled blocks in drellem2/macguffin#30. A plain harvest uses a
+	// TRY-lock: `mg spend` is a read command, so it must not queue behind
+	// another agent's harvest; on contention it skips and reads the store.
+	release, err := acquireHarvestLock(r.Root, r.Rebuild)
+	if errors.Is(err, errLockHeld) {
+		res.HarvestSkipped = true
+		return res, nil
+	}
+	if err != nil {
+		return res, err
+	}
+	defer release()
+
+	if r.Rebuild {
+		if err := os.RemoveAll(StoreRoot(r.Root)); err != nil {
+			return res, fmt.Errorf("clearing store: %w", err)
+		}
 	}
 
 	if err := EnsureStore(r.Root); err != nil {

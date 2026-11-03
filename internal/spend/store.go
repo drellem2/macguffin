@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -178,27 +179,35 @@ func listIDs(dir string) ([]string, error) {
 	return ids, nil
 }
 
-// ReadAll returns every record across by-item/ and by-agent/. Used by query
-// callers that need to walk the entire store (`mg spend --by tag`).
+// ReadAll returns every record across by-agent/ and by-item/, deduplicated
+// on (session, message_uuid). Every query path — Query, GrandTotal, --total,
+// --json — and the harvest's SeenSet read through it, so one on-disk
+// duplicate can no longer inflate a printed figure, and a store already
+// holding doubled blocks from the pre-lock harvest race is corrected on read
+// with no rebuild or migration (drellem2/macguffin#30).
+//
+// Tie-break, stated rather than inherited: when a key occurs more than once
+// the copy LAST in read order wins. Read order is fixed — by-agent/ files,
+// then by-item/ files, each in lexical filename order, then line order
+// within a file — so the same store always yields the same answer. Within a
+// file, last-in-read-order is last-written, matching attribute()'s
+// most-recent-claim rule. Across files no write stamp is stored, so the
+// fixed order stands in for it, and it puts by-item/ last on purpose: an
+// attributed copy beats an overhead copy of the same message.
+//
+// Known, deliberately unfixed here: a key can sit under two different
+// by-item/ ids with identical token payloads, because attribute() resolves
+// from the claim intervals present at scan time and the seen-set never
+// revises a stored attribution. Dedup counts its tokens once; the rule above
+// picks which mg-id they land on (the lexically greater one).
 func ReadAll(root string) ([]Record, error) {
 	var all []Record
-
-	items, err := ListItems(root)
-	if err != nil {
-		return nil, err
-	}
-	for _, id := range items {
-		recs, err := ReadItem(root, id)
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, recs...)
-	}
 
 	agents, err := ListAgents(root)
 	if err != nil {
 		return nil, err
 	}
+	sort.Strings(agents)
 	for _, ag := range agents {
 		recs, err := ReadAgent(root, ag)
 		if err != nil {
@@ -206,7 +215,40 @@ func ReadAll(root string) ([]Record, error) {
 		}
 		all = append(all, recs...)
 	}
-	return all, nil
+
+	items, err := ListItems(root)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(items)
+	for _, id := range items {
+		recs, err := ReadItem(root, id)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, recs...)
+	}
+	return dedupLastWins(all), nil
+}
+
+// dedupLastWins drops every record whose (session, message_uuid) occurs again
+// later in recs, keeping the last occurrence and the survivors' relative
+// order. It filters in place and returns the shortened slice.
+func dedupLastWins(recs []Record) []Record {
+	last := make(map[Key]int, len(recs))
+	for i, r := range recs {
+		last[Key{Session: r.Session, MessageUUID: r.MessageUUID}] = i
+	}
+	if len(last) == len(recs) {
+		return recs
+	}
+	out := recs[:0]
+	for i, r := range recs {
+		if last[Key{Session: r.Session, MessageUUID: r.MessageUUID}] == i {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // Key uniquely identifies a stored message for dedup purposes. The aggregator
