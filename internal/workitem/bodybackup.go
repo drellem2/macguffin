@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
-	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // BODY BACKUPS — the recovery half of the record a replace-mode edit leaves.
@@ -111,17 +110,30 @@ type BodyBackup struct {
 // stays self-contained and work/.bodybak/ does not accumulate directories for
 // items nobody will edit again — that is where they go, and mg unarchive brings
 // them back. See archiveFile and Unarchive.
+//
+// Saved bodies are COMPANION files: they exist only on a backend whose items
+// are local files (store.Local), and both functions return "" on any other —
+// there, a replace-mode edit takes no backup and ListBodyBackups finds none.
 func bodyBackupDirFor(root, itemPath, status, id string) string {
+	work := workDirOf(root)
+	if work == "" {
+		return ""
+	}
 	if status == "archived" {
 		return filepath.Join(filepath.Dir(itemPath), bodyBackupDirName, id)
 	}
-	return filepath.Join(root, "work", bodyBackupDirName, id)
+	return filepath.Join(work, bodyBackupDirName, id)
 }
 
 // liveBodyBackupParent is work/.bodybak/ — the parent holding one directory per
-// live item. Archive and Unarchive move a single child of it.
+// live item. Archive and Unarchive move a single child of it. "" on a backend
+// with no companion files.
 func liveBodyBackupParent(root string) string {
-	return filepath.Join(root, "work", bodyBackupDirName)
+	work := workDirOf(root)
+	if work == "" {
+		return ""
+	}
+	return filepath.Join(work, bodyBackupDirName)
 }
 
 // parseBackupName splits a backup filename into its stamp and hash prefix. The
@@ -238,7 +250,10 @@ func pruneBodyBackups(dir string, keep int) error {
 // already exist: two archived twins of one short ID can share a partition, and
 // a rename onto a non-empty directory fails on every Unix. Merging and then
 // re-pruning keeps the per-item bound true after the move.
-func moveBodyBackups(srcParent, dstParent, id string) error {
+func moveBodyBackups(root, srcParent, dstParent, id string) error {
+	if srcParent == "" || dstParent == "" {
+		return nil // no companion files on this backend
+	}
 	src := filepath.Join(srcParent, id)
 	entries, err := os.ReadDir(src)
 	if err != nil {
@@ -255,7 +270,7 @@ func moveBodyBackups(srcParent, dstParent, id string) error {
 		if e.IsDir() {
 			continue
 		}
-		if err := fsstore.MoveFile(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+		if err := moveCompanion(root, filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
 			return err
 		}
 	}
@@ -280,6 +295,9 @@ func ListBodyBackups(root, id string) ([]BodyBackup, error) {
 		return nil, err
 	}
 	dir := bodyBackupDirFor(root, m.Path, m.Status, m.ID)
+	if dir == "" {
+		return nil, nil
+	}
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -410,7 +428,9 @@ func backupStamps(backups []BodyBackup) []string {
 func errNoBodyBackup(root, id string) *mgerr.Error {
 	dir := "the store"
 	if m, err := ResolveUnique(root, id); err == nil {
-		dir = bodyBackupDirFor(root, m.Path, m.Status, m.ID)
+		if d := bodyBackupDirFor(root, m.Path, m.Status, m.ID); d != "" {
+			dir = d
+		}
 	}
 	return mgerr.NotFound("no_body_backup",
 		fmt.Sprintf("%s: no prior body is saved — nothing to restore.", id),

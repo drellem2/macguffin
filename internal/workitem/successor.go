@@ -3,7 +3,6 @@ package workitem
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
@@ -171,26 +170,40 @@ func checkSuccessorTarget(root string, item *Item, successor string) error {
 	return nil
 }
 
-// linkSuccessor writes a successor: tag onto the design item at path and
-// persists it, so the link survives the archive as part of the record.
-func linkSuccessor(root, path string, item *Item, successor string) error {
+// linkSuccessor writes a successor: tag onto the design item m names and
+// persists it, so the link survives the archive as part of the record. item is
+// the caller's copy; it is updated to what was stored.
+//
+// The write is a guarded read-modify-write (modifyItem): it used to be an
+// os.WriteFile of the resolved path, which re-created the item at that path if
+// a concurrent move had taken it away between the read and the write.
+func linkSuccessor(root string, m Match, item *Item, successor string) error {
 	if err := checkSuccessorTarget(root, item, successor); err != nil {
 		return err
 	}
 
 	tag := SuccessorTag(successor)
-	for _, t := range item.Tags {
-		if t == tag {
-			return nil
+	var tagsBefore []string
+	wrote := false
+	stored, _, err := modifyItem(root, m, "successor", m.Status, func(it *Item) (bool, error) {
+		wrote = false
+		for _, t := range it.Tags {
+			if t == tag {
+				return false, nil
+			}
 		}
+		tagsBefore = append([]string(nil), it.Tags...)
+		it.Tags = append(it.Tags, tag)
+		wrote = true
+		return true, nil
+	})
+	if err != nil {
+		return err
 	}
-	tagsBefore := append([]string(nil), item.Tags...)
-	item.Tags = append(item.Tags, tag)
-
-	if err := os.WriteFile(path, []byte(Render(item)), 0o644); err != nil {
-		return ioErr(fmt.Sprintf("%s: could not record successor %s: %s", item.ID, successor, fsErrText(err)))
+	*item = *stored
+	if wrote {
+		emitTagWrite(root, item, tagsBefore)
 	}
-	emitTagWrite(root, item, tagsBefore)
 	return nil
 }
 
@@ -206,8 +219,8 @@ func linkSuccessor(root, path string, item *Item, successor string) error {
 // covers both the id supplied by --successor and any successor: tag the item was
 // already carrying. See predecessor.go for why every route is reconciled and not
 // just this one.
-func linkSuccessorBothWays(root, path string, item *Item, successor string) error {
-	if err := linkSuccessor(root, path, item, successor); err != nil {
+func linkSuccessorBothWays(root string, m Match, item *Item, successor string) error {
+	if err := linkSuccessor(root, m, item, successor); err != nil {
 		return err
 	}
 	reconcileBacklinks(root, item)

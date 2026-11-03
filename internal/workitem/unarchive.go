@@ -3,12 +3,12 @@ package workitem
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/store"
 )
 
 // restorableStatuses are the states Unarchive can put an item back into.
@@ -85,15 +85,15 @@ func errUnknownPriorStatus(id, title string) *mgerr.Error {
 // back to a default. A non-empty status is the caller asserting the target
 // explicitly and is used as given.
 func Unarchive(root, id, status string) (*Item, string, error) {
-	src, cur, err := FindPath(root, id)
+	m, err := ResolveUnique(root, id)
 	if err != nil {
 		return nil, "", err
 	}
-	if cur != "archived" {
-		return nil, "", fmt.Errorf("cannot unarchive %s: item is %s, not archived", id, cur)
+	if m.Status != "archived" {
+		return nil, "", fmt.Errorf("cannot unarchive %s: item is %s, not archived", id, m.Status)
 	}
 
-	item, err := readFile(src)
+	item, err := readMatch(m)
 	if err != nil {
 		return nil, "", err
 	}
@@ -114,36 +114,41 @@ func Unarchive(root, id, status string) (*Item, string, error) {
 		)
 	}
 
-	dstDir := filepath.Join(root, "work", status)
-	if err := os.MkdirAll(dstDir, 0o755); err != nil {
-		return nil, "", ioErr(fmt.Sprintf("%s: could not be unarchived: %s", item.ID, fsErrText(err)))
+	b, err := be(root)
+	if err != nil {
+		return nil, "", err
 	}
-	dst := filepath.Join(dstDir, item.ID+".md")
-	// Never os.Rename here: a legacy same-id twin may already live at dst, and
-	// rename would silently replace it (mg-1096).
-	if err := renameNoReplace(item.ID, src, dst); err != nil {
-		var me *mgerr.Error
-		if errors.As(err, &me) {
-			return nil, "", me
+	un, ok := b.(store.Unarchiver)
+	if !ok {
+		return nil, "", mgerr.Usage("unarchive_unsupported",
+			fmt.Sprintf("%s: this storage backend cannot restore archived items.", item.ID), "")
+	}
+	// Never a replacing move: a legacy same-id twin may already live in the
+	// destination, and the backend refuses rather than destroys it (mg-1096).
+	// The result sidecar travels with the record.
+	if err := un.Unarchive(m.ID, m.Partition, inStatus(status), writer(0)); err != nil {
+		if errors.Is(err, store.ErrExists) {
+			dst := filepath.Join(status, item.ID)
+			if d := statusDirOf(root, status); d != "" {
+				dst = filepath.Join(d, filepath.Base(m.Path))
+			}
+			return nil, "", errDestinationExists(item.ID, m.Path, dst)
 		}
 		return nil, "", ioErr(fmt.Sprintf("%s: could not be unarchived: %s", item.ID, fsErrText(err)))
-	}
-
-	// Move result sidecar if it exists, so it travels with the .md. src points
-	// at archive/<partition>/<id>.md; dst is <status>/<id>.md.
-	if err := moveResultSidecar(filepath.Dir(src), dstDir, item.ID); err != nil {
-		return nil, "", ioErr(fmt.Sprintf("%s: could not be unarchived (result file): %s", item.ID, fsErrText(err)))
 	}
 
 	// Saved prior bodies come back out of the partition with the record, so the
 	// archive→unarchive round trip leaves them where a live item's backups
 	// live. Without this they would stay behind in archive/<partition>/.bodybak/
 	// while the item is edited from work/, and the two halves would diverge.
-	if err := moveBodyBackups(filepath.Join(filepath.Dir(src), bodyBackupDirName), liveBodyBackupParent(root), item.ID); err != nil {
-		return nil, "", ioErr(fmt.Sprintf("%s: could not be unarchived (saved bodies): %s", item.ID, fsErrText(err)))
+	// (Companion files: only on a local backend.)
+	if live := liveBodyBackupParent(root); live != "" {
+		if err := moveBodyBackups(root, filepath.Join(filepath.Dir(m.Path), bodyBackupDirName), live, item.ID); err != nil {
+			return nil, "", ioErr(fmt.Sprintf("%s: could not be unarchived (saved bodies): %s", item.ID, fsErrText(err)))
+		}
 	}
 
-	item, err = readFile(dst)
+	item, err = readIn(root, m.ID, store.Status(status))
 	if err != nil {
 		return nil, "", err
 	}

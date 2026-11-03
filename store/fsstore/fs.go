@@ -16,7 +16,13 @@ type FS struct {
 	Root string
 }
 
-var _ store.Backend = (*FS)(nil)
+var (
+	_ store.Backend    = (*FS)(nil)
+	_ store.Twins      = (*FS)(nil)
+	_ store.IDLister   = (*FS)(nil)
+	_ store.Unarchiver = (*FS)(nil)
+	_ store.Local      = (*FS)(nil)
+)
 
 // Open is the store.Opener for the filesystem backend. It touches nothing on
 // disk: opening a store that `mg init` has not created yet is not an error,
@@ -138,6 +144,7 @@ func (b *FS) read(id string, l Location) (*store.Doc, error) {
 		Partition: l.Partition,
 		Content:   data,
 		Hash:      store.HashOf(data),
+		Where:     l.Path,
 	}
 	if info, err := os.Stat(l.Path); err == nil {
 		doc.Mtime = info.ModTime()
@@ -262,6 +269,17 @@ func (b *FS) Transition(id string, expect, to store.State, by store.Actor) error
 	if src == dst {
 		return nil
 	}
+	// Never REPLACE a record: rename(2) over an existing destination is a
+	// silent delete, and a legacy same-id twin can sit exactly there. This is
+	// a check, not part of the atomic step — the race it leaves (a twin
+	// created at dst in the microseconds before the rename) needs a same-id
+	// create, which Create's store-wide scan already refuses.
+	if _, err := os.Lstat(dst); err == nil {
+		if _, err := os.Lstat(src); os.IsNotExist(err) {
+			return b.lost(id, expect) // a racer moved it there first
+		}
+		return fmt.Errorf("%s: %s already holds a record: %w", id, to.Status, store.ErrExists)
+	}
 	if err := MoveItem(src, dst); err != nil {
 		if os.IsNotExist(err) {
 			return b.lost(id, expect)
@@ -279,6 +297,10 @@ func (b *FS) Transition(id string, expect, to store.State, by store.Actor) error
 // Edit implements store.Backend through RewriteExisting: no O_CREATE, so an
 // item a concurrent Transition moved away is followed (when the move lands
 // after the open) or refused as lost (when it lands before) — never recreated.
+//
+// With legacy same-id twins, ifUnchanged picks the record: the one whose
+// stored bytes it hashes — the record the caller read. Without a hash, or
+// when it matches none or several, the edit is refused.
 func (b *FS) Edit(id string, ifUnchanged store.Hash, content []byte, _ store.Actor) error {
 	locs := Locate(b.Root, id)
 	switch len(locs) {
@@ -286,7 +308,18 @@ func (b *FS) Edit(id string, ifUnchanged store.Hash, content []byte, _ store.Act
 		return fmt.Errorf("%s: %w", id, store.ErrNotFound)
 	case 1:
 	default:
-		return fmt.Errorf("%s: %d records: %w", id, len(locs), store.ErrAmbiguous)
+		var picked []Location
+		if ifUnchanged != "" {
+			for _, l := range locs {
+				if data, err := os.ReadFile(l.Path); err == nil && store.HashOf(data) == ifUnchanged {
+					picked = append(picked, l)
+				}
+			}
+		}
+		if len(picked) != 1 {
+			return fmt.Errorf("%s: %d records: %w", id, len(locs), store.ErrAmbiguous)
+		}
+		locs = picked
 	}
 	seen := stateOf(locs[0], id)
 	if err := RewriteExisting(locs[0].Path, ifUnchanged, content); err != nil {
@@ -330,6 +363,126 @@ func (b *FS) Archive(id string, partition string, _ store.Actor) error {
 	}
 	return nil
 }
+
+// GetAll implements store.Twins: every record id names, in Locate's order.
+//
+// A record renamed between the scan and its read (a concurrent claim or
+// re-stamp) is not dropped: the scan is repeated, so an item that exists
+// throughout is never reported as missing because it was moving.
+func (b *FS) GetAll(id string) ([]store.Doc, error) {
+	const rescans = 5
+	for attempt := 1; ; attempt++ {
+		var docs []store.Doc
+		moved := false
+		for _, l := range Locate(b.Root, id) {
+			d, err := b.read(id, l)
+			if err != nil {
+				if errors.Is(err, store.ErrNotFound) {
+					moved = true
+					continue
+				}
+				return nil, err
+			}
+			docs = append(docs, *d)
+		}
+		if !moved || attempt == rescans {
+			return docs, nil
+		}
+	}
+}
+
+// IDs implements store.IDLister from directory entries alone — no item is
+// opened. Names match exactly as Locate matches them: "<id>.md", the claimed
+// "<id>.md.<holder>", and under archive partitions the same; loose entries
+// directly under work/archive/ only as "<id>.md" (MatchesArchivedID).
+func (b *FS) IDs(status store.Status) ([]string, error) {
+	var ids []string
+	collect := func(dir string, strict bool) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if strict {
+				if id, ok := strings.CutSuffix(name, ".md"); ok && id != "" {
+					ids = append(ids, id)
+				}
+				continue
+			}
+			if idx := strings.Index(name, ".md"); idx > 0 {
+				if rest := name[idx:]; rest == ".md" || strings.HasPrefix(rest, ".md.") {
+					ids = append(ids, name[:idx])
+				}
+			}
+		}
+	}
+	if status != store.Archived {
+		collect(StatusDir(b.Root, status), false)
+		return ids, nil
+	}
+	archiveRoot := StatusDir(b.Root, store.Archived)
+	collect(archiveRoot, true)
+	entries, err := os.ReadDir(archiveRoot)
+	if err != nil {
+		return ids, nil
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			collect(filepath.Join(archiveRoot, e.Name()), false)
+		}
+	}
+	return ids, nil
+}
+
+// Unarchive implements store.Unarchiver: MoveNoReplace out of the partition
+// ("" = a loose record directly under work/archive/), so a same-id record
+// already in to's directory is refused rather than destroyed (mg-1096). The
+// result sidecar follows.
+func (b *FS) Unarchive(id string, partition string, to store.State, by store.Actor) error {
+	to = withHolder(to, by)
+	expect := store.State{Status: store.Archived}
+	if to.Status == store.Archived {
+		return fmt.Errorf("fsstore: %s: cannot unarchive into the archive", id)
+	}
+	dir := filepath.Join(StatusDir(b.Root, store.Archived), partition)
+	src := filepath.Join(dir, FileName(id, expect))
+	if _, err := os.Lstat(src); err != nil {
+		if os.IsNotExist(err) {
+			return b.lost(id, expect)
+		}
+		return err
+	}
+	dstDir := StatusDir(b.Root, to.Status)
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return err
+	}
+	if err := MoveNoReplace(src, filepath.Join(dstDir, FileName(id, to))); err != nil {
+		if isExist(err) {
+			return fmt.Errorf("%s: %s: %w", id, to.Status, store.ErrExists)
+		}
+		if os.IsNotExist(err) {
+			return b.lost(id, expect)
+		}
+		return err
+	}
+	if err := MoveSidecar(dir, dstDir, id); err != nil {
+		return fmt.Errorf("%s: unarchived, but result sidecar could not follow: %w", id, err)
+	}
+	return nil
+}
+
+// StatusDir implements store.Local.
+func (b *FS) StatusDir(st store.Status) string { return StatusDir(b.Root, st) }
+
+// WorkDir implements store.Local.
+func (b *FS) WorkDir() string { return filepath.Join(b.Root, "work") }
+
+// MoveCompanion implements store.Local: rename(2) of a companion file.
+func (b *FS) MoveCompanion(src, dst string) error { return MoveFile(src, dst) }
 
 // Events implements store.Backend.
 func (b *FS) Events() store.EventLog { return EventLog(b.Root) }

@@ -83,6 +83,11 @@ func SidecarOf(m Match) (Sidecar, error) {
 		Status:    m.Status,
 		Partition: m.Partition,
 	}
+	if !m.local {
+		// A backend with no companion files has no result sidecar: the
+		// result is absent, and Path is only a label.
+		return sc, nil
+	}
 	info, err := os.Stat(sc.Path)
 	switch {
 	case err == nil:

@@ -5,10 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/user"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,7 +14,7 @@ import (
 
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
-	"github.com/drellem2/macguffin/store/fsstore"
+	"github.com/drellem2/macguffin/store"
 )
 
 // Item represents a work item with YAML frontmatter fields.
@@ -164,7 +162,9 @@ func generateID(prefix, title string, created time.Time, nonce int) string {
 //     pending/ whose ID the new item happened to draw. O_EXCL also closes the
 //     TOCTOU window that a bare pre-existence check would leave open.
 //
-// On either rejection the ID is reminted with an incremented nonce.
+// On either rejection the ID is reminted with an incremented nonce. Both
+// layers are now the storage backend's Create contract (store.Backend): on the
+// filesystem, fsstore.Locate's store-wide scan and then an O_EXCL create.
 func Create(root, prefix, typ, title string, depends []string, opts ...CreateOption) (*Item, error) {
 	now := nowFunc()
 
@@ -205,19 +205,14 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 		return nil, err
 	}
 	subdir, _ := placeForDeps(deps)
-	dir := filepath.Join(root, "work", subdir)
+
+	b, err := be(root)
+	if err != nil {
+		return nil, err
+	}
 
 	for nonce := 0; nonce < maxMintAttempts; nonce++ {
 		id := generateID(prefix, title, now, nonce)
-
-		// Layer 1: whole-store uniqueness.
-		matches, err := Resolve(root, id)
-		if err != nil {
-			return nil, err
-		}
-		if len(matches) > 0 {
-			continue
-		}
 
 		item := &Item{
 			ID:      id,
@@ -256,11 +251,13 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 			return nil, err
 		}
 
-		// Layer 2: atomic, non-truncating create.
-		path := filepath.Join(dir, id+".md")
-		if err := writeNew(path, Render(item)); err != nil {
-			if errors.Is(err, fs.ErrExist) {
-				continue // lost a race; remint
+		// Both layers are Backend.Create's contract: it refuses (wrapping
+		// store.ErrExists) an id that names a record ANYWHERE in the store, and
+		// its create never overwrites one. On the filesystem that is the
+		// store-wide scan Resolve uses, then an O_EXCL create.
+		if err := b.Create(id, inStatus(subdir), []byte(Render(item)), writer(0)); err != nil {
+			if errors.Is(err, store.ErrExists) {
+				continue // taken, or lost a race; remint
 			}
 			return nil, ioErr(fmt.Sprintf("could not create work item: %s", fsErrText(err)))
 		}
@@ -298,12 +295,6 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 		Message:  fmt.Sprintf("could not mint an unused work item ID after %d attempts.", maxMintAttempts),
 		Hint:     "The short-ID space appears to be exhausted. Archive or prune old work items.",
 	}
-}
-
-// writeNew creates path exclusively — it never truncates an existing file.
-// The fs.ErrExist it returns on collision is what drives the remint loop.
-func writeNew(path, content string) error {
-	return fsstore.CreateExclusive(path, []byte(content))
 }
 
 // Render serialises an Item back to markdown with YAML frontmatter.
@@ -374,8 +365,9 @@ func Render(item *Item) string {
 		item.ID, item.Type, item.Created.Format(time.RFC3339), item.Creator, depsLine, tagsLine, repoLine, assigneeLine, priorityLine, branchLine, budgetLine, snoozeLine, body)
 }
 
-// FindPath returns the filesystem path and status directory for a work item by
-// ID, erroring if the ID is ambiguous. See Resolve.
+// FindPath returns where a work item is stored (a file path on the filesystem
+// backend — a label, see Match.Path) and its status, erroring if the ID is
+// ambiguous. See Resolve.
 func FindPath(root, id string) (path string, status string, err error) {
 	m, err := ResolveUnique(root, id)
 	if err != nil {
@@ -391,23 +383,19 @@ func Read(root, id string) (*Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	return readFile(m.Path)
+	return readMatch(m)
 }
 
 // List returns all work items in available/.
 func List(root string) ([]*Item, error) {
-	dir := filepath.Join(root, "work", "available")
-	entries, err := os.ReadDir(dir)
+	docs, err := listDocs(root, store.Available)
 	if err != nil {
 		return nil, fmt.Errorf("reading available/: %w", err)
 	}
 
 	var items []*Item
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		item, err := readFile(filepath.Join(dir, e.Name()))
+	for i := range docs {
+		item, err := itemOf(&docs[i])
 		if err != nil {
 			continue // skip malformed files
 		}
@@ -419,21 +407,6 @@ func List(root string) ([]*Item, error) {
 	})
 
 	return items, nil
-}
-
-func readFile(path string) (*Item, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	item, err := Parse(string(data))
-	if err != nil {
-		return nil, err
-	}
-	if info, err := os.Stat(path); err == nil {
-		item.Mtime = info.ModTime()
-	}
-	return item, nil
 }
 
 // Parse extracts an Item from markdown content with YAML frontmatter.

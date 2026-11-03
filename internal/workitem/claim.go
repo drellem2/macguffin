@@ -2,17 +2,16 @@ package workitem
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 
 	"github.com/drellem2/macguffin/internal/event"
-	"github.com/drellem2/macguffin/store/fsstore"
+	"github.com/drellem2/macguffin/store"
 )
 
-// Claim atomically moves a work item from available/ to claimed/ using rename(2).
-// The claimed filename is suffixed with the owner PID for exactly-once semantics.
-// If pid is 0, it defaults to the current process's PID.
+// Claim atomically moves a work item from available/ to claimed/ through the
+// backend's Transition — rename(2) on the filesystem, where the claimed
+// filename is suffixed with the owner PID for exactly-once semantics.
+// If pid is 0, the claim is the installed Actor's (the CLI edge's process).
 // Returns the claimed Item, or an error if the item doesn't exist or was already claimed.
 func Claim(root, id string, pid int) (*Item, error) {
 	m, err := ResolveUnique(root, id)
@@ -23,29 +22,21 @@ func Claim(root, id string, pid int) (*Item, error) {
 		return nil, explainClaimFailure(root, id)
 	}
 
-	src := m.Path
-	if pid == 0 {
-		pid = os.Getpid()
-	}
-	dst := filepath.Join(root, "work", "claimed", fmt.Sprintf("%s.md.%d", id, pid))
+	by := writer(pid)
 
-	// rename(2) is atomic on local filesystems.
-	// If two processes race, exactly one succeeds; the other gets ENOENT.
-	if err := fsstore.MoveItem(src, dst); err != nil {
-		if os.IsNotExist(err) {
-			// The source wasn't in available/ — diagnose where it really is.
+	// The single atomic instant: of two racing claims exactly one Transition
+	// succeeds and the loser gets *store.ErrLost. The backend carries any
+	// result sidecar with the item (one may sit in available/ after an
+	// unarchive) rather than orphaning it behind.
+	if err := transition(root, m.ID, m.State(), claimedBy(""), by); err != nil {
+		if isLost(err) {
+			// The item wasn't in available/ — diagnose where it really is.
 			return nil, explainClaimFailure(root, id)
 		}
 		return nil, ioErr(fmt.Sprintf("%s: could not be claimed: %s", id, fsErrText(err)))
 	}
 
-	// A sidecar may sit in available/ (e.g. after an unarchive); it must follow
-	// the .md into claimed/ rather than be orphaned behind it.
-	if err := moveResultSidecar(filepath.Dir(src), filepath.Dir(dst), id); err != nil {
-		return nil, ioErr(fmt.Sprintf("%s: claimed, but result sidecar could not follow: %s", id, fsErrText(err)))
-	}
-
-	item, err := readFile(dst)
+	item, err := readIn(root, m.ID, store.Claimed)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +46,7 @@ func Claim(root, id string, pid int) (*Item, error) {
 		"from_status": "available",
 		"to_status":   "claimed",
 		"actor":       actor(),
-		"pid":         strconv.Itoa(pid),
+		"pid":         strconv.Itoa(by.PID),
 	})
 
 	return item, nil

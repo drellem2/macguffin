@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
 )
@@ -27,7 +26,7 @@ func statusWithPID(root, id string) (status string, pid int) {
 		return "", 0
 	}
 	if m.Status == "claimed" {
-		return m.Status, parseClaimPID(filepath.Base(m.Path))
+		return m.Status, holderPID(m.Holder)
 	}
 	return m.Status, 0
 }
@@ -142,7 +141,7 @@ func explainDoneFailure(root, id string) *mgerr.Error {
 func shelvedDoneRemediation(root, id string) string {
 	key := id
 	if m, err := ResolveUnique(root, id); err == nil {
-		if item, err := readFile(m.Path); err == nil {
+		if item, err := readMatch(m); err == nil {
 			key = item.ID
 		}
 	}

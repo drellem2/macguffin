@@ -2,14 +2,11 @@ package workitem
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
-	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // UnclaimResult describes a released claim.
@@ -151,10 +148,9 @@ func Unclaim(root, id string, opts ...UnclaimOption) (*UnclaimResult, error) {
 		return nil, explainUnclaimFailure(root, id)
 	}
 
-	src := m.Path
-	pid := parseClaimPID(filepath.Base(src))
+	pid := holderPID(m.Holder)
 
-	item, err := readFile(src)
+	item, err := readMatch(m)
 	if err != nil {
 		return nil, err
 	}
@@ -177,11 +173,21 @@ func Unclaim(root, id string, opts ...UnclaimOption) (*UnclaimResult, error) {
 		}
 	}
 
+	//
+	// A guarded read-modify-write (modifyItem), not os.WriteFile: a write that
+	// lost a race to a concurrent move used to re-create the item in claimed/
+	// beside wherever it had gone. It must still be in claimed/ to retry.
 	if o.setAssignee && item.Assignee != o.assignee {
-		item.Assignee = o.assignee
-		if err := os.WriteFile(src, []byte(Render(item)), 0o644); err != nil {
-			return nil, ioErr(fmt.Sprintf(
-				"%s: claim NOT released — the assignee could not be recorded first: %s", id, fsErrText(err)))
+		item, m, err = modifyItem(root, m, "unclaim", "claimed", func(it *Item) (bool, error) {
+			if it.Assignee == o.assignee {
+				return false, nil
+			}
+			it.Assignee = o.assignee
+			return true, nil
+		})
+		if err != nil {
+			return nil, mgerr.Coerce(err).AppendHint(fmt.Sprintf(
+				"%s: claim NOT released — the assignee could not be recorded first.", id))
 		}
 	}
 
@@ -209,15 +215,13 @@ func Unclaim(root, id string, opts ...UnclaimOption) (*UnclaimResult, error) {
 			return nil, fmt.Errorf("%s: claim NOT released — its gates could not be described: %w", id, err)
 		}
 	}
-	dst := filepath.Join(root, "work", landing, id+".md")
-
-	if err := fsstore.MoveItem(src, dst); err != nil {
+	// The backend carries the result sidecar with the item, so it is not
+	// orphaned in claimed/.
+	if err := transition(root, m.ID, m.State(), inStatus(landing), writer(0)); err != nil {
+		if isLost(err) {
+			return nil, explainUnclaimFailure(root, id)
+		}
 		return nil, ioErr(fmt.Sprintf("%s: could not release claim: %s", id, fsErrText(err)))
-	}
-
-	// The result sidecar must follow the .md, or it is orphaned in claimed/.
-	if err := moveResultSidecar(filepath.Dir(src), filepath.Dir(dst), id); err != nil {
-		return nil, ioErr(fmt.Sprintf("%s: claim released, but result sidecar could not follow: %s", id, fsErrText(err)))
 	}
 
 	kvs := map[string]string{

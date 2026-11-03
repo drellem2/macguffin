@@ -3,30 +3,28 @@ package workitem
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/store"
 )
 
 // archiveCandidate is one done item eligible for archiving, carried with the
 // facts the move needs so that scanning and moving stay separable (see
 // archiveCandidates / ArchiveDryRun).
 type archiveCandidate struct {
-	path     string
+	m        Match
 	item     *Item
 	doneTime time.Time
 }
 
-// archiveCandidates scans done/ and returns the items older than maxAge. It is
+// archiveCandidates lists done/ and returns the items older than maxAge. It is
 // pure: it reads the store and moves nothing. Archive and ArchiveDryRun share
 // it so that a preview cannot drift from the mutation it previews.
 func archiveCandidates(root string, maxAge time.Duration) ([]archiveCandidate, error) {
-	doneDir := filepath.Join(root, "work", "done")
-	entries, err := os.ReadDir(doneDir)
+	docs, err := listDocs(root, store.Done)
 	if err != nil {
 		return nil, fmt.Errorf("reading done/: %w", err)
 	}
@@ -34,65 +32,56 @@ func archiveCandidates(root string, maxAge time.Duration) ([]archiveCandidate, e
 	now := time.Now()
 	var cands []archiveCandidate
 
-	for _, e := range entries {
-		// Skip non-markdown files (e.g., .result.json sidecars)
-		if !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-
-		path := filepath.Join(doneDir, e.Name())
-		item, err := readFile(path)
+	for i := range docs {
+		m := matchOf(docs[i])
+		item, err := readMatch(m)
 		if err != nil {
 			continue // skip malformed files
 		}
 
-		// Use file modification time as the "done" time
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		doneTime := info.ModTime()
+		// The stored record's modification time is the "done" time.
+		doneTime := docs[i].Mtime
 
 		if now.Sub(doneTime) < maxAge {
 			continue
 		}
 
-		cands = append(cands, archiveCandidate{path: path, item: item, doneTime: doneTime})
+		cands = append(cands, archiveCandidate{m: m, item: item, doneTime: doneTime})
 	}
 
 	return cands, nil
 }
 
-// archiveFile moves a single done item — its .md and any result sidecar — into
-// the archive partition for doneTime (e.g. archive/2026-03/), and emits the
-// archive event. It handles exactly one item and has no notion of a sweep;
+// archiveFile moves a single done item — its record and any result sidecar —
+// into the archive partition for doneTime (e.g. archive/2026-03/), and emits
+// the archive event. It handles exactly one item and has no notion of a sweep;
 // both Archive and ArchiveItem route their moves through it so the two forms
 // cannot drift apart on partitioning, sidecar handling, or eventing.
 func archiveFile(root string, c archiveCandidate) error {
-	name := filepath.Base(c.path)
+	id := c.m.ID
+	b, err := be(root)
+	if err != nil {
+		return err
+	}
 
 	// Determine archive partition (YYYY-MM based on done time)
 	partition := c.doneTime.Format("2006-01")
-	archiveDir := filepath.Join(root, "work", "archive", partition)
-	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
-		return fmt.Errorf("creating archive dir %s: %w", archiveDir, err)
+	archiveDir := ""
+	if l, ok := localOf(b); ok {
+		archiveDir = filepath.Join(l.StatusDir(store.Archived), partition)
 	}
 
-	// Move the .md file. Never os.Rename: a legacy same-id twin may already be
-	// in this partition, and rename would silently replace it (mg-1096).
-	dstPath := filepath.Join(archiveDir, name)
-	if err := renameNoReplace(c.item.ID, c.path, dstPath); err != nil {
-		var me *mgerr.Error
-		if errors.As(err, &me) {
-			return me
+	// Backend.Archive refuses, rather than replaces, a legacy same-id twin
+	// already in this partition (mg-1096), and carries the result sidecar.
+	if err := b.Archive(id, partition, writer(0)); err != nil {
+		if errors.Is(err, store.ErrExists) {
+			dst := filepath.Join("archived", partition, id)
+			if archiveDir != "" {
+				dst = filepath.Join(archiveDir, filepath.Base(c.m.Path))
+			}
+			return errDestinationExists(id, c.m.Path, dst)
 		}
-		return fmt.Errorf("archiving %s: %w", c.item.ID, err)
-	}
-
-	// Move result sidecar if it exists, so it travels with the .md.
-	id := strings.TrimSuffix(name, ".md")
-	if err := moveResultSidecar(filepath.Dir(c.path), archiveDir, id); err != nil {
-		return fmt.Errorf("archiving sidecar for %s: %w", id, err)
+		return fmt.Errorf("archiving %s: %w", id, err)
 	}
 
 	// Saved prior bodies travel too, into archive/<partition>/.bodybak/<id>/.
@@ -101,9 +90,12 @@ func archiveFile(root string, c archiveCandidate) error {
 	// deleting them would destroy the only copy of a body at the exact moment
 	// nobody is watching. Moving them keeps the archive self-contained, keeps
 	// `mg restore-body` working on an archived item, and gives Unarchive
-	// something to bring back. See bodyBackupDirFor.
-	if err := moveBodyBackups(liveBodyBackupParent(root), filepath.Join(archiveDir, bodyBackupDirName), id); err != nil {
-		return fmt.Errorf("archiving saved bodies for %s: %w", id, err)
+	// something to bring back. See bodyBackupDirFor. (Companion files: only on
+	// a local backend.)
+	if archiveDir != "" {
+		if err := moveBodyBackups(root, liveBodyBackupParent(root), filepath.Join(archiveDir, bodyBackupDirName), id); err != nil {
+			return fmt.Errorf("archiving saved bodies for %s: %w", id, err)
+		}
 	}
 
 	event.Emit(root, "work.archive", map[string]string{
@@ -264,15 +256,15 @@ type ArchiveOpts struct {
 // permitted, WITHOUT moving anything or writing anything. It is what --dry-run
 // consults, so the preview cannot promise an archive the real run will refuse.
 func CheckArchivable(root, id string, opts ArchiveOpts) (*Item, error) {
-	path, status, err := FindPath(root, id)
+	m, err := ResolveUnique(root, id)
 	if err != nil {
 		return nil, err
 	}
-	if status != "done" {
+	if m.Status != "done" {
 		return nil, explainArchiveFailure(root, id)
 	}
 
-	item, err := readFile(path)
+	item, err := readMatch(m)
 	if err != nil {
 		return nil, err
 	}
@@ -317,15 +309,15 @@ func CheckArchivable(root, id string, opts ArchiveOpts) (*Item, error) {
 // textual, and why its failure message does not mention opts.Force. An item of
 // ANY type carrying a blocked-on-* tag is refused too — see blockedon.go.
 func ArchiveItem(root, id string, opts ArchiveOpts) (*Item, error) {
-	path, status, err := FindPath(root, id)
+	m, err := ResolveUnique(root, id)
 	if err != nil {
 		return nil, err
 	}
-	if status != "done" {
+	if m.Status != "done" {
 		return nil, explainArchiveFailure(root, id)
 	}
 
-	item, err := readFile(path)
+	item, err := readMatch(m)
 	if err != nil {
 		return nil, err
 	}
@@ -334,7 +326,7 @@ func ArchiveItem(root, id string, opts ArchiveOpts) (*Item, error) {
 	// reader will: the successor: tag is part of the archived record, not a
 	// fact that lived only in this process's argv.
 	if opts.Successor != "" {
-		if err := linkSuccessorBothWays(root, path, item, opts.Successor); err != nil {
+		if err := linkSuccessorBothWays(root, m, item, opts.Successor); err != nil {
 			return nil, err
 		}
 	} else {
@@ -355,12 +347,14 @@ func ArchiveItem(root, id string, opts ArchiveOpts) (*Item, error) {
 		})
 	}
 
-	info, err := os.Stat(path)
+	// Re-read for the done time: a successor link written above is a write,
+	// and the record's modification time is what partitions it.
+	m, err = matchIn(root, m.ID, store.Done)
 	if err != nil {
-		return nil, ioErr(fmt.Sprintf("%s: could not be archived: %s", id, fsErrText(err)))
+		return nil, explainArchiveFailure(root, id)
 	}
 
-	if err := archiveFile(root, archiveCandidate{path: path, item: item, doneTime: info.ModTime()}); err != nil {
+	if err := archiveFile(root, archiveCandidate{m: m, item: item, doneTime: m.doc.Mtime}); err != nil {
 		var me *mgerr.Error
 		if errors.As(err, &me) {
 			return nil, me
@@ -374,38 +368,24 @@ func ArchiveItem(root, id string, opts ArchiveOpts) (*Item, error) {
 // ListArchived returns all work items in the archive directory
 // (across all date partitions).
 func ListArchived(root string) ([]*Item, error) {
-	archiveRoot := filepath.Join(root, "work", "archive")
-
-	// Archive may not exist yet
-	if _, err := os.Stat(archiveRoot); os.IsNotExist(err) {
-		return nil, nil
-	}
-
-	partitions, err := os.ReadDir(archiveRoot)
+	docs, err := listDocs(root, store.Archived)
 	if err != nil {
 		return nil, fmt.Errorf("reading archive/: %w", err)
 	}
 
 	var items []*Item
-	for _, p := range partitions {
-		if !p.IsDir() {
+	for i := range docs {
+		// Partitioned records only, as this has always listed: a loose file
+		// directly under archive/ is visible to Resolve (so it cannot be
+		// minted over) but is not a listed archive entry.
+		if docs[i].Partition == "" {
 			continue
 		}
-		dir := filepath.Join(archiveRoot, p.Name())
-		entries, err := os.ReadDir(dir)
+		item, err := itemOf(&docs[i])
 		if err != nil {
 			continue
 		}
-		for _, e := range entries {
-			if !strings.HasSuffix(e.Name(), ".md") {
-				continue
-			}
-			item, err := readFile(filepath.Join(dir, e.Name()))
-			if err != nil {
-				continue
-			}
-			items = append(items, item)
-		}
+		items = append(items, item)
 	}
 
 	return items, nil

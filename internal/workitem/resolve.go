@@ -1,6 +1,7 @@
 package workitem
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
-	"github.com/drellem2/macguffin/store/fsstore"
+	"github.com/drellem2/macguffin/store"
 )
 
 // This file is the ONE place that turns a short work-item ID into a file on
@@ -55,12 +56,37 @@ var liveStates = map[string]bool{
 // Tests swap this out.
 var shadowNotice io.Writer = os.Stderr
 
-// Match is one filesystem hit for a work-item ID.
+// Match is one stored record for a work-item ID.
 type Match struct {
-	ID        string // the short ID that was resolved
-	Path      string // absolute path to the .md file
+	ID string // the short ID that was resolved
+	// Path is where the record is stored, for humans: the absolute .md path on
+	// the filesystem backend (store.Doc.Where), "<status>/<id>" on a backend
+	// with no better answer. It is a LABEL — nothing reads or writes through it.
+	Path      string
 	Status    string // available | claimed | done | pending | shelved | archived
 	Partition string // archive partition (e.g. "2026-07"); empty unless Status=="archived"
+	// Holder is who holds a claimed record, in the backend's terms (fsstore:
+	// the claim PID). Empty for every other status.
+	Holder string
+
+	doc   *store.Doc // the record as Resolve read it
+	local bool       // Path is a real file on a store.Local backend
+}
+
+// State is the match's store.State, the EXPECT side of a Transition out of it.
+func (m Match) State() store.State {
+	return store.State{Status: store.Status(m.Status), Holder: m.Holder}
+}
+
+func matchOf(d store.Doc) Match {
+	return Match{
+		ID:        d.ID,
+		Path:      where(&d),
+		Status:    string(d.State.Status),
+		Partition: d.Partition,
+		Holder:    d.State.Holder,
+		doc:       &d,
+	}
 }
 
 // Live reports whether the match is a live work item rather than a terminal
@@ -79,17 +105,40 @@ func (m Match) Live() bool { return liveStates[m.Status] }
 // Unreadable directories are skipped rather than failing the resolve: a missing
 // work/shelved/ must not make a live item unresolvable.
 func Resolve(root, id string) ([]Match, error) {
-	// The walk itself is the filesystem backend's (fsstore.Locate): it is the
-	// same store-wide scan that backend's Create runs before its O_EXCL, and
-	// one scan cannot disagree with itself about what the store holds.
-	var matches []Match
-	for _, l := range fsstore.Locate(root, id) {
-		matches = append(matches, Match{
-			ID:        id,
-			Path:      l.Path,
-			Status:    string(l.Status),
-			Partition: l.Partition,
-		})
+	// The walk itself is the backend's. On the filesystem it is GetAll over
+	// fsstore.Locate — the same store-wide scan that backend's Create runs
+	// before its O_EXCL, so one scan cannot disagree with itself about what
+	// the store holds. A backend that cannot hold twins answers through Get.
+	if id == "" {
+		return nil, nil
+	}
+	b, err := be(root)
+	if err != nil {
+		return nil, err
+	}
+	var docs []store.Doc
+	if tw, ok := b.(store.Twins); ok {
+		docs, err = tw.GetAll(id)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		d, err := b.Get(id)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+		case err != nil:
+			return nil, err
+		default:
+			docs = []store.Doc{*d}
+		}
+	}
+	_, local := localOf(b)
+	matches := make([]Match, 0, len(docs))
+	for _, d := range docs {
+		m := matchOf(d)
+		m.ID = id
+		m.local = local
+		matches = append(matches, m)
 	}
 	return matches, nil
 }
@@ -122,6 +171,12 @@ func Resolve(root, id string) ([]Match, error) {
 // answer — and an empty qualifier ("mg-4fa7@") is a usage error. Only archived
 // records carry a partition, so a live item is never selectable by qualifier.
 func ResolveUnique(root, id string) (Match, error) {
+	return resolveUnique(root, id, true)
+}
+
+// resolveUnique is ResolveUnique; warn=false skips the shadow notice for a
+// caller re-resolving an id the operator has already been told about.
+func resolveUnique(root, id string, warn bool) (Match, error) {
 	bareID, partition, qualified := strings.Cut(id, "@")
 	if qualified && partition == "" {
 		return Match{}, errEmptyPartition(id)
@@ -167,7 +222,9 @@ func ResolveUnique(root, id string) (Match, error) {
 		return Match{}, errAmbiguousID(root, bareID, matches)
 	}
 
-	warnShadowed(root, bareID, live[0], matches)
+	if warn {
+		warnShadowed(root, bareID, live[0], matches)
+	}
 	return live[0], nil
 }
 
@@ -229,7 +286,7 @@ func ReadWithMatch(root, id string) (*Item, Match, error) {
 	if err != nil {
 		return nil, Match{}, err
 	}
-	item, err := readFile(m.Path)
+	item, err := readMatch(m)
 	if err != nil {
 		return nil, Match{}, err
 	}
@@ -316,48 +373,43 @@ func errNoSuchPartition(id, partition string, matches []Match) *mgerr.Error {
 // missing work/shelved/ must not turn every mailbox into an unvouched one.
 func AllIDs(root string) map[string]bool {
 	ids := map[string]bool{}
-
-	collect := func(dir string) {
-		entries, err := os.ReadDir(dir)
+	for _, status := range append(append([]string{}, activeStates...), "archived") {
+		got, err := idsIn(root, status)
 		if err != nil {
-			return
-		}
-		for _, e := range entries {
-			if id := idFromEntry(e.Name()); id != "" {
-				ids[id] = true
-			}
-		}
-	}
-
-	for _, state := range activeStates {
-		collect(filepath.Join(root, "work", state))
-	}
-
-	// Archive records live in a month partition or loose directly under
-	// work/archive/ — Resolve scans both, and so must this, or an id visible to
-	// a single-name lookup would be invisible to a bulk one and the two would
-	// disagree about the same store.
-	archiveRoot := filepath.Join(root, "work", "archive")
-	entries, err := os.ReadDir(archiveRoot)
-	if err != nil {
-		return ids
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			collect(filepath.Join(archiveRoot, e.Name()))
 			continue
 		}
-		// Loose entries match STRICTLY, exactly as matchesArchivedID does, so
-		// an editor backup ("<id>.md.bak") left beside the archive does not
-		// vouch for a name Resolve would call unknown. A bulk answer that is
-		// more permissive than the single-name one is a disagreement between
-		// two views of the same store, and the whole point of a standing is
-		// that it agrees with the refusal it explains.
-		if name := e.Name(); strings.HasSuffix(name, ".md") && len(name) > len(".md") {
-			ids[strings.TrimSuffix(name, ".md")] = true
+		for _, id := range got {
+			ids[id] = true
 		}
 	}
 	return ids
+}
+
+// idsIn returns the ids stored in status, through the backend's cheap id
+// enumeration when it has one (store.IDLister: names only, no documents read)
+// and through List otherwise. Archived covers every partition AND loose
+// records directly under the archive, matching Resolve, so a bulk answer
+// cannot disagree with a single-name one. The filesystem backend's names are
+// matched exactly as Resolve matches them — "<id>.md" and the claimed
+// "<id>.md.<pid>", never a sidecar or an editor's "<id>.md.bak" left beside
+// the archive.
+func idsIn(root, status string) ([]string, error) {
+	b, err := be(root)
+	if err != nil {
+		return nil, err
+	}
+	if l, ok := b.(store.IDLister); ok {
+		return l.IDs(store.Status(status))
+	}
+	docs, err := b.List(store.Status(status))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(docs))
+	for _, d := range docs {
+		out = append(out, d.ID)
+	}
+	return out, nil
 }
 
 // idFromEntry recovers the work-item id a directory entry names, or "" if it
@@ -393,17 +445,11 @@ func LiveIDs(root string) []string {
 		if !liveStates[state] {
 			continue
 		}
-		entries, err := os.ReadDir(filepath.Join(root, "work", state))
+		got, err := idsIn(root, state)
 		if err != nil {
 			continue
 		}
-		for _, e := range entries {
-			// Only "<id>.md" and "<id>.md.<pid>" name an item; a sidecar
-			// ("<id>.result.json") has no ".md" and yields "".
-			id := idFromEntry(e.Name())
-			if id == "" {
-				continue
-			}
+		for _, id := range got {
 			if !seen[id] {
 				seen[id] = true
 				ids = append(ids, id)

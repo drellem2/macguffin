@@ -3,8 +3,6 @@ package workitem
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -12,7 +10,6 @@ import (
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
 	"github.com/drellem2/macguffin/store"
-	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // UpdateField represents which field to update and how.
@@ -162,7 +159,7 @@ var editBeforeWrite func()
 // status directories, the stale copy claimable again, exit 0. That was inferred
 // by the storage-seam design memo and is now reproduced and pinned by
 // TestUpdate_ClaimBetweenReadAndWriteDoesNotRecreateOldPath. The write now goes
-// through the filesystem backend's guarded rewrite (fsstore.RewriteExisting):
+// through the backend's guarded Edit (on the filesystem, fsstore.RewriteExisting):
 // no O_CREATE, and the stored bytes must still be the bytes this function read.
 // When either fails — the item moved, or its content changed — nothing is
 // written and the whole read-modify-write runs again against the item where it
@@ -191,15 +188,15 @@ const maxEditAttempts = 3
 var errEditRaced = errors.New("edit raced a concurrent write")
 
 func updateOnce(root, id string, fields UpdateField) (*Item, *BodyChange, error) {
-	itemPath, status, err := FindPath(root, id)
+	m, err := ResolveUnique(root, id)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	data, err := os.ReadFile(itemPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("reading work item: %w", err)
+	itemPath, status := m.Path, m.Status
+	if m.doc == nil {
+		return nil, nil, errNoSuchItem(id)
 	}
+	data := m.doc.Content
 
 	item, err := Parse(string(data))
 	if err != nil {
@@ -237,7 +234,7 @@ func updateOnce(root, id string, fields UpdateField) (*Item, *BodyChange, error)
 				fmt.Sprintf("Get the current one with 'mg show %s --body-hash'.", id))
 		}
 		if !bodyHashMatches(want, bodyBefore) {
-			return nil, nil, errBodyChanged(id, itemPath, want, bodyBefore)
+			return nil, nil, errBodyChanged(id, m.doc.Mtime, want, bodyBefore)
 		}
 		asserted = want
 	}
@@ -245,7 +242,7 @@ func updateOnce(root, id string, fields UpdateField) (*Item, *BodyChange, error)
 	// The same, on the dispatch gate. Also before any field is applied, so a
 	// refusal leaves the stored item byte-identical.
 	if fields.IfAssignee != nil && item.Assignee != *fields.IfAssignee {
-		return nil, nil, errAssigneeChanged(id, itemPath, *fields.IfAssignee, item.Assignee)
+		return nil, nil, errAssigneeChanged(id, m.doc.Mtime, *fields.IfAssignee, item.Assignee)
 	}
 
 	// A gate that does not gate is refused before the write, not stored and
@@ -438,8 +435,10 @@ func updateOnce(root, id string, fields UpdateField) (*Item, *BodyChange, error)
 	// on disk is byte-identical after this refusal, exactly as it is after an
 	// --if-unchanged refusal.
 	backupPath := ""
-	if change.Changed && change.Mode == "replace" && strings.TrimSpace(bodyBefore) != "" {
-		dir := bodyBackupDirFor(root, itemPath, status, item.ID)
+	//
+	// Only on a backend with companion files (store.Local): elsewhere there is
+	// no local directory to save into, and dir is "".
+	if dir := bodyBackupDirFor(root, itemPath, status, item.ID); dir != "" && change.Changed && change.Mode == "replace" && strings.TrimSpace(bodyBefore) != "" {
 		backupPath, err = saveBodyBackup(dir, bodyBefore, time.Now())
 		if err != nil {
 			return nil, nil, ioErr(fmt.Sprintf(
@@ -452,9 +451,13 @@ func updateOnce(root, id string, fields UpdateField) (*Item, *BodyChange, error)
 	if editBeforeWrite != nil {
 		editBeforeWrite()
 	}
-	if err := fsstore.RewriteExisting(itemPath, store.HashOf(data), []byte(content)); err != nil {
+	b, err := be(root)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := b.Edit(m.ID, m.doc.Hash, []byte(content), writer(0)); err != nil {
 		var changed *store.ErrChanged
-		if os.IsNotExist(err) || errors.As(err, &changed) {
+		if isLost(err) || errors.As(err, &changed) {
 			return nil, nil, errEditRaced
 		}
 		return nil, nil, ioErr(fmt.Sprintf("%s: could not be saved: %s", id, fsErrText(err)))
@@ -543,12 +546,8 @@ func updateOnce(root, id string, fields UpdateField) (*Item, *BodyChange, error)
 				return nil, nil, err
 			}
 			if !gateOpen(item, doneIDs, snoozeNow()) {
-				dst := filepath.Join(root, "work", "pending", filepath.Base(itemPath))
-				if err := fsstore.MoveItem(itemPath, dst); err != nil {
+				if err := transition(root, m.ID, m.State(), inStatus("pending"), writer(0)); err != nil {
 					return nil, nil, ioErr(fmt.Sprintf("%s: saved, but could not be moved to pending: %s", id, fsErrText(err)))
-				}
-				if err := moveResultSidecar(filepath.Dir(itemPath), filepath.Dir(dst), id); err != nil {
-					return nil, nil, ioErr(fmt.Sprintf("%s: moved to pending, but result sidecar could not follow: %s", id, fsErrText(err)))
 				}
 			}
 		} else if status == "pending" {
@@ -561,12 +560,8 @@ func updateOnce(root, id string, fields UpdateField) (*Item, *BodyChange, error)
 			// SNOOZED item must not promote it. Dropping a dependency says
 			// nothing about a wake time that has not arrived.
 			if gateOpen(item, doneIDs, snoozeNow()) {
-				dst := filepath.Join(root, "work", "available", filepath.Base(itemPath))
-				if err := fsstore.MoveItem(itemPath, dst); err != nil {
+				if err := transition(root, m.ID, m.State(), inStatus("available"), writer(0)); err != nil {
 					return nil, nil, ioErr(fmt.Sprintf("%s: saved, but could not be promoted to available: %s", id, fsErrText(err)))
-				}
-				if err := moveResultSidecar(filepath.Dir(itemPath), filepath.Dir(dst), id); err != nil {
-					return nil, nil, ioErr(fmt.Sprintf("%s: promoted to available, but result sidecar could not follow: %s", id, fsErrText(err)))
 				}
 			}
 		}
@@ -693,10 +688,10 @@ func recordedReadState(mode, asserted string) string {
 // Conflict (exit 4), not retryable: re-running the identical command with the
 // same now-stale hash can never succeed, and a caller that retried on it would
 // spin. The remedy is a re-read, which the hint spells out.
-func errBodyChanged(id, itemPath, want, stored string) *mgerr.Error {
+func errBodyChanged(id string, mtime time.Time, want, stored string) *mgerr.Error {
 	modified := "unknown"
-	if info, err := os.Stat(itemPath); err == nil {
-		modified = info.ModTime().UTC().Format(time.RFC3339)
+	if !mtime.IsZero() {
+		modified = mtime.UTC().Format(time.RFC3339)
 	}
 
 	msg := fmt.Sprintf(
@@ -728,10 +723,10 @@ func errBodyChanged(id, itemPath, want, stored string) *mgerr.Error {
 // Conflict (exit 4), not retryable: re-running the identical command against the
 // same stored value can never succeed. The remedy is to decide which of the two
 // holds — which is a judgement, not a retry.
-func errAssigneeChanged(id, itemPath, want, stored string) *mgerr.Error {
+func errAssigneeChanged(id string, mtime time.Time, want, stored string) *mgerr.Error {
 	modified := "unknown"
-	if info, err := os.Stat(itemPath); err == nil {
-		modified = info.ModTime().UTC().Format(time.RFC3339)
+	if !mtime.IsZero() {
+		modified = mtime.UTC().Format(time.RFC3339)
 	}
 
 	show := func(v string) string {

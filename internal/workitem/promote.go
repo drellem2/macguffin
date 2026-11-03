@@ -2,11 +2,10 @@ package workitem
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/drellem2/macguffin/internal/event"
-	"github.com/drellem2/macguffin/store/fsstore"
+	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/store"
 )
 
 // promote releases one pending item to available/. It is THE promotion, used by
@@ -42,25 +41,19 @@ import (
 // Returns false with a nil error when another promoter won the race. That is
 // not a failure: the item is in available/ either way, which is all any caller
 // wanted.
-func promote(root, srcPath, dstName string, item *Item) (bool, error) {
-	dst := filepath.Join(root, "work", "available", dstName)
-
+func promote(root string, m Match, item *Item) (bool, error) {
 	// The single atomic instant. Everything before it is advisory; everything
-	// after it is done by the one process that won.
-	if err := fsstore.MoveItem(srcPath, dst); err != nil {
-		if os.IsNotExist(err) {
+	// after it is done by the one process that won. Pending items normally
+	// have no sidecar, but the backend carries one if it is there: a
+	// .result.json must never be left behind a moved .md.
+	if err := transition(root, m.ID, m.State(), inStatus("available"), writer(0)); err != nil {
+		if isLost(err) {
 			return false, nil // another promoter got there first
 		}
 		return false, fmt.Errorf("promoting %s: %w", item.ID, err)
 	}
 
-	// Pending items normally have no sidecar, but keep the invariant total: a
-	// .result.json must never be left behind a moved .md.
-	if err := moveResultSidecar(filepath.Dir(srcPath), filepath.Dir(dst), item.ID); err != nil {
-		return false, fmt.Errorf("promoting sidecar for %s: %w", item.ID, err)
-	}
-
-	cleared, err := clearSpentSnooze(root, dst, item.ID)
+	cleared, err := clearSpentSnooze(root, item.ID, "available")
 	if err != nil {
 		return false, err
 	}
@@ -73,45 +66,47 @@ func promote(root, srcPath, dstName string, item *Item) (bool, error) {
 	return true, nil
 }
 
-// clearSpentSnooze removes a wake time that has already done its work, at the
-// path the item now lives at.
+// clearSpentSnooze removes a wake time that has already done its work, from
+// the item where it now lives (status: available/ after a promotion).
 //
 // A gate that has released its item is spent, and leaving the value behind
 // makes an available item read as though it were still scheduled. It re-reads
-// the file rather than rendering the copy the caller already parsed, so the
+// the item rather than rendering the copy the caller already parsed, so the
 // window in which a concurrent `mg edit` could be overwritten is the microsecond
-// between this read and this write rather than the whole promotion.
+// between this read and this write rather than the whole promotion — and the
+// write is guarded by the hash of that read, so not even then.
 //
 // It reports whether it actually cleared anything, so the caller can mirror the
 // write onto its own copy of the item.
 //
-// It is a no-op, not an error, when the file is no longer there: between the
-// rename and this call another process may have claimed the item, and a claim
-// carrying an inert elapsed gate is a cosmetic leftover, not a reason to fail a
-// promotion that already succeeded. ClearSpentGates collects those.
-func clearSpentSnooze(root, path, id string) (bool, error) {
-	item, err := readFile(path)
+// It is a no-op, not an error, when the item is no longer in available/:
+// between the transition and this call another process may have claimed it,
+// and a claim carrying an inert elapsed gate is a cosmetic leftover, not a
+// reason to fail a promotion that already succeeded. ClearSpentGates collects
+// those. The write never re-creates the item where it was (Backend.Edit).
+func clearSpentSnooze(root, id, status string) (bool, error) {
+	m, err := matchIn(root, id, store.Status(status))
 	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("re-reading %s after promotion: %w", id, err)
-	}
-	if item.SnoozeRaw == "" {
 		return false, nil
 	}
-	woke := item.SnoozeRaw
-	item.ClearSnooze()
-
-	// Deliberately NOT os.WriteFile: no O_CREATE. If the item has been moved
-	// out from under us since the read above, this must fail rather than
-	// re-create a file at a path the item no longer occupies — that is the
-	// duplicate-item bug this whole ordering exists to avoid.
-	if err := fsstore.RewriteExisting(path, "", []byte(Render(item))); err != nil {
-		if os.IsNotExist(err) {
+	woke := ""
+	_, _, err = modifyItem(root, m, "promote", status, func(it *Item) (bool, error) {
+		if it.SnoozeRaw == "" {
+			woke = ""
+			return false, nil
+		}
+		woke = it.SnoozeRaw
+		it.ClearSnooze()
+		return true, nil
+	})
+	if err != nil {
+		if mgerr.Coerce(err).Code == "edit_raced" {
 			return false, nil
 		}
 		return false, fmt.Errorf("clearing the snooze on %s: %w", id, err)
+	}
+	if woke == "" {
+		return false, nil
 	}
 
 	event.Emit(root, "work.snooze_elapsed", map[string]string{

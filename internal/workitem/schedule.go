@@ -2,9 +2,8 @@ package workitem
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
+
+	"github.com/drellem2/macguffin/store"
 )
 
 // Schedule checks all items in pending/ and promotes any whose gates have all
@@ -25,8 +24,7 @@ import (
 // concurrently against the same store without either losing or duplicating an
 // item.
 func Schedule(root string) ([]*Item, error) {
-	pendingDir := filepath.Join(root, "work", "pending")
-	entries, err := os.ReadDir(pendingDir)
+	pending, err := listDocs(root, store.Pending)
 	if err != nil {
 		return nil, fmt.Errorf("reading pending/: %w", err)
 	}
@@ -40,12 +38,9 @@ func Schedule(root string) ([]*Item, error) {
 	now := snoozeNow()
 
 	var promoted []*Item
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		path := filepath.Join(pendingDir, e.Name())
-		item, err := readFile(path)
+	for i := range pending {
+		m := matchOf(pending[i])
+		item, err := readMatch(m)
 		if err != nil {
 			continue // skip malformed files
 		}
@@ -56,7 +51,7 @@ func Schedule(root string) ([]*Item, error) {
 			// per-invocation AutoPromote, another agent's `mg done` — won the
 			// rename; the item is in available/ either way, and only the winner
 			// reports it so a promotion is never announced twice.
-			ok, err := promote(root, path, e.Name(), item)
+			ok, err := promote(root, m, item)
 			if err != nil {
 				return nil, err
 			}
@@ -73,46 +68,15 @@ func Schedule(root string) ([]*Item, error) {
 // checking both done/ and archive/ directories.
 func doneIDSet(root string) (map[string]bool, error) {
 	ids := make(map[string]bool)
-
-	// Scan done/
-	doneDir := filepath.Join(root, "work", "done")
-	entries, err := os.ReadDir(doneDir)
-	if err != nil {
-		return nil, fmt.Errorf("reading done/: %w", err)
-	}
-	for _, e := range entries {
-		name := e.Name()
-		if idx := strings.Index(name, ".md"); idx > 0 {
-			ids[name[:idx]] = true
-		}
-	}
-
-	// Scan archive/ partitions
-	archiveRoot := filepath.Join(root, "work", "archive")
-	partitions, err := os.ReadDir(archiveRoot)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return ids, nil
-		}
-		return nil, fmt.Errorf("reading archive/: %w", err)
-	}
-	for _, p := range partitions {
-		if !p.IsDir() {
-			continue
-		}
-		dir := filepath.Join(archiveRoot, p.Name())
-		entries, err := os.ReadDir(dir)
+	for _, status := range []string{"done", "archived"} {
+		got, err := idsIn(root, status)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("reading %s/: %w", status, err)
 		}
-		for _, e := range entries {
-			name := e.Name()
-			if idx := strings.Index(name, ".md"); idx > 0 {
-				ids[name[:idx]] = true
-			}
+		for _, id := range got {
+			ids[id] = true
 		}
 	}
-
 	return ids, nil
 }
 

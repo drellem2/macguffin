@@ -137,6 +137,11 @@ type Doc struct {
 	// Mtime is the last-modified time of the stored content, when the backend
 	// has one; zero otherwise.
 	Mtime time.Time
+	// Where names the stored record for humans — in an ambiguity error, a
+	// shadow notice, a conflict naming two records. fsstore: the absolute file
+	// path. A backend with no better answer can leave it empty; mg then
+	// renders "<status>/<id>".
+	Where string
 }
 
 // ErrNotFound is returned (wrapped) when no item has the id.
@@ -265,3 +270,56 @@ type Backend interface {
 // MG_ROOT resolves to). mgcli.Main takes one so the backend is opened for
 // whatever root the invocation names.
 type Opener func(root string) (Backend, error)
+
+// The interfaces below are OPTIONAL extensions. mg type-asserts for them and
+// degrades as documented when a backend does not provide one. None of them is
+// needed for mg's lifecycle (new, claim, done, edit, archive) to work.
+
+// Twins is implemented by a backend that can hold more than one record under
+// one id (the legacy same-id twins that predate globally-unique ids). GetAll
+// returns every record id names, in a stable order; it returns an empty slice,
+// not ErrNotFound, when there are none. mg resolves a twin set itself (a live
+// record shadows an archived one; "id@partition" selects an archived twin).
+//
+// A backend without it is taken to hold at most one record per id, and mg
+// resolves through Get.
+type Twins interface {
+	GetAll(id string) ([]Doc, error)
+}
+
+// IDLister is implemented by a backend that can enumerate the ids in a status
+// without reading every document. mg asks it for bulk "is this a real work
+// item" questions (mail lists ~1400 mailboxes against a ~4000-record
+// archive). A backend without it is enumerated through List.
+type IDLister interface {
+	IDs(status Status) ([]string, error)
+}
+
+// Unarchiver is implemented by a backend that can bring an archived record
+// back into an active state. It must refuse (wrapping ErrExists) rather than
+// overwrite when to's status already holds a record with the id, and refuse
+// with *ErrLost when the item is not archived in partition. A backend without
+// it cannot unarchive, and `mg unarchive` says so.
+type Unarchiver interface {
+	Unarchive(id string, partition string, to State, by Actor) error
+}
+
+// Local is implemented by a backend whose items are files on this machine
+// (fsstore). mg keeps a few COMPANION files beside an item — the result
+// sidecar <id>.result.json, saved prior bodies, the snooze sweep stamp — and
+// those are local files by nature. StatusDir names the directory holding items
+// of status st (for Archived, the archive root; partitions are its
+// subdirectories); WorkDir names the directory holding every status.
+//
+// A backend that is not Local has no companion files: mg's result sidecar,
+// body backups and sweep stamp are unavailable on it and the commands that
+// need them say so. Moving those behind the seam is a follow-up, not part of
+// the Backend contract.
+type Local interface {
+	StatusDir(st Status) string
+	WorkDir() string
+	// MoveCompanion renames a companion file (a saved body travelling into an
+	// archive partition). It is the backend's, not mg's, so every rename on a
+	// store path stays inside the backend.
+	MoveCompanion(src, dst string) error
+}

@@ -2,11 +2,9 @@ package workitem
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/drellem2/macguffin/internal/event"
-	"github.com/drellem2/macguffin/store/fsstore"
+	"github.com/drellem2/macguffin/store"
 )
 
 // Reopen atomically moves a work item from done/ back to claimed/.
@@ -20,23 +18,16 @@ func Reopen(root, id string) (*Item, error) {
 		return nil, explainReopenFailure(root, id)
 	}
 
-	src := m.Path
-	dst := filepath.Join(root, "work", "claimed", id+".md")
-
-	// rename(2) is atomic on local filesystems.
-	if err := fsstore.MoveItem(src, dst); err != nil {
-		if os.IsNotExist(err) {
+	// A reopened claim records no holder (claimed/<id>.md on the filesystem,
+	// as it always has): nobody claimed it, it was handed back.
+	if err := transition(root, m.ID, m.State(), claimedBy(""), unheld()); err != nil {
+		if isLost(err) {
 			return nil, explainReopenFailure(root, id)
 		}
 		return nil, ioErr(fmt.Sprintf("%s: could not be reopened: %s", id, fsErrText(err)))
 	}
 
-	// The result sidecar must follow the .md, or it is orphaned in done/.
-	if err := moveResultSidecar(filepath.Dir(src), filepath.Dir(dst), id); err != nil {
-		return nil, ioErr(fmt.Sprintf("%s: reopened, but result sidecar could not follow: %s", id, fsErrText(err)))
-	}
-
-	item, err := readFile(dst)
+	item, err := readIn(root, m.ID, store.Claimed)
 	if err != nil {
 		return nil, err
 	}

@@ -133,7 +133,7 @@ func describeLinks(root string, ids []string) []SuccessorRef {
 		matches, err := Resolve(root, sid)
 		if err == nil && len(matches) == 1 {
 			ref.Status = matches[0].Status
-			if s, err := readFile(matches[0].Path); err == nil {
+			if s, err := readMatch(matches[0]); err == nil {
 				ref.Title = s.Title
 			}
 		}
@@ -227,22 +227,26 @@ func linkPredecessor(root, successorID, predecessorID string) error {
 		return err
 	}
 
-	target, err := readFile(match.Path)
+	tag := PredecessorTag(predecessorID)
+	var tagsBefore []string
+	wrote := false
+	target, _, err := modifyItem(root, match, "predecessor", "", func(it *Item) (bool, error) {
+		wrote = false
+		for _, t := range it.Tags {
+			if t == tag {
+				return false, nil
+			}
+		}
+		tagsBefore = append([]string(nil), it.Tags...)
+		it.Tags = append(it.Tags, tag)
+		wrote = true
+		return true, nil
+	})
 	if err != nil {
 		return err
 	}
-
-	tag := PredecessorTag(predecessorID)
-	for _, t := range target.Tags {
-		if t == tag {
-			return nil
-		}
-	}
-	tagsBefore := append([]string(nil), target.Tags...)
-	target.Tags = append(target.Tags, tag)
-
-	if err := os.WriteFile(match.Path, []byte(Render(target)), 0o644); err != nil {
-		return fmt.Errorf("%s", fsErrText(err))
+	if !wrote {
+		return nil
 	}
 	// Emitted only after the write lands, so a failed backlink logs
 	// work.backlink_failed and never a tag change that did not happen.

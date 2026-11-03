@@ -2,8 +2,6 @@ package workitem
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -11,7 +9,6 @@ import (
 
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
-	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // Snooze is "not now, come back at <time>" — and it is an ATTRIBUTE on
@@ -294,37 +291,38 @@ var snoozableStatuses = map[string]bool{"available": true, "claimed": true, "pen
 // until must already be validated as future by the caller; the CLI does that
 // so the refusal can name the flag the operator used.
 func SnoozeItem(root, id string, until time.Time) (*Item, string, error) {
-	path, status, err := FindPath(root, id)
+	m, err := ResolveUnique(root, id)
 	if err != nil {
 		return nil, "", err
 	}
+	status := m.Status
 	if !snoozableStatuses[status] {
 		return nil, "", explainSnoozeFailure(id, status)
 	}
 
-	item, err := readFile(path)
+	// Write the attribute where the item already is, then move it. A crash
+	// between the two leaves an item carrying a future snooze in the status it
+	// started in — inert but visible — rather than an item in pending/ with no
+	// gate on it, which is the shape that waits forever.
+	//
+	// The write is guarded (modifyItem), not os.WriteFile: a claim landing
+	// between this read and this write used to have the write re-create the
+	// item in available/ beside its claim. The item must still be where it
+	// was read for the write to land at all.
+	item, m, err := modifyItem(root, m, "snooze", status, func(it *Item) (bool, error) {
+		it.SetSnooze(until)
+		return true, nil
+	})
 	if err != nil {
 		return nil, "", err
 	}
-	item.SetSnooze(until)
 
-	// Write the attribute where the file already is, then move it. A crash
-	// between the two leaves an item carrying a future snooze in the directory
-	// it started in — inert but visible — rather than an item in pending/ with
-	// no gate on it, which is the shape that waits forever.
-	if err := os.WriteFile(path, []byte(Render(item)), 0o644); err != nil {
-		return nil, "", ioErr(fmt.Sprintf("%s: could not be snoozed: %s", id, fsErrText(err)))
-	}
-
-	// Always <id>.md at the destination: a claimed item carries a PID suffix,
-	// and snoozing releases the claim the same way shelving does.
-	dst := filepath.Join(root, "work", "pending", id+".md")
-	if path != dst {
-		if err := fsstore.MoveItem(path, dst); err != nil {
+	// Always a bare pending record at the destination: a claimed item carries
+	// a holder, and snoozing releases the claim the same way shelving does.
+	// The backend carries any result sidecar along.
+	if status != "pending" {
+		if err := transition(root, m.ID, m.State(), inStatus("pending"), writer(0)); err != nil {
 			return nil, "", ioErr(fmt.Sprintf("%s: could not be moved to pending: %s", id, fsErrText(err)))
-		}
-		if err := moveResultSidecar(filepath.Dir(path), filepath.Dir(dst), id); err != nil {
-			return nil, "", ioErr(fmt.Sprintf("%s: snoozed, but result sidecar could not follow: %s", id, fsErrText(err)))
 		}
 	}
 
@@ -343,24 +341,25 @@ func SnoozeItem(root, id string, until time.Time) (*Item, string, error) {
 // gates put it. It is the escape hatch: a snooze that can only be undone by
 // hand-editing YAML is a snooze people work around instead of correcting.
 func UnsnoozeItem(root, id string) (*Item, string, error) {
-	path, status, err := FindPath(root, id)
+	m, err := ResolveUnique(root, id)
 	if err != nil {
 		return nil, "", err
 	}
+	status := m.Status
 
-	item, err := readFile(path)
+	// Guarded, like SnoozeItem's write: an item moved between the read and the
+	// write is not re-created where it was.
+	item, m, err := modifyItem(root, m, "unsnooze", status, func(it *Item) (bool, error) {
+		if it.SnoozeRaw == "" {
+			return false, mgerr.Conflict("not_snoozed",
+				fmt.Sprintf("%s: is not snoozed, so there is nothing to lift.", id),
+				fmt.Sprintf("Run 'mg show %s' to see its gates.", id))
+		}
+		it.ClearSnooze()
+		return true, nil
+	})
 	if err != nil {
 		return nil, "", err
-	}
-	if item.SnoozeRaw == "" {
-		return nil, "", mgerr.Conflict("not_snoozed",
-			fmt.Sprintf("%s: is not snoozed, so there is nothing to lift.", id),
-			fmt.Sprintf("Run 'mg show %s' to see its gates.", id))
-	}
-
-	item.ClearSnooze()
-	if err := os.WriteFile(path, []byte(Render(item)), 0o644); err != nil {
-		return nil, "", ioErr(fmt.Sprintf("%s: could not be unsnoozed: %s", id, fsErrText(err)))
 	}
 
 	// Only pending/ is re-placed. An inert snooze on an available, claimed or
@@ -373,12 +372,8 @@ func UnsnoozeItem(root, id string) (*Item, string, error) {
 			return nil, "", err
 		}
 		if gateOpen(item, doneIDs, snoozeNow()) {
-			dst := filepath.Join(root, "work", "available", id+".md")
-			if err := fsstore.MoveItem(path, dst); err != nil {
+			if err := transition(root, m.ID, m.State(), inStatus("available"), writer(0)); err != nil {
 				return nil, "", ioErr(fmt.Sprintf("%s: unsnoozed, but could not be promoted: %s", id, fsErrText(err)))
-			}
-			if err := moveResultSidecar(filepath.Dir(path), filepath.Dir(dst), id); err != nil {
-				return nil, "", ioErr(fmt.Sprintf("%s: promoted, but result sidecar could not follow: %s", id, fsErrText(err)))
 			}
 			dest = "available"
 		}
@@ -439,26 +434,6 @@ func SnoozedPending(root string) ([]*Item, error) {
 	return out, nil
 }
 
-// --- the driver's pulse ---------------------------------------------------
-
-// sweepStampName is the file `mg schedule` stamps on every run. It lives in
-// work/ beside the directories it reports on, is plain RFC3339 text, and is
-// therefore answerable with `cat` — Design Principle 1 applies to the driver's
-// own liveness as much as to an item's status.
-const sweepStampName = ".last-sweep"
-
-func sweepStampPath(root string) string {
-	return filepath.Join(root, "work", sweepStampName)
-}
-
-// RecordSweep stamps the moment the sweep ran. It is called ONLY by the
-// `mg schedule` command, never by Done's internal sweep: the question this
-// stamp answers is "is something driving the sweep on a clock", and a sweep
-// that happened because somebody finished a ticket is not an answer to it.
-func RecordSweep(root string) error {
-	return os.WriteFile(sweepStampPath(root), []byte(snoozeNow().Format(time.RFC3339)+"\n"), 0o644)
-}
-
 // DriverStatus is what mg knows about whatever is driving `mg schedule`.
 type DriverStatus struct {
 	// Last is the previous recorded sweep; zero when Ever is false.
@@ -474,7 +449,7 @@ type DriverStatus struct {
 
 // CheckDriver reports whether anything is currently driving the sweep.
 func CheckDriver(root string, now time.Time) DriverStatus {
-	data, err := os.ReadFile(sweepStampPath(root))
+	data, err := readSweepStamp(root)
 	if err != nil {
 		return DriverStatus{Stale: true}
 	}

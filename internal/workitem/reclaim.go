@@ -2,12 +2,9 @@ package workitem
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 
 	"github.com/drellem2/macguffin/internal/event"
-	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // ReclaimResult describes a re-stamped claim.
@@ -49,25 +46,22 @@ func Reclaim(root, id string, pid int) (*ReclaimResult, error) {
 		return nil, explainReclaimFailure(root, id)
 	}
 
-	src := m.Path
-	if pid == 0 {
-		pid = os.Getpid()
-	}
-	oldPID := parseClaimPID(filepath.Base(src))
-	dst := filepath.Join(root, "work", "claimed", fmt.Sprintf("%s.md.%d", id, pid))
+	by := writer(pid)
+	pid = by.PID
+	oldPID := holderPID(m.Holder)
 
-	// Idempotent: the claim already names this PID. Compare paths rather than
-	// PIDs, so a claim filename with no parsable PID suffix (oldPID 0) is still
+	// Idempotent: the claim already names this holder. Compare holders rather
+	// than PIDs, so a claim with no parsable PID suffix (oldPID 0) is still
 	// re-stamped instead of being mistaken for "already pid 0".
-	if src == dst {
+	if m.Holder == strconv.Itoa(pid) {
 		return &ReclaimResult{ID: id, OldPID: oldPID, NewPID: pid, Moved: false}, nil
 	}
 
-	// Same directory, so this is a rename(2) within claimed/ — atomic, and the
-	// item is in claimed/ before and after with no state in between. The result
-	// sidecar needs no follow-up move for the same reason.
-	if err := fsstore.MoveItem(src, dst); err != nil {
-		if os.IsNotExist(err) {
+	// A claimed -> claimed Transition expecting the exact holder: on the
+	// filesystem a rename(2) within claimed/ — atomic, and the item is in
+	// claimed/ before and after with no state in between.
+	if err := transition(root, m.ID, m.State(), claimedBy(""), by); err != nil {
+		if isLost(err) {
 			// The claim vanished under us — diagnose where the item really is.
 			return nil, explainReclaimFailure(root, id)
 		}

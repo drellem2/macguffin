@@ -2,9 +2,8 @@ package workitem
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
+
+	"github.com/drellem2/macguffin/store"
 )
 
 // AutoPromote is the answer to "a snoozed item became available only when one
@@ -41,8 +40,7 @@ import (
 // actual command and must never fail that command with it — an unwritable store
 // makes `mg list` print a warning, never exit non-zero.
 func AutoPromote(root string) ([]*Item, error) {
-	pendingDir := filepath.Join(root, "work", "pending")
-	entries, err := os.ReadDir(pendingDir)
+	pending, err := listDocs(root, store.Pending)
 	if err != nil {
 		return nil, fmt.Errorf("reading pending/: %w", err)
 	}
@@ -53,16 +51,13 @@ func AutoPromote(root string) ([]*Item, error) {
 	// overwhelmingly common outcome is that this list is empty and the process
 	// has done nothing but read one directory.
 	type candidate struct {
-		name string
+		m    Match
 		item *Item
 	}
 	var ready []candidate
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		path := filepath.Join(pendingDir, e.Name())
-		item, err := readFile(path)
+	for i := range pending {
+		m := matchOf(pending[i])
+		item, err := readMatch(m)
 		if err != nil {
 			continue // skip malformed files; Stranded is the channel for those
 		}
@@ -72,7 +67,7 @@ func AutoPromote(root string) ([]*Item, error) {
 		if item.snoozeHolds(now) {
 			continue // still closed, or malformed and therefore held (see snoozeHolds)
 		}
-		ready = append(ready, candidate{name: e.Name(), item: item})
+		ready = append(ready, candidate{m: m, item: item})
 	}
 	if len(ready) == 0 {
 		return nil, nil
@@ -89,7 +84,7 @@ func AutoPromote(root string) ([]*Item, error) {
 		if !allDepsMet(c.item.Depends, doneIDs) {
 			continue // the clock opened, a parent has not
 		}
-		ok, err := promote(root, filepath.Join(pendingDir, c.name), c.name, c.item)
+		ok, err := promote(root, c.m, c.item)
 		if err != nil {
 			return promoted, err
 		}
@@ -120,31 +115,19 @@ func ClearSpentGates(root string) ([]string, error) {
 	now := snoozeNow()
 	var cleared []string
 	for _, status := range []string{"available", "claimed"} {
-		dir := filepath.Join(root, "work", status)
-		entries, err := os.ReadDir(dir)
+		docs, err := listDocs(root, store.Status(status))
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
 			return cleared, fmt.Errorf("reading %s/: %w", status, err)
 		}
-		for _, e := range entries {
-			name := e.Name()
-			if strings.HasSuffix(name, ".json") {
-				continue
-			}
-			if !strings.HasSuffix(name, ".md") && !strings.Contains(name, ".md.") {
-				continue
-			}
-			path := filepath.Join(dir, name)
-			item, err := readFile(path)
+		for i := range docs {
+			item, err := itemOf(&docs[i])
 			if err != nil {
 				continue
 			}
 			if item.SnoozeRaw == "" || item.snoozeHolds(now) {
 				continue
 			}
-			if _, err := clearSpentSnooze(root, path, item.ID); err != nil {
+			if _, err := clearSpentSnooze(root, docs[i].ID, status); err != nil {
 				return cleared, err
 			}
 			cleared = append(cleared, item.ID)

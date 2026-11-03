@@ -4,14 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
-	"github.com/drellem2/macguffin/store/fsstore"
+	"github.com/drellem2/macguffin/store"
 )
 
 // DoneOption configures an optional behaviour of Done.
@@ -70,50 +67,44 @@ func Done(root, id string, resultJSON json.RawMessage, opts ...DoneOption) (*Ite
 	if m.Status != "claimed" {
 		return nil, nil, explainDoneFailure(root, id)
 	}
-	srcPath := m.Path
-	srcName := filepath.Base(srcPath)
-
-	claimed, err := readFile(srcPath)
+	claimed, err := readMatch(m)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	srcDir := filepath.Dir(srcPath)
-	doneDir := filepath.Join(root, "work", "done")
+	b, err := be(root)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// The result lands FIRST, beside the item where it currently sits, so that
 	// nothing below can cost the caller their payload. See the doc comment: the
 	// guards are allowed to refuse, they are not allowed to charge for it.
 	//
-	// Fold any pre-existing result into the fresh one before writing, so an
-	// irreconcilable pair fails with both copies still on disk rather than
-	// half-reconciled. The prior result is the one the move below would leave
-	// at the destination: normally the copy travelling out of the origin
-	// directory, or — when the origin has none — a copy already sitting in
-	// done/ from an earlier completion.
+	// The result sidecar is a companion FILE, so it exists only on a backend
+	// whose items are local files (store.Local). On any other backend a
+	// --result is refused here, before anything moves, rather than dropped.
+	srcDir := ""
 	resultPreserved := false
 	if len(resultJSON) > 0 {
-		priorPath := filepath.Join(srcDir, resultSidecarName(id))
-		if _, err := os.Stat(priorPath); os.IsNotExist(err) {
-			priorPath = filepath.Join(doneDir, resultSidecarName(id))
+		local, ok := localOf(b)
+		if !ok {
+			return nil, nil, errResultsUnsupported(id)
 		}
-		sidecarBytes, err := mergeResultSidecar(priorPath, id, resultJSON)
-		if err != nil {
+		srcDir = filepath.Dir(m.Path)
+		if err := writeResultBeside(srcDir, local.StatusDir(store.Done), id, resultJSON); err != nil {
 			return nil, nil, err
-		}
-		if err := os.WriteFile(filepath.Join(srcDir, resultSidecarName(id)), sidecarBytes, 0o644); err != nil {
-			return nil, nil, fmt.Errorf("writing result sidecar: %w", err)
 		}
 		resultPreserved = true
 	}
 
-	// Guards run against the item on disk. Linking a successor comes first so
+	// Guards run against the item as stored. Linking a successor comes first so
 	// that `mg done <id> --successor <id>` is a single step for the agent: the
 	// tag is validated and written, and the guard then sees the discharged
 	// obligation. linkSuccessor validates before it writes, so a bad target
-	// leaves the file untouched.
+	// leaves the item untouched.
 	if o.successor != "" {
-		if err := linkSuccessorBothWays(root, srcPath, claimed, o.successor); err != nil {
+		if err := linkSuccessorBothWays(root, m, claimed, o.successor); err != nil {
 			return nil, nil, notePreservedResult(err, id, srcDir, resultPreserved)
 		}
 	} else {
@@ -128,35 +119,26 @@ func Done(root, id string, resultJSON json.RawMessage, opts ...DoneOption) (*Ite
 		return nil, nil, notePreservedResult(err, id, srcDir, resultPreserved)
 	}
 
-	// Extract the claim-holder PID from the filename (<id>.md.<pid>) for the event.
+	// The claim holder (on the filesystem, the PID of <id>.md.<pid>) for the event.
 	claimPID := ""
-	if dot := strings.LastIndex(srcName, "."); dot > 0 {
-		if _, err := strconv.Atoi(srcName[dot+1:]); err == nil {
-			claimPID = srcName[dot+1:]
-		}
+	if p := holderPID(m.Holder); p > 0 {
+		claimPID = m.Holder
 	}
 
-	dstPath := filepath.Join(doneDir, id+".md")
-
-	// rename(2) is atomic on local filesystems.
-	if err := fsstore.MoveItem(srcPath, dstPath); err != nil {
+	// The atomic instant, expecting the exact claim that was resolved. The
+	// backend carries the result sidecar with the item: a result this call
+	// wrote above, or one already sitting in claimed/ from an earlier
+	// done -> reopen -> done round trip. There is deliberately no second write
+	// into done/ after this — the merge happened before the write above, so
+	// the file that moves IS the merged result.
+	if err := b.Transition(m.ID, m.State(), store.State{Status: store.Done}, writer(0)); err != nil {
+		if isLost(err) {
+			return nil, nil, explainDoneFailure(root, id)
+		}
 		return nil, nil, ioErr(fmt.Sprintf("%s: could not be completed: %s", id, fsErrText(err)))
 	}
 
-	// Carry the sidecar forward with the .md. This one move now covers both
-	// cases: a result this call merged and wrote above, and a result that was
-	// already sitting in claimed/ from an earlier done -> reopen -> done round
-	// trip. Without it either would be orphaned — a .result.json with no .md
-	// beside it, invisible to `mg show` and asserting a stale completion.
-	//
-	// There is deliberately no second write into done/ after this. The merge
-	// happened before the write above, so the file this moves IS the merged
-	// result; a post-rename write would only be a chance to disagree with it.
-	if err := moveResultSidecar(srcDir, doneDir, id); err != nil {
-		return nil, nil, fmt.Errorf("moving result sidecar: %w", err)
-	}
-
-	item, err := readFile(dstPath)
+	item, err := readIn(root, m.ID, store.Done)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -225,22 +207,14 @@ func ListByStatus(root, status string) ([]*Item, error) {
 		return nil, fmt.Errorf("invalid status %q (must be available, claimed, done, pending, or shelved)", status)
 	}
 
-	dir := filepath.Join(root, "work", status)
-	entries, err := os.ReadDir(dir)
+	docs, err := listDocs(root, store.Status(status))
 	if err != nil {
 		return nil, fmt.Errorf("reading %s/: %w", status, err)
 	}
 
 	var items []*Item
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".md") && !strings.Contains(e.Name(), ".md.") {
-			continue
-		}
-		// Skip .result.json sidecars
-		if strings.HasSuffix(e.Name(), ".json") {
-			continue
-		}
-		item, err := readFile(filepath.Join(dir, e.Name()))
+	for i := range docs {
+		item, err := itemOf(&docs[i])
 		if err != nil {
 			continue // skip malformed files
 		}

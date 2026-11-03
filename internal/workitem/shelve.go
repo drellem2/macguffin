@@ -3,14 +3,12 @@ package workitem
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
-	"github.com/drellem2/macguffin/store/fsstore"
+	"github.com/drellem2/macguffin/store"
 )
 
 // Shelve atomically moves a work item to shelved/. The item can be in any
@@ -38,7 +36,7 @@ func Shelve(root, id string, opts ...ShelveOption) ([]*Item, error) {
 		return nil, err
 	}
 
-	path, status, err := FindPath(root, id)
+	m, err := ResolveUnique(root, id)
 	if err != nil {
 		return nil, err
 	}
@@ -46,13 +44,13 @@ func Shelve(root, id string, opts ...ShelveOption) ([]*Item, error) {
 	// Status is checked before the guards so an already-shelved or done item
 	// still reports what it is, rather than being told about a successor it
 	// could not act on anyway.
-	if err := checkShelveable(id, status); err != nil {
+	if err := checkShelveable(id, m.Status); err != nil {
 		return nil, err
 	}
 
 	// Read BEFORE the move: the guards run on the item as it stands, and an
 	// item that fails them must not have been moved to learn that.
-	item, err := readFile(path)
+	item, err := readMatch(m)
 	if err != nil {
 		return nil, err
 	}
@@ -102,27 +100,22 @@ func checkShelveable(id, status string) error {
 // the payload rather than inferred from line order, which is the more reliable
 // of the two anyway.
 func shelveCascade(root, id, cascadedFrom string) ([]*Item, error) {
-	path, status, err := FindPath(root, id)
+	m, err := ResolveUnique(root, id)
 	if err != nil {
 		return nil, err
 	}
-	if err := checkShelveable(id, status); err != nil {
+	if err := checkShelveable(id, m.Status); err != nil {
 		return nil, err
 	}
 
-	item, err := readFile(path)
+	item, err := readMatch(m)
 	if err != nil {
 		return nil, err
 	}
 
-	dst := filepath.Join(root, "work", "shelved", id+".md")
-	if err := fsstore.MoveItem(path, dst); err != nil {
+	// The result sidecar follows the item into shelved/ (the backend carries it).
+	if err := transition(root, m.ID, m.State(), inStatus("shelved"), writer(0)); err != nil {
 		return nil, ioErr(fmt.Sprintf("%s: could not be shelved: %s", id, fsErrText(err)))
-	}
-
-	// The result sidecar must follow the .md into shelved/.
-	if err := moveResultSidecar(filepath.Dir(path), filepath.Dir(dst), id); err != nil {
-		return nil, ioErr(fmt.Sprintf("%s: shelved, but result sidecar could not follow: %s", id, fsErrText(err)))
 	}
 
 	shelved := []*Item{item}
@@ -147,7 +140,7 @@ func shelveCascade(root, id, cascadedFrom string) ([]*Item, error) {
 
 	kvs := map[string]string{
 		"item_id":     id,
-		"from_status": status,
+		"from_status": m.Status,
 		"to_status":   "shelved",
 		"actor":       actor(),
 		// Always present, empty when nothing was hidden. A field that appears
@@ -516,8 +509,7 @@ func unshelve(root, id string, claim bool, pid int, cascadedFrom string, st *uns
 		return nil, explainUnshelveFailure(root, id)
 	}
 
-	src := m.Path
-	item, err := readFile(src)
+	item, err := readMatch(m)
 	if err != nil {
 		return nil, err
 	}
@@ -554,39 +546,29 @@ func unshelve(root, id string, claim bool, pid int, cascadedFrom string, st *uns
 	if cascadedFrom != "" {
 		kvs["cascaded_from"] = cascadedFrom
 	}
-	var dst string
 	if claim && subdir == "available" {
 		subdir = "claimed"
-		if pid == 0 {
-			pid = os.Getpid()
-		}
-		kvs["pid"] = strconv.Itoa(pid)
-		dst = filepath.Join(root, "work", "claimed", fmt.Sprintf("%s.md.%d", id, pid))
-		// One rename, straight from shelved/ to claimed/: the item is never in
-		// available/, so no dispatcher can claim it in between. renameNoReplace
-		// so a same-id record already at dst is refused, not destroyed.
-		if err := renameNoReplace(id, src, dst); err != nil {
-			var me *mgerr.Error
-			if errors.As(err, &me) {
-				return nil, me
+		by := writer(pid)
+		kvs["pid"] = strconv.Itoa(by.PID)
+		// One Transition, straight from shelved/ to claimed/: the item is never
+		// in available/, so no dispatcher can claim it in between. A same-id
+		// record already at the destination is refused, not destroyed.
+		if err := transition(root, m.ID, m.State(), claimedBy(""), by); err != nil {
+			if errors.Is(err, store.ErrExists) {
+				return nil, errDestinationExists(id, m.Path, "claimed/")
 			}
-			if os.IsNotExist(err) {
+			if isLost(err) {
 				return nil, explainUnshelveFailure(root, id)
 			}
 			return nil, ioErr(fmt.Sprintf("%s: could not be unshelved: %s", id, fsErrText(err)))
 		}
 	} else {
-		dst = filepath.Join(root, "work", subdir, id+".md")
-		if err := fsstore.MoveItem(src, dst); err != nil {
+		// The result sidecar follows the item out of shelved/.
+		if err := transition(root, m.ID, m.State(), inStatus(subdir), writer(0)); err != nil {
 			return nil, ioErr(fmt.Sprintf("%s: could not be unshelved: %s", id, fsErrText(err)))
 		}
 	}
 	kvs["to_status"] = subdir
-
-	// The result sidecar must follow the .md out of shelved/.
-	if err := moveResultSidecar(filepath.Dir(src), filepath.Dir(dst), id); err != nil {
-		return nil, ioErr(fmt.Sprintf("%s: unshelved, but result sidecar could not follow: %s", id, fsErrText(err)))
-	}
 
 	event.Emit(root, "work.unshelve", kvs)
 	if subdir == "claimed" {
@@ -677,21 +659,14 @@ func findShelvedDependents(root, id string) ([]*Item, error) {
 // ListShelved returns all shelved work items, looking for items that have
 // their ID prefix in the filename.
 func ListShelved(root string) ([]*Item, error) {
-	dir := filepath.Join(root, "work", "shelved")
-	entries, err := os.ReadDir(dir)
+	docs, err := listDocs(root, store.Shelved)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("reading shelved/: %w", err)
 	}
 
 	var items []*Item
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		item, err := readFile(filepath.Join(dir, e.Name()))
+	for i := range docs {
+		item, err := itemOf(&docs[i])
 		if err != nil {
 			continue
 		}

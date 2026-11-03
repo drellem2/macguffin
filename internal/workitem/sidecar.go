@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
-	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // resultSidecarName is the filename of a work item's result sidecar, written by
@@ -16,7 +15,41 @@ import (
 // result (e.g. the merged branch) as JSON.
 func resultSidecarName(id string) string { return id + ".result.json" }
 
-// moveResultSidecar moves <id>.result.json from srcDir to dstDir when it exists.
+// writeResultBeside merges resultJSON into any prior result and writes it as
+// <id>.result.json in srcDir, the directory the item currently sits in (see
+// Done for why the result lands before the guards run).
+//
+// The prior result is the one the coming move would leave at the
+// destination: normally the copy travelling out of srcDir, or — when srcDir
+// has none — a copy already sitting in doneDir from an earlier completion.
+// Folding it in BEFORE writing means an irreconcilable pair fails with both
+// copies still on disk rather than half-reconciled.
+func writeResultBeside(srcDir, doneDir, id string, resultJSON json.RawMessage) error {
+	priorPath := filepath.Join(srcDir, resultSidecarName(id))
+	if _, err := os.Stat(priorPath); os.IsNotExist(err) {
+		priorPath = filepath.Join(doneDir, resultSidecarName(id))
+	}
+	sidecarBytes, err := mergeResultSidecar(priorPath, id, resultJSON)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, resultSidecarName(id)), sidecarBytes, 0o644); err != nil {
+		return fmt.Errorf("writing result sidecar: %w", err)
+	}
+	return nil
+}
+
+// errResultsUnsupported refuses a --result on a backend with no companion
+// files. Refusing BEFORE the transition keeps the caller's payload theirs: the
+// alternative — complete the item and drop the result — is mg-9259's data loss
+// by another route.
+func errResultsUnsupported(id string) *mgerr.Error {
+	return mgerr.Usage("results_unsupported",
+		fmt.Sprintf("%s: this storage backend does not store result sidecars, so --result cannot be recorded. Nothing was changed.", id),
+		fmt.Sprintf("Run 'mg done %s' without --result, and record the result in the item's body ('mg edit %s --append-body-file -').", id, id))
+}
+
+// The result sidecar <id>.result.json moves from srcDir to dstDir with its item.
 //
 // The result sidecar is a companion to the work item's .md file and must travel
 // with it across EVERY status transition. A sidecar left behind in the old
@@ -33,9 +66,9 @@ func resultSidecarName(id string) string { return id + ".result.json" }
 // convention of Archive/Unarchive, the .md rename is the authoritative,
 // status-defining move; the sidecar is moved immediately after and any failure
 // is surfaced loudly rather than swallowed.
-func moveResultSidecar(srcDir, dstDir, id string) error {
-	return fsstore.MoveSidecar(srcDir, dstDir, id)
-}
+//
+// The move itself is the backend's: every Transition and Archive carries the
+// sidecar (fsstore.MoveSidecar), so mg no longer calls this between moves.
 
 // mergeResultSidecar combines a freshly supplied --result with a result already
 // on disk at priorPath, returning the bytes Done should write.
@@ -197,7 +230,11 @@ func (s StraySidecar) Redundant() bool { return s.AuthoritativeExists && s.Compa
 // Unreadable directories are skipped rather than failing the scan, matching
 // Resolve: a missing work/shelved/ must not hide strays elsewhere.
 func FindStraySidecars(root string) ([]StraySidecar, error) {
-	workDir := filepath.Join(root, "work")
+	// Result sidecars are companion files: a backend that is not local has
+	// none, and so no strays.
+	if workDirOf(root) == "" {
+		return nil, nil
+	}
 
 	// dirs to scan: the active lifecycle dirs, plus archive partitions and the
 	// loose archive root — the same surface Resolve covers, so a stray cannot
@@ -205,9 +242,9 @@ func FindStraySidecars(root string) ([]StraySidecar, error) {
 	type scanDir struct{ path, location string }
 	scan := []scanDir{}
 	for _, state := range activeStates {
-		scan = append(scan, scanDir{filepath.Join(workDir, state), state})
+		scan = append(scan, scanDir{statusDirOf(root, state), state})
 	}
-	archiveRoot := filepath.Join(workDir, "archive")
+	archiveRoot := statusDirOf(root, "archived")
 	scan = append(scan, scanDir{archiveRoot, "archived"})
 	if entries, err := os.ReadDir(archiveRoot); err == nil {
 		for _, e := range entries {
