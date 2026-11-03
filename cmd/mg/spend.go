@@ -31,6 +31,19 @@ var spendCmd = &cobra.Command{
 The first run (or --rebuild) scans all transcripts and writes a per-item
 NDJSON store under ~/.macguffin/spend/. Subsequent runs are incremental:
 records are keyed on (session, message_uuid) and re-scans skip duplicates.
+Reads also dedup on that key, so every figure counts a message once. The
+harvest holds a lock: if another mg spend is already harvesting, this run
+skips its harvest (saying so on stderr) and reads the store as it stands;
+--rebuild instead waits for the lock.
+
+Every grouped view ends with a TOTAL row that sums the rows shown. With
+--json the output is an array of group objects ({"key", "items", "input",
+"cache_read", "cache_create", "output", "total_in", "total_out"}) and the
+grand total is the LAST element of that array, an object of the same shape
+whose key is the reserved uppercase "TOTAL". Sum the array without it, or
+select it by key. --by tag has no TOTAL (row or object): an item with
+several tags appears under each of them, so a column sum would count its
+tokens more than once.
 
 The rolling --since window and the calendar-anchored --window are two ways
 to bound the same data: --since 24h is "the last 24 hours" (rolling), while
@@ -57,19 +70,18 @@ Examples:
 			return err
 		}
 
-		// --rebuild: drop the existing store before scanning.
-		if spendRebuild {
-			if err := os.RemoveAll(spend.StoreRoot(root)); err != nil {
-				return fmt.Errorf("clearing store: %w", err)
-			}
-		}
-
-		run := &spend.Run{Root: root}
+		// --rebuild drops the existing store before scanning; the removal
+		// runs inside Aggregate, under the harvest lock.
+		run := &spend.Run{Root: root, Rebuild: spendRebuild}
 		res, err := run.Aggregate()
 		if err != nil {
 			return fmt.Errorf("aggregator: %w", err)
 		}
-		_ = res // counts available for verbose mode later
+		if res.HarvestSkipped {
+			// Not silent: a skipped harvest means the figures below are as
+			// fresh as the OTHER run's harvest, not this one's.
+			fmt.Fprintln(os.Stderr, "spend: another mg spend is harvesting; skipped this run's harvest and read the store as it stands")
+		}
 
 		sinceSet := cmd.Flags().Changed("since")
 		windowSet := cmd.Flags().Changed("window")
@@ -122,7 +134,7 @@ Examples:
 		}
 
 		if spendJSON {
-			return writeSpendJSON(groups)
+			return writeSpendJSON(groups, spendBy)
 		}
 		writeSpendTable(groups, spendBy)
 		return nil
@@ -133,7 +145,7 @@ func init() {
 	spendCmd.Flags().StringVar(&spendBy, "by", "item", "group axis: item, tag, tag:<value>, repo, agent, priority, assignee")
 	spendCmd.Flags().StringVar(&spendSince, "since", "", "rolling window: keep records within the last duration (e.g. 24h, 7d)")
 	spendCmd.Flags().StringVar(&spendWindow, "window", "", "calendar window: today (since local midnight) or week (since Monday)")
-	spendCmd.Flags().BoolVar(&spendJSON, "json", false, "emit JSON array (one object per group)")
+	spendCmd.Flags().BoolVar(&spendJSON, "json", false, "emit JSON array (one object per group; the last element is the \"TOTAL\" object, absent for --by tag)")
 	spendCmd.Flags().BoolVar(&spendRebuild, "rebuild", false, "drop the existing store and rescan all transcripts")
 	spendCmd.Flags().BoolVar(&spendTotal, "total", false, "print grand totals for today, this week, and all time")
 }
@@ -244,7 +256,16 @@ type jsonGroup struct {
 	TotalOut    int    `json:"total_out"`
 }
 
-func writeSpendJSON(groups []spend.Group) error {
+// hasGrandTotal reports whether the --by axis partitions the records, i.e.
+// whether each record lands in at most one group so a column sum of the rows
+// is a true total. --by tag does not: an item with N tags is added to N
+// groups, so its TOTAL would multiply-count (drellem2/macguffin#30). Every
+// other axis, including tag:<value> (one row per item), partitions.
+func hasGrandTotal(by string) bool {
+	return by != "tag"
+}
+
+func writeSpendJSON(groups []spend.Group, by string) error {
 	out := make([]jsonGroup, 0, len(groups)+1)
 	for _, g := range groups {
 		out = append(out, jsonGroup{
@@ -263,17 +284,20 @@ func writeSpendJSON(groups []spend.Group) error {
 	// shape a []jsonGroup, so consumers that unmarshal the array or select
 	// groups by their (lowercase) item/tag/agent key are unaffected; the
 	// key is uppercase precisely so it cannot collide with a real group key.
-	tot := sumGroups(groups)
-	out = append(out, jsonGroup{
-		Key:         spendTotalKey,
-		Items:       tot.ItemCount,
-		Input:       tot.Input,
-		CacheRead:   tot.CacheRead,
-		CacheCreate: tot.CacheCreate,
-		Output:      tot.Output,
-		TotalIn:     tot.TotalIn(),
-		TotalOut:    tot.TotalOut(),
-	})
+	// Omitted for --by tag, where a column sum multiply-counts.
+	if hasGrandTotal(by) {
+		tot := sumGroups(groups)
+		out = append(out, jsonGroup{
+			Key:         spendTotalKey,
+			Items:       tot.ItemCount,
+			Input:       tot.Input,
+			CacheRead:   tot.CacheRead,
+			CacheCreate: tot.CacheCreate,
+			Output:      tot.Output,
+			TotalIn:     tot.TotalIn(),
+			TotalOut:    tot.TotalOut(),
+		})
+	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(out)
@@ -303,7 +327,11 @@ func writeSpendTable(groups []spend.Group, by string) {
 	// Grand-total row: the "total token usage from a single command" that
 	// pogo#46 asks for by default. It sums the column across the groups shown
 	// (the same convention as any table TOTAL row), so for the default
-	// per-item view it is the true grand total.
+	// per-item view it is the true grand total. Omitted for --by tag, where
+	// the rows overlap and a column sum multiply-counts.
+	if !hasGrandTotal(by) {
+		return
+	}
 	tot := sumGroups(groups)
 	fmt.Printf("%-24s %6d %12s %12s %12s %12s %12s %12s\n",
 		spendTotalKey,

@@ -1134,8 +1134,13 @@ record is counted once, so the `TOTAL` row is the true grand total. `--json`
 mirrors it as a trailing object with the reserved key `TOTAL`; the payload
 stays a JSON array of the same shape, and the key is uppercase so it never
 collides with a (lowercase) item id, tag, repo, agent, priority, or assignee —
-consumers that select groups by key are unaffected. For a time-bucketed
-headline of today / this week / all time in one shot, use `--total`.
+consumers that select groups by key are unaffected. The `TOTAL` object is
+always the **last** element of the array, so a consumer summing the groups
+itself should skip it (or select it by key instead of summing). `--by tag` is
+the exception: an item with several tags appears under each of them, so a
+column sum would count its tokens more than once — that view has no `TOTAL`
+row and no `TOTAL` object. For a time-bucketed headline of today / this week /
+all time in one shot, use `--total`.
 
 **Windows.** `--since` and `--window` bound the same data two different ways
 and are mutually exclusive. `--since D` is a *rolling* window ending now
@@ -1152,7 +1157,13 @@ and not exposed here); see the limit-meter caveat below.
 Harvesting runs automatically at the start of every `mg spend` invocation, so
 running the command is what advances the record. The harvest is incremental
 and idempotent — it keys on `(session, message-uuid)`, so re-runs skip
-already-counted messages. For continuous capture without having to run the
+already-counted messages. It holds a lock (`~/.macguffin/spend.lock`) across
+the read-scan-append, so overlapping invocations cannot both append the same
+messages: a run that finds another harvest in progress skips its own harvest,
+says so on stderr, and reads the store as it stands; `--rebuild` waits for the
+lock instead. Reads also dedup on `(session, message-uuid)`, so a store that
+already holds doubled records from before the lock still reports each message
+once — no rebuild needed. For continuous capture without having to run the
 command by hand, schedule it (e.g. a cron entry or `pogo schedule` running
 `mg spend` periodically); otherwise a window is only as complete as the last
 time the command ran.
