@@ -192,7 +192,8 @@ func updateOnce(root, id string, fields UpdateField) (*Item, *BodyChange, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	itemPath, status := m.Path, m.Status
+	status := m.Status
+	ref := refOf(m)
 	if m.doc == nil {
 		return nil, nil, errNoSuchItem(id)
 	}
@@ -436,14 +437,18 @@ func updateOnce(root, id string, fields UpdateField) (*Item, *BodyChange, error)
 	// --if-unchanged refusal.
 	backupPath := ""
 	//
-	// Only on a backend with companion files (store.Local): elsewhere there is
-	// no local directory to save into, and dir is "".
-	if dir := bodyBackupDirFor(root, itemPath, status, item.ID); dir != "" && change.Changed && change.Mode == "replace" && strings.TrimSpace(bodyBefore) != "" {
-		backupPath, err = saveBodyBackup(dir, bodyBefore, time.Now())
+	// The backup is a companion kept by the backend (store.Companions), so
+	// every backend takes one.
+	if change.Changed && change.Mode == "replace" && strings.TrimSpace(bodyBefore) != "" {
+		shelf, serr := shelfFor(root, ref)
+		if serr != nil {
+			return nil, nil, serr
+		}
+		backupPath, err = saveBody(shelf, bodyBefore, time.Now())
 		if err != nil {
 			return nil, nil, ioErr(fmt.Sprintf(
 				"%s: refusing to replace the body — the prior body could not be saved to %s: %s. Nothing was written.",
-				id, dir, fsErrText(err)))
+				id, shelf.where(), fsErrText(err)))
 		}
 	}
 

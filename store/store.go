@@ -265,6 +265,76 @@ type Backend interface {
 	// Capabilities reports which per-command mg behaviours this backend
 	// allows.
 	Capabilities() Capabilities
+
+	// Companions is where the backend keeps what mg stores BESIDE an item
+	// rather than in it: the result sidecar, saved prior bodies, the sweep
+	// stamp. It is required: a backend that cannot hold them cannot record
+	// `mg done --result`, which every pogo completion passes.
+	Companions() Companions
+}
+
+// Ref names one stored RECORD: an item id, the status it is in and, when
+// archived, its partition. Companions attach to a record rather than to a bare
+// id because a backend with Twins can hold several records under one id (an
+// archived twin's result is its own). A backend holding at most one record per
+// id may key companions by ID alone and ignore Status and Partition.
+type Ref struct {
+	ID        string
+	Status    Status
+	Partition string
+}
+
+// RefOf is the Ref of a stored document.
+func RefOf(d *Doc) Ref { return Ref{ID: d.ID, Status: d.State.Status, Partition: d.Partition} }
+
+// Companions are the documents mg keeps beside an item. Like item content they
+// are opaque bytes: merging a result, naming and pruning saved bodies, and
+// parsing the stamp are mg's logic. The backend stores and returns them.
+//
+// THEY TRAVEL WITH THE ITEM. A result attached to a record must be found at
+// the record's new Ref after a Transition, Archive or Unarchive moves it — on
+// the filesystem the sidecar file is renamed with the .md; a backend keyed by
+// id alone gets that for free. Saved bodies are moved explicitly with
+// MoveBodies, because mg merges and re-prunes them on the way.
+//
+// Absence is ErrNotFound (wrapped) from the Read methods, never an empty
+// slice: "no result" and "could not look" must stay distinguishable.
+type Companions interface {
+	// ReadResult returns the result sidecar attached to ref.
+	ReadResult(ref Ref) ([]byte, error)
+	// WriteResult replaces the result sidecar attached to ref. The record
+	// need not be re-read: mg writes a result beside an item it has resolved.
+	WriteResult(ref Ref, data []byte) error
+	// ResultWhere names, for humans, where ref's result is or would be
+	// stored. fsstore: the absolute <id>.result.json path.
+	ResultWhere(ref Ref) string
+	// Results enumerates every stored result by the Ref it is attached to.
+	// mg compares those against where the items actually are to find strays
+	// (results left behind by a move that predates the travel guarantee); a
+	// backend that cannot strand one simply reports each beside its item.
+	Results() ([]Ref, error)
+
+	// SaveBody stores a saved prior body under name for ref's item.
+	SaveBody(ref Ref, name string, body []byte) error
+	// Bodies lists the names saved for ref's item, in no particular order.
+	// None is an empty list, not an error.
+	Bodies(ref Ref) ([]string, error)
+	// ReadBody returns one saved body.
+	ReadBody(ref Ref, name string) ([]byte, error)
+	// RemoveBody deletes one saved body. Removing an absent one is not an
+	// error.
+	RemoveBody(ref Ref, name string) error
+	// MoveBodies carries every saved body from from's record to to's (archive
+	// and unarchive), merging into any already there. A backend that keeps
+	// bodies by id alone does nothing.
+	MoveBodies(from, to Ref) error
+	// BodiesWhere names, for humans, where ref's saved bodies are kept.
+	BodiesWhere(ref Ref) string
+
+	// ReadSweepStamp returns what WriteSweepStamp last stored: the moment
+	// `mg schedule` last ran, for the whole store.
+	ReadSweepStamp() ([]byte, error)
+	WriteSweepStamp(data []byte) error
 }
 
 // Opener opens the backend for an mg workspace root (the directory --root or
@@ -306,21 +376,20 @@ type Unarchiver interface {
 }
 
 // Local is implemented by a backend whose items are files on this machine
-// (fsstore). mg keeps a few COMPANION files beside an item — the result
-// sidecar <id>.result.json, saved prior bodies, the snooze sweep stamp — and
-// those are local files by nature. StatusDir names the directory holding items
-// of status st (for Archived, the archive root; partitions are its
-// subdirectories); WorkDir names the directory holding every status.
+// (fsstore). StatusDir names the directory holding items of status st (for
+// Archived, the archive root; partitions are its subdirectories).
 //
-// A backend that is not Local has no companion files: mg's result sidecar,
-// body backups and sweep stamp are unavailable on it and the commands that
-// need them say so. Moving those behind the seam is a follow-up, not part of
-// the Backend contract.
+// It is a LABEL and nothing more: mg uses it to name the record a refused move
+// would have destroyed. No item and no companion is read or written through
+// it — companions go through Backend.Companions on every backend.
 type Local interface {
 	StatusDir(st Status) string
-	WorkDir() string
-	// MoveCompanion renames a companion file (a saved body travelling into an
-	// archive partition). It is the backend's, not mg's, so every rename on a
-	// store path stays inside the backend.
-	MoveCompanion(src, dst string) error
+}
+
+// Initializer is implemented by a backend that lays something out before
+// first use (fsstore: the work/<status>/ directories). `mg init` calls it; a
+// backend that needs nothing does not implement it, and `mg init` then
+// prepares only mg's own local directories.
+type Initializer interface {
+	Init() error
 }

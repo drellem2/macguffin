@@ -17,11 +17,12 @@ type FS struct {
 }
 
 var (
-	_ store.Backend    = (*FS)(nil)
-	_ store.Twins      = (*FS)(nil)
-	_ store.IDLister   = (*FS)(nil)
-	_ store.Unarchiver = (*FS)(nil)
-	_ store.Local      = (*FS)(nil)
+	_ store.Backend     = (*FS)(nil)
+	_ store.Twins       = (*FS)(nil)
+	_ store.IDLister    = (*FS)(nil)
+	_ store.Unarchiver  = (*FS)(nil)
+	_ store.Local       = (*FS)(nil)
+	_ store.Initializer = (*FS)(nil)
 )
 
 // Open is the store.Opener for the filesystem backend. It touches nothing on
@@ -50,7 +51,9 @@ func FileName(id string, st store.State) string {
 }
 
 // ResultSidecarName is the file name of an item's result sidecar.
-func ResultSidecarName(id string) string { return id + ".result.json" }
+func ResultSidecarName(id string) string { return id + resultSuffix }
+
+const resultSuffix = ".result.json"
 
 // MoveSidecar carries id's result sidecar, if it has one, from srcDir to
 // dstDir. The sidecar is a companion to the .md and must travel with it across
@@ -477,12 +480,6 @@ func (b *FS) Unarchive(id string, partition string, to store.State, by store.Act
 
 // StatusDir implements store.Local.
 func (b *FS) StatusDir(st store.Status) string { return StatusDir(b.Root, st) }
-
-// WorkDir implements store.Local.
-func (b *FS) WorkDir() string { return filepath.Join(b.Root, "work") }
-
-// MoveCompanion implements store.Local: rename(2) of a companion file.
-func (b *FS) MoveCompanion(src, dst string) error { return MoveFile(src, dst) }
 
 // Events implements store.Backend.
 func (b *FS) Events() store.EventLog { return EventLog(b.Root) }

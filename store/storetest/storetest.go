@@ -339,6 +339,179 @@ func Run(t *testing.T, f Factory) {
 		}
 	})
 
+	// --- Companions: what mg keeps beside an item (mg-7153e) ---------------
+
+	t.Run("ResultRoundTripsAndTravelsWithTheItem", func(t *testing.T) {
+		b := f(t)
+		c := b.Companions()
+		id := "st-r0001"
+		mustCreate(t, b, id, available)
+		if err := b.Transition(id, available, claimed, me); err != nil {
+			t.Fatal(err)
+		}
+		at := store.RefOf(mustGet(t, b, id))
+		if _, err := c.ReadResult(at); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("ReadResult before any write: want ErrNotFound, got %v", err)
+		}
+		if c.ResultWhere(at) == "" {
+			t.Fatalf("ResultWhere is empty; mg names it in messages")
+		}
+		want := []byte(`{"branch":"b1"}`)
+		if err := c.WriteResult(at, want); err != nil {
+			t.Fatalf("WriteResult: %v", err)
+		}
+		if got, err := c.ReadResult(at); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("ReadResult = %q, %v; want %q", got, err, want)
+		}
+		// Overwrite is a replace, not an append.
+		want = []byte(`{"branch":"b2"}`)
+		if err := c.WriteResult(at, want); err != nil {
+			t.Fatalf("WriteResult (replace): %v", err)
+		}
+		// It travels: Transition, then Archive, carry it to the new record.
+		if err := b.Transition(id, claimed, done, me); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := c.ReadResult(store.RefOf(mustGet(t, b, id))); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("after Transition to done, ReadResult = %q, %v; want %q", got, err, want)
+		}
+		if err := b.Archive(id, "2026-11", me); err != nil {
+			t.Fatal(err)
+		}
+		arch := store.RefOf(mustGet(t, b, id))
+		if got, err := c.ReadResult(arch); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("after Archive, ReadResult = %q, %v; want %q", got, err, want)
+		}
+		// Results enumerates it, attached to the record it now sits beside.
+		refs, err := c.Results()
+		if err != nil {
+			t.Fatalf("Results: %v", err)
+		}
+		found := false
+		for _, r := range refs {
+			if r.ID == id {
+				if r.Status != store.Archived || r.Partition != "2026-11" {
+					t.Fatalf("Results lists %s at %+v, want archived/2026-11", id, r)
+				}
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("Results = %v, missing %s", refs, id)
+		}
+	})
+
+	t.Run("ResultOfAnotherItemIsNotFound", func(t *testing.T) {
+		b := f(t)
+		c := b.Companions()
+		mustCreate(t, b, "st-r0002", available)
+		mustCreate(t, b, "st-r0003", available)
+		if err := c.WriteResult(store.Ref{ID: "st-r0002", Status: store.Available}, []byte(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.ReadResult(store.Ref{ID: "st-r0003", Status: store.Available}); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("one item's result leaked to another: %v", err)
+		}
+	})
+
+	t.Run("BodiesSaveListReadRemove", func(t *testing.T) {
+		b := f(t)
+		c := b.Companions()
+		mustCreate(t, b, "st-b0001", available)
+		ref := store.Ref{ID: "st-b0001", Status: store.Available}
+		if names, err := c.Bodies(ref); err != nil || len(names) != 0 {
+			t.Fatalf("Bodies on a fresh item = %v, %v; want none and no error", names, err)
+		}
+		bodies := map[string]string{"20261103T120000.000Z-aaaa.md": "one\n", "20261103T120000.001Z-bbbb.md": "two\n"}
+		for n, body := range bodies {
+			if err := c.SaveBody(ref, n, []byte(body)); err != nil {
+				t.Fatalf("SaveBody(%s): %v", n, err)
+			}
+		}
+		names, err := c.Bodies(ref)
+		if err != nil || len(names) != 2 {
+			t.Fatalf("Bodies = %v, %v; want 2", names, err)
+		}
+		for _, n := range names {
+			got, err := c.ReadBody(ref, n)
+			if err != nil || string(got) != bodies[n] {
+				t.Fatalf("ReadBody(%s) = %q, %v; want %q", n, got, err, bodies[n])
+			}
+		}
+		// Saved bodies follow the item across a live move without help.
+		if err := b.Transition("st-b0001", available, claimed, me); err != nil {
+			t.Fatal(err)
+		}
+		ref = store.RefOf(mustGet(t, b, "st-b0001"))
+		if names, _ := c.Bodies(ref); len(names) != 2 {
+			t.Fatalf("after a claim, Bodies = %v; want both bodies still there", names)
+		}
+		if err := c.RemoveBody(ref, "20261103T120000.000Z-aaaa.md"); err != nil {
+			t.Fatalf("RemoveBody: %v", err)
+		}
+		if err := c.RemoveBody(ref, "20261103T120000.000Z-aaaa.md"); err != nil {
+			t.Fatalf("RemoveBody of an absent body must not fail: %v", err)
+		}
+		if _, err := c.ReadBody(ref, "20261103T120000.000Z-aaaa.md"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("ReadBody of a removed body: want ErrNotFound, got %v", err)
+		}
+		if names, _ := c.Bodies(ref); len(names) != 1 {
+			t.Fatalf("after RemoveBody, Bodies = %v; want 1", names)
+		}
+		if c.BodiesWhere(ref) == "" {
+			t.Fatalf("BodiesWhere is empty; mg names it in messages")
+		}
+	})
+
+	t.Run("BodiesMoveIntoTheArchiveAndBack", func(t *testing.T) {
+		b := f(t)
+		c := b.Companions()
+		id := "st-b0002"
+		mustCreate(t, b, id, available)
+		live := store.Ref{ID: id, Status: store.Available}
+		if err := c.SaveBody(live, "20261103T120000.000Z-aaaa.md", []byte("kept\n")); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Transition(id, available, claimed, me); err != nil {
+			t.Fatal(err)
+		}
+		if err := b.Transition(id, claimed, done, me); err != nil {
+			t.Fatal(err)
+		}
+		from := store.RefOf(mustGet(t, b, id))
+		if err := b.Archive(id, "2026-11", me); err != nil {
+			t.Fatal(err)
+		}
+		arch := store.RefOf(mustGet(t, b, id))
+		if err := c.MoveBodies(from, arch); err != nil {
+			t.Fatalf("MoveBodies into the archive: %v", err)
+		}
+		if got, err := c.ReadBody(arch, "20261103T120000.000Z-aaaa.md"); err != nil || string(got) != "kept\n" {
+			t.Fatalf("after MoveBodies, the archived record's body = %q, %v", got, err)
+		}
+		// Moving an item that has no bodies is a no-op, not an error.
+		mustCreate(t, b, "st-b0003", available)
+		if err := c.MoveBodies(store.Ref{ID: "st-b0003", Status: store.Available}, store.Ref{ID: "st-b0003", Status: store.Archived, Partition: "2026-11"}); err != nil {
+			t.Fatalf("MoveBodies with nothing saved: %v", err)
+		}
+	})
+
+	t.Run("SweepStampRoundTrip", func(t *testing.T) {
+		b := f(t)
+		c := b.Companions()
+		if _, err := c.ReadSweepStamp(); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("ReadSweepStamp on a fresh store: want ErrNotFound, got %v", err)
+		}
+		for _, v := range []string{"2026-11-03T17:00:00Z\n", "2026-11-03T18:00:00Z\n"} {
+			if err := c.WriteSweepStamp([]byte(v)); err != nil {
+				t.Fatalf("WriteSweepStamp: %v", err)
+			}
+			if got, err := c.ReadSweepStamp(); err != nil || string(got) != v {
+				t.Fatalf("ReadSweepStamp = %q, %v; want %q", got, err, v)
+			}
+		}
+	})
+
 	t.Run("EventsAppendAndRead", func(t *testing.T) {
 		b := f(t)
 		log := b.Events()

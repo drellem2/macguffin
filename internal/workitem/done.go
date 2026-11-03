@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
@@ -81,20 +80,16 @@ func Done(root, id string, resultJSON json.RawMessage, opts ...DoneOption) (*Ite
 	// nothing below can cost the caller their payload. See the doc comment: the
 	// guards are allowed to refuse, they are not allowed to charge for it.
 	//
-	// The result sidecar is a companion FILE, so it exists only on a backend
-	// whose items are local files (store.Local). On any other backend a
-	// --result is refused here, before anything moves, rather than dropped.
-	srcDir := ""
+	// The result sidecar is a companion the backend keeps with the item
+	// (store.Companions), so every backend records it.
+	resultWhere := ""
 	resultPreserved := false
 	if len(resultJSON) > 0 {
-		local, ok := localOf(b)
-		if !ok {
-			return nil, nil, errResultsUnsupported(id)
-		}
-		srcDir = filepath.Dir(m.Path)
-		if err := writeResultBeside(srcDir, local.StatusDir(store.Done), id, resultJSON); err != nil {
+		c := b.Companions()
+		if err := writeResultBeside(c, refOf(m), resultJSON); err != nil {
 			return nil, nil, err
 		}
+		resultWhere = c.ResultWhere(refOf(m))
 		resultPreserved = true
 	}
 
@@ -105,7 +100,7 @@ func Done(root, id string, resultJSON json.RawMessage, opts ...DoneOption) (*Ite
 	// leaves the item untouched.
 	if o.successor != "" {
 		if err := linkSuccessorBothWays(root, m, claimed, o.successor); err != nil {
-			return nil, nil, notePreservedResult(err, id, srcDir, resultPreserved)
+			return nil, nil, notePreservedResult(err, id, resultWhere, resultPreserved)
 		}
 	} else {
 		// An item can carry a successor: tag that no --successor supplied — from
@@ -116,7 +111,7 @@ func Done(root, id string, resultJSON json.RawMessage, opts ...DoneOption) (*Ite
 		reconcileBacklinks(root, claimed)
 	}
 	if err := requireRemainderDischarged(root, claimed); err != nil {
-		return nil, nil, notePreservedResult(err, id, srcDir, resultPreserved)
+		return nil, nil, notePreservedResult(err, id, resultWhere, resultPreserved)
 	}
 
 	// The claim holder (on the filesystem, the PID of <id>.md.<pid>) for the event.
@@ -173,7 +168,7 @@ func Done(root, id string, resultJSON json.RawMessage, opts ...DoneOption) (*Ite
 // it changes what the reader should do next (retry, cheaply) and not what went
 // wrong. Both refusal paths get it — a bad `--successor` target and an
 // undischarged declaration are the same situation from the caller's side.
-func notePreservedResult(err error, id, dir string, preserved bool) error {
+func notePreservedResult(err error, id, where string, preserved bool) error {
 	if !preserved {
 		return err
 	}
@@ -183,7 +178,7 @@ func notePreservedResult(err error, id, dir string, preserved bool) error {
 	}
 	return e.AppendHint(fmt.Sprintf(
 		"Your --result is already recorded at %s and is NOT lost: it stays with %s and is carried into done/ when the retry succeeds, whether or not you pass --result again.",
-		filepath.Join(dir, resultSidecarName(id)), id))
+		where, id))
 }
 
 // Status returns the lifecycle state of a work item: "available", "claimed",

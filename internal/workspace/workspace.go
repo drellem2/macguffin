@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/drellem2/macguffin/store"
+	"github.com/drellem2/macguffin/store/fsstore"
 )
 
 // EnvRoot names the environment variable that relocates the macguffin
@@ -54,10 +57,29 @@ func DefaultRoot() (string, error) {
 	return filepath.Join(home, ".macguffin"), nil
 }
 
-// Init creates the canonical macguffin directory tree.
+// Init creates the canonical macguffin directory tree for the filesystem
+// backend: the store's work/<status>/ directories (store/fsstore lays those
+// out, as its store.Initializer) and mg's own local directories.
 // If root is empty, Root("") is used.
 // Init is idempotent — safe to call on an existing tree.
+//
+// `mg init` does not call this: it initialises whatever backend it was built
+// with, through that backend, and then calls InitWith for the rest.
 func Init(root string) error {
+	return InitWith(root, func(root string) error {
+		b, err := fsstore.Open(root)
+		if err != nil {
+			return err
+		}
+		return b.(store.Initializer).Init()
+	})
+}
+
+// InitWith runs initStore — the storage backend's own layout, or nothing for a
+// backend that needs none — and then creates mg's local directories (agents,
+// mail, log), which are not the work-item store and stay on this machine
+// whatever the backend. If root is empty, Root("") is used.
+func InitWith(root string, initStore func(root string) error) error {
 	if root == "" {
 		var err error
 		root, err = Root("")
@@ -66,13 +88,13 @@ func Init(root string) error {
 		}
 	}
 
+	if initStore != nil {
+		if err := initStore(root); err != nil {
+			return err
+		}
+	}
+
 	dirs := []string{
-		filepath.Join(root, "work", "available"),
-		filepath.Join(root, "work", "claimed"),
-		filepath.Join(root, "work", "done"),
-		filepath.Join(root, "work", "pending"),
-		filepath.Join(root, "work", "archive"),
-		filepath.Join(root, "work", "shelved"),
 		filepath.Join(root, "agents"),
 		filepath.Join(root, "mail"),
 		filepath.Join(root, "log"),

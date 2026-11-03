@@ -26,27 +26,31 @@ import (
 //     backend in internal/workitem/backend.go and the one cmd/mg builds with.
 //     Every other fsstore symbol (MoveItem, Locate, RewriteExisting, ...) is
 //     a path primitive.
-//  2. Raw file I/O in internal/workitem outside the COMPANION files: the
-//     result sidecar, saved bodies and the sweep stamp are local files by
-//     nature and are reached only on a store.Local backend, through the
-//     directories it names. They are listed below by name; an item document
-//     read or written anywhere else is a violation.
-//  3. A "work" path literal in internal/workitem, internal/flow, mgcli or
-//     cmd/mg — the start of every hand-built store path (work/available/...).
-//     Directories come from the backend (store.Local), never from a join.
+//  2. Raw file I/O anywhere in internal/workitem. Item documents AND their
+//     companions — the result sidecar, saved bodies, the sweep stamp — go
+//     through store.Backend (Backend.Companions, mg-7153e). There used to be
+//     an exemption list of companion files here; it is empty now, and a file
+//     added to it is a companion reached around the seam again.
+//  3. A "work" path literal in internal/workitem, internal/flow,
+//     internal/workspace, mgcli or cmd/mg — the start of every hand-built
+//     store path (work/available/...). Directories come from the backend.
+//  4. A companion file name (".result.json", ".bodybak", ".last-sweep") in a
+//     string literal in any of those packages. Those names are the filesystem
+//     backend's layout and live in store/fsstore; anywhere else they are a
+//     companion path being built by hand, which a non-fs backend never sees.
+//     Multi-line raw strings (cobra help text) are documentation, not paths,
+//     and are not counted. The positive control is store/fsstore itself,
+//     which must contain every one of them.
 //
 // store/fsstore's own guard (no raw rename/link/O_EXCL outside fsstore) is the
 // layer below this one and still applies.
 
-// companionFiles may do raw file I/O in internal/workitem — on companion
-// files only, under directories a store.Local backend names.
-var companionFiles = map[string]bool{
-	"internal/workitem/bodybackup.go":     true,
-	"internal/workitem/sidecar.go":        true,
-	"internal/workitem/sidecarpath.go":    true,
-	"internal/workitem/sidecarcompare.go": true,
-	"internal/workitem/sweepstamp.go":     true,
-}
+// companionFiles may do raw file I/O in internal/workitem. EMPTY since
+// mg-7153e: the companions are reached through store.Companions.
+var companionFiles = map[string]bool{}
+
+// companionNames are the filesystem backend's companion file names.
+var companionNames = []string{".result.json", ".bodybak", ".last-sweep"}
 
 // rawIO is the file I/O a storage read or write is made of.
 var rawIO = map[string]map[string]bool{
@@ -64,7 +68,7 @@ const fsstorePath = "github.com/drellem2/macguffin/store/fsstore"
 
 // guardedDirs are the packages held to rules 1 and 3; rawIODirs to rule 2.
 var (
-	guardedDirs = []string{"internal/workitem", "internal/flow", "mgcli", "cmd/mg"}
+	guardedDirs = []string{"internal/workitem", "internal/flow", "internal/workspace", "mgcli", "cmd/mg"}
 	rawIODirs   = []string{"internal/workitem"}
 )
 
@@ -149,8 +153,19 @@ func scanFile(t *testing.T, path, rel string) []finding {
 				out = append(out, finding{"rawio " + pkg + "." + n.Sel.Name, at(n.Pos())})
 			}
 		case *ast.BasicLit:
-			if n.Kind == token.STRING && n.Value == `"work"` {
+			if n.Kind != token.STRING {
+				return true
+			}
+			if n.Value == `"work"` {
 				out = append(out, finding{`"work" literal`, at(n.Pos())})
+			}
+			if strings.HasPrefix(n.Value, "`") && strings.Contains(n.Value, "\n") {
+				return true // multi-line raw string: help text, not a path
+			}
+			for _, name := range companionNames {
+				if strings.Contains(n.Value, name) {
+					out = append(out, finding{"companion " + name, at(n.Pos())})
+				}
 			}
 		}
 		return true
@@ -164,22 +179,32 @@ func TestLifecycleReachesStorageOnlyThroughBackend(t *testing.T) {
 
 	// Positive controls: the scanner must see what IS there, or an empty
 	// violation list below says nothing. The default Opener in backend.go and
-	// cmd/mg's, and the companion files' raw I/O, are known positives.
-	var opens, companion int
+	// cmd/mg's are known positives for rule 1; store/fsstore, where the
+	// companion names legitimately live, is the known positive for rules 2
+	// and 4 — scanned with the same scanner, it must show raw I/O and every
+	// companion name.
+	var opens int
 	for _, f := range all {
 		if f.rule == "fsstore.Open" {
 			opens++
-		}
-		file := f.where[:strings.LastIndex(f.where, ":")]
-		if strings.HasPrefix(f.rule, "rawio ") && companionFiles[file] {
-			companion++
 		}
 	}
 	if opens < 2 {
 		t.Fatalf("control: the scanner found %d fsstore.Open references (want internal/workitem's default and cmd/mg's) — it is not looking:\n%v", opens, all)
 	}
-	if companion < 5 {
-		t.Fatalf("control: the scanner found only %d raw I/O calls in the companion files — it is not looking", companion)
+	seen := map[string]bool{}
+	for _, f := range scan(t, root, []string{"store/fsstore"}) {
+		if strings.HasPrefix(f.rule, "rawio ") && strings.HasSuffix(f.where[:strings.LastIndex(f.where, ":")], "companions.go") {
+			seen["rawio"] = true
+		}
+		if strings.HasPrefix(f.rule, "companion ") {
+			seen[strings.TrimPrefix(f.rule, "companion ")] = true
+		}
+	}
+	for _, want := range append([]string{"rawio"}, companionNames...) {
+		if !seen[want] {
+			t.Fatalf("control: scanning store/fsstore found no %s — the scanner is not looking (saw %v)", want, seen)
+		}
 	}
 
 	var bad []string
@@ -200,8 +225,10 @@ func TestLifecycleReachesStorageOnlyThroughBackend(t *testing.T) {
 			if inRawDir && !companionFiles[file] {
 				bad = append(bad, f.where+": "+strings.TrimPrefix(f.rule, "rawio ")+" — raw file I/O outside the companion files; item documents go through store.Backend")
 			}
+		case strings.HasPrefix(f.rule, "companion "):
+			bad = append(bad, f.where+": "+f.rule+" — a companion file name outside store/fsstore; reach it through store.Backend.Companions")
 		default:
-			bad = append(bad, f.where+": "+f.rule+" — a hand-built store path; take directories from the backend (store.Local)")
+			bad = append(bad, f.where+": "+f.rule+" — a hand-built store path; take directories from the backend")
 		}
 	}
 	if len(bad) > 0 {
@@ -219,10 +246,16 @@ import (
 	fs "github.com/drellem2/macguffin/store/fsstore"
 )
 
-func f(root string) {
+func f(root, id string) {
 	_ = fs.MoveItem("a", "b")
 	_, _ = os.ReadFile(root + "/" + "work")
+	_ = id + ".result.json"
+	_ = "/.bodybak/" + id
+	_ = ".last-sweep"
 }
+
+var help = ` + "`" + `docs mention work/.bodybak/<id>/
+on two lines` + "`" + `
 `
 	path := filepath.Join(dir, "bad.go")
 	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
@@ -232,9 +265,21 @@ func f(root string) {
 	for _, f := range scanFile(t, path, "internal/workitem/bad.go") {
 		got[f.rule] = true
 	}
-	for _, want := range []string{"fsstore.MoveItem", "rawio os.ReadFile", `"work" literal`} {
+	for _, want := range []string{"fsstore.MoveItem", "rawio os.ReadFile", `"work" literal`,
+		"companion .result.json", "companion .bodybak", "companion .last-sweep"} {
 		if !got[want] {
 			t.Errorf("scanner missed %s in a file that has it (found %v)", want, got)
 		}
+	}
+	// The multi-line help string mentions .bodybak once and is not counted:
+	// exactly one .bodybak finding, from the path literal.
+	n := 0
+	for _, f := range scanFile(t, path, "internal/workitem/bad.go") {
+		if f.rule == "companion .bodybak" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("got %d .bodybak findings, want 1 (the path, not the help text)", n)
 	}
 }

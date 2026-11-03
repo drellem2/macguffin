@@ -2,11 +2,11 @@ package workitem
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/store"
 )
 
 // This file answers the one question the store could not previously be asked:
@@ -42,10 +42,10 @@ import (
 // empty string, and a caller that only ever sees a path cannot tell them apart.
 type Sidecar struct {
 	ID        string // the item's short id, without any @partition qualifier
-	Path      string // absolute path to <id>.result.json beside the item's .md
+	Path      string // where the result is stored, for humans (fsstore: <id>.result.json beside the item's .md)
 	Status    string // available | claimed | done | pending | shelved | archived
 	Partition string // archive partition (e.g. "2026-08"); empty unless archived
-	Exists    bool   // whether Path is actually present on disk
+	Exists    bool   // whether the backend actually holds a result for the item
 }
 
 // SidecarFor derives the path a work item's result sidecar occupies and reports
@@ -79,33 +79,42 @@ func SidecarFor(root, id string) (Sidecar, error) {
 func SidecarOf(m Match) (Sidecar, error) {
 	sc := Sidecar{
 		ID:        m.ID,
-		Path:      filepath.Join(filepath.Dir(m.Path), resultSidecarName(m.ID)),
 		Status:    m.Status,
 		Partition: m.Partition,
 	}
-	if !m.local {
-		// A backend with no companion files has no result sidecar: the
-		// result is absent, and Path is only a label.
+	if m.comps == nil {
+		// A Match that did not come from Resolve has no store behind it.
 		return sc, nil
 	}
-	info, err := os.Stat(sc.Path)
+	sc.Path = m.comps.ResultWhere(refOf(m))
+	_, err := m.comps.ReadResult(refOf(m))
 	switch {
 	case err == nil:
-		if info.IsDir() {
-			// A directory where the sidecar belongs is a broken store, not an
-			// absent result. Saying so beats reporting "no result" for
-			// something that is plainly there.
-			return sc, ioErr(fmt.Sprintf("%s: %s is a directory, not a result sidecar.", sc.ID, sc.Path))
-		}
 		sc.Exists = true
-	case os.IsNotExist(err):
+	case errors.Is(err, store.ErrNotFound):
 		sc.Exists = false
 	default:
-		// Permission denied, an I/O error, a broken symlink chain: we did not
-		// learn that the result is absent, we learned that we could not look.
+		// Permission denied, an I/O error, a directory where the sidecar
+		// belongs: we did not learn that the result is absent, we learned that
+		// we could not look.
 		return sc, ioErr(fmt.Sprintf("%s: cannot read %s: %s", sc.ID, sc.Path, fsErrText(err)))
 	}
 	return sc, nil
+}
+
+// readResult reads the result a located Sidecar names. The sidecar was there
+// a moment ago, so any failure — absence included — is a read failure and not
+// an absence; it must not collapse into ErrNoSidecar.
+func readResult(root string, sc Sidecar) ([]byte, error) {
+	c, err := companionsOf(root)
+	if err != nil {
+		return nil, err
+	}
+	data, err := c.ReadResult(store.Ref{ID: sc.ID, Status: store.Status(sc.Status), Partition: sc.Partition})
+	if err != nil {
+		return nil, ioErr(fmt.Sprintf("%s: cannot read %s: %s", sc.ID, sc.Path, fsErrText(err)))
+	}
+	return data, nil
 }
 
 // ReadSidecar returns the bytes of an item's result sidecar.
@@ -123,11 +132,9 @@ func ReadSidecar(root, id string) (Sidecar, []byte, error) {
 	if !sc.Exists {
 		return sc, nil, ErrNoSidecar(sc)
 	}
-	data, err := os.ReadFile(sc.Path)
+	data, err := readResult(root, sc)
 	if err != nil {
-		// The file was there a moment ago, so this is a read failure and not an
-		// absence — it must not collapse into ErrNoSidecar.
-		return sc, nil, ioErr(fmt.Sprintf("%s: cannot read %s: %s", sc.ID, sc.Path, fsErrText(err)))
+		return sc, nil, err
 	}
 	return sc, data, nil
 }
@@ -145,26 +152,34 @@ func SidecarResult(root, id string) (Sidecar, json.RawMessage, bool, error) {
 	if err != nil {
 		return sc, nil, false, err
 	}
-	return sidecarResult(sc)
+	return sidecarResult(root, sc)
 }
 
 // SidecarResultOf is SidecarResult for an already-resolved item. See SidecarOf.
 func SidecarResultOf(m Match) (Sidecar, json.RawMessage, bool, error) {
 	sc, err := SidecarOf(m)
-	if err != nil {
+	if err != nil || !sc.Exists {
 		return sc, nil, false, err
 	}
-	return sidecarResult(sc)
-}
-
-func sidecarResult(sc Sidecar) (Sidecar, json.RawMessage, bool, error) {
-	if !sc.Exists {
-		return sc, nil, false, nil
-	}
-	data, err := os.ReadFile(sc.Path)
+	data, err := m.comps.ReadResult(refOf(m))
 	if err != nil {
 		return sc, nil, false, ioErr(fmt.Sprintf("%s: cannot read %s: %s", sc.ID, sc.Path, fsErrText(err)))
 	}
+	return decodedResult(sc, data)
+}
+
+func sidecarResult(root string, sc Sidecar) (Sidecar, json.RawMessage, bool, error) {
+	if !sc.Exists {
+		return sc, nil, false, nil
+	}
+	data, err := readResult(root, sc)
+	if err != nil {
+		return sc, nil, false, err
+	}
+	return decodedResult(sc, data)
+}
+
+func decodedResult(sc Sidecar, data []byte) (Sidecar, json.RawMessage, bool, error) {
 	if !json.Valid(data) {
 		return sc, nil, false, nil
 	}

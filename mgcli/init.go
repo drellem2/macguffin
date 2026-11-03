@@ -1,6 +1,7 @@
 package mgcli
 
 import (
+	"github.com/drellem2/macguffin/internal/workitem"
 	"github.com/drellem2/macguffin/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -23,7 +24,10 @@ set a custom work item ID prefix.`,
 		if err != nil {
 			return err
 		}
-		if err := workspace.Init(root); err != nil {
+		// The store is laid out by its backend (store.Initializer); a backend
+		// that needs nothing gets nothing, and only mg's local directories
+		// are created.
+		if err := workspace.InitWith(root, workitem.InitStore); err != nil {
 			return err
 		}
 		if cmd.Flags().Changed("prefix") {

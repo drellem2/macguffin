@@ -142,7 +142,13 @@ before.`,
 		}
 
 		if len(resultJSON) > 0 {
-			fmt.Printf("Result written to %s.result.json\n", item.ID)
+			// Where the backend keeps it (fsstore: done/<id>.result.json),
+			// not a path built here: a shared backend has no such file.
+			if sc, err := workitem.SidecarFor(root, item.ID); err == nil && sc.Path != "" {
+				fmt.Printf("Result written to %s\n", sc.Path)
+			} else {
+				fmt.Printf("Result recorded for %s\n", item.ID)
+			}
 		}
 		for _, p := range promoted {
 			fmt.Printf("Promoted %s: %s (pending → available)\n", p.ID, p.Title)

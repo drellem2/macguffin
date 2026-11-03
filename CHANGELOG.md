@@ -23,6 +23,17 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- Companion files go through the backend (#47, third step). The result
+  sidecar, saved prior bodies and the sweep stamp are reached through a required
+  `Backend.Companions()` (`store.Companions`, keyed by `store.Ref`), not through
+  `store.Local` directories. `mg done --result`, body backups, `mg restore-body`,
+  `mg sidecar`/`mg sidecars` and the `mg schedule` driver stamp now work on any
+  backend. `mg init` lays out the store through the backend
+  (`store.Initializer`). `store.Local` is now a label only. The filesystem
+  layout is unchanged. `mg done --result` prints where the backend keeps the
+  result rather than a bare file name. **Breaking for out-of-tree backends:**
+  `store.Backend` gains `Companions()`.
+
 - mg's own commands now reach a non-filesystem backend (#47, second step).
   Every lifecycle operation in `internal/workitem` goes through `store.Backend`
   with a `store.Actor` built at the CLI edge. That covers create, claim, done,

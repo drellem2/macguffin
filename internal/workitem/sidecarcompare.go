@@ -3,7 +3,6 @@ package workitem
 import (
 	"bytes"
 	"encoding/json"
-	"os"
 	"reflect"
 	"sort"
 )
@@ -104,24 +103,6 @@ func (c SidecarComparison) Differs() bool {
 // proxy such as size, mtime, or the directory a file was found in.
 func (c SidecarComparison) SameContent() bool {
 	return c.Relation == RelationIdentical || c.Relation == RelationEquivalent
-}
-
-// compareSidecarFiles classifies two sidecar paths, reading both.
-//
-// A read failure yields RelationUnknown rather than a difference. The caller
-// has already established that both paths exist, so a failure here means
-// unreadable (permissions, I/O), which is a fact about the probe and not about
-// the files' contents.
-func compareSidecarFiles(strayPath, authPath string) SidecarComparison {
-	stray, err := os.ReadFile(strayPath)
-	if err != nil {
-		return SidecarComparison{Relation: RelationUnknown, Note: "stray is unreadable: " + err.Error()}
-	}
-	auth, err := os.ReadFile(authPath)
-	if err != nil {
-		return SidecarComparison{Relation: RelationUnknown, Note: "authoritative copy is unreadable: " + err.Error()}
-	}
-	return compareSidecarBytes(stray, auth)
 }
 
 // compareSidecarBytes classifies two sidecar payloads by content.

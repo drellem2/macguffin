@@ -67,8 +67,8 @@ func archiveFile(root string, c archiveCandidate) error {
 	// Determine archive partition (YYYY-MM based on done time)
 	partition := c.doneTime.Format("2006-01")
 	archiveDir := ""
-	if l, ok := localOf(b); ok {
-		archiveDir = filepath.Join(l.StatusDir(store.Archived), partition)
+	if d := statusLabel(root, "archived"); d != "" {
+		archiveDir = filepath.Join(d, partition)
 	}
 
 	// Backend.Archive refuses, rather than replaces, a legacy same-id twin
@@ -90,12 +90,10 @@ func archiveFile(root string, c archiveCandidate) error {
 	// deleting them would destroy the only copy of a body at the exact moment
 	// nobody is watching. Moving them keeps the archive self-contained, keeps
 	// `mg restore-body` working on an archived item, and gives Unarchive
-	// something to bring back. See bodyBackupDirFor. (Companion files: only on
-	// a local backend.)
-	if archiveDir != "" {
-		if err := moveBodyBackups(root, liveBodyBackupParent(root), filepath.Join(archiveDir, bodyBackupDirName), id); err != nil {
-			return fmt.Errorf("archiving saved bodies for %s: %w", id, err)
-		}
+	// something to bring back. See bodybackup.go.
+	archived := store.Ref{ID: id, Status: store.Archived, Partition: partition}
+	if err := moveBodyBackups(root, refOf(c.m), archived); err != nil {
+		return fmt.Errorf("archiving saved bodies for %s: %w", id, err)
 	}
 
 	event.Emit(root, "work.archive", map[string]string{

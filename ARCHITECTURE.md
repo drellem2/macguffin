@@ -240,28 +240,44 @@ refuses. The `store.Actor` for every write is built at the CLI edge (mgcli: the
 attributed name, host, PID and a per-process nonce). `mg claim --pid` overrides
 only the PID.
 
+**Companions go through the backend too.** What mg keeps *beside* an item — the
+result sidecar, saved prior bodies (`mg restore-body`) and the sweep stamp
+(`mg schedule`) — is reached through `Backend.Companions()`, a required
+`store.Companions`. A result is attached to a record (`store.Ref`: id, status,
+partition) and travels with it across `Transition`, `Archive` and `Unarchive`.
+Saved bodies move into and out of the archive with `MoveBodies`. Merging a
+result, naming and pruning saved bodies, and parsing the stamp stay in mg. On
+the filesystem they are the same files as always (`<status>/<id>.result.json`,
+`work/.bodybak/<id>/`, `work/.last-sweep`), and every path to one is built in
+`store/fsstore`. `mg done --result` therefore works on every backend.
+
+`mg init` lays out the store through the backend (`store.Initializer`; the
+filesystem's `work/<status>/` directories). A backend that needs no layout does
+not implement it, and `mg init` then creates only mg's local `agents/`, `mail/`
+and `log/` directories.
+
 Optional extensions the filesystem backend provides, which mg uses when they are
 present:
 
 - `store.Twins` (legacy same-id twins, `id@partition`)
 - `store.IDLister` (bulk id enumeration without reading documents)
 - `store.Unarchiver`
-- `store.Local`, which names the local directories for **companion files**: the
-  result sidecar, saved prior bodies and the sweep stamp
-
-On a backend without `Local`, those companion features are unavailable.
-`mg done --result` is refused before anything moves rather than dropped. No body
-backup is taken, and no sweep stamp is kept.
+- `store.Local`, a label only: the status directories, named in the message
+  for a refused move. Nothing is read or written through it.
+- `store.Initializer` (`mg init`)
 
 Two guard tests hold this:
 
-- `internal/workitem/backendguard_test.go`: no `fsstore` symbol but `Open`, and
-  no `"work"` path literal, in `internal/workitem`, `internal/flow`, `mgcli` or
-  `cmd/mg`. No raw file I/O in `internal/workitem` outside the named companion
-  files.
-- `internal/memstore`: an in-memory backend that passes `storetest` and runs
-  the CLI's new → claim → done → archive through `mgcli.Run` against an empty
-  workspace root.
+- `internal/workitem/backendguard_test.go`: no `fsstore` symbol but `Open`, no
+  `"work"` path literal, and no companion file name (`.result.json`, `.bodybak`,
+  `.last-sweep`) in `internal/workitem`, `internal/flow`, `internal/workspace`,
+  `mgcli` or `cmd/mg`. No raw file I/O in `internal/workitem` at all. The
+  positive control is `store/fsstore`, which must show every companion name.
+- `internal/memstore`: an in-memory backend that passes `storetest` (companion
+  cases included). It runs the CLI's new → claim → done → archive, and
+  new → claim → edit → restore-body → done --result → sidecar --json →
+  show --json → schedule → archive, through `mgcli.Run` against a workspace root
+  that stays empty.
 
 ## Notification: How Agents React
 

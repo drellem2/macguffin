@@ -122,52 +122,47 @@ func defaultActor() store.Actor {
 	return store.Actor{Name: actor(), Host: host, PID: pid, Nonce: strconv.Itoa(pid)}
 }
 
-// localOf returns the backend's local-file extension, if it has one. Only the
-// COMPANION files (result sidecars, saved bodies, the sweep stamp) use it.
-func localOf(b store.Backend) (store.Local, bool) {
-	l, ok := b.(store.Local)
-	return l, ok
+// companionsOf is the backend's companion store for root: the result
+// sidecars, saved bodies and sweep stamp. Every backend has one.
+func companionsOf(root string) (store.Companions, error) {
+	b, err := be(root)
+	if err != nil {
+		return nil, err
+	}
+	return b.Companions(), nil
 }
 
-// statusDirOf is the local directory for status st, or "" on a backend that
-// is not local.
-func statusDirOf(root string, st string) string {
+// InitStore prepares root's store for first use (`mg init`): the backend's
+// own layout when it has one (store.Initializer), nothing otherwise.
+func InitStore(root string) error {
+	b, err := be(root)
+	if err != nil {
+		return err
+	}
+	if i, ok := b.(store.Initializer); ok {
+		return i.Init()
+	}
+	return nil
+}
+
+// refOf is the store.Ref of the record a Match names.
+func refOf(m Match) store.Ref {
+	return store.Ref{ID: m.ID, Status: store.Status(m.Status), Partition: m.Partition}
+}
+
+// statusLabel names the directory of status st for a human message, on a
+// backend that has one (store.Local); "" otherwise. Nothing reads or writes
+// through it.
+func statusLabel(root string, st string) string {
 	b, err := backendFor(root)
 	if err != nil {
 		return ""
 	}
-	l, ok := localOf(b)
+	l, ok := b.(store.Local)
 	if !ok {
 		return ""
 	}
 	return l.StatusDir(store.Status(st))
-}
-
-// workDirOf is the backend's local work directory, or "" on a backend that is
-// not local.
-func workDirOf(root string) string {
-	b, err := backendFor(root)
-	if err != nil {
-		return ""
-	}
-	l, ok := localOf(b)
-	if !ok {
-		return ""
-	}
-	return l.WorkDir()
-}
-
-// moveCompanion renames a companion file through the local backend.
-func moveCompanion(root, src, dst string) error {
-	b, err := backendFor(root)
-	if err != nil {
-		return err
-	}
-	l, ok := localOf(b)
-	if !ok {
-		return errors.New("this storage backend keeps no companion files")
-	}
-	return l.MoveCompanion(src, dst)
 }
 
 // where is a doc's human-readable location: the backend's own answer, or

@@ -129,7 +129,7 @@ func Unarchive(root, id, status string) (*Item, string, error) {
 	if err := un.Unarchive(m.ID, m.Partition, inStatus(status), writer(0)); err != nil {
 		if errors.Is(err, store.ErrExists) {
 			dst := filepath.Join(status, item.ID)
-			if d := statusDirOf(root, status); d != "" {
+			if d := statusLabel(root, status); d != "" {
 				dst = filepath.Join(d, filepath.Base(m.Path))
 			}
 			return nil, "", errDestinationExists(item.ID, m.Path, dst)
@@ -141,11 +141,8 @@ func Unarchive(root, id, status string) (*Item, string, error) {
 	// archive→unarchive round trip leaves them where a live item's backups
 	// live. Without this they would stay behind in archive/<partition>/.bodybak/
 	// while the item is edited from work/, and the two halves would diverge.
-	// (Companion files: only on a local backend.)
-	if live := liveBodyBackupParent(root); live != "" {
-		if err := moveBodyBackups(root, filepath.Join(filepath.Dir(m.Path), bodyBackupDirName), live, item.ID); err != nil {
-			return nil, "", ioErr(fmt.Sprintf("%s: could not be unarchived (saved bodies): %s", item.ID, fsErrText(err)))
-		}
+	if err := moveBodyBackups(root, refOf(m), store.Ref{ID: m.ID, Status: store.Status(status)}); err != nil {
+		return nil, "", ioErr(fmt.Sprintf("%s: could not be unarchived (saved bodies): %s", item.ID, fsErrText(err)))
 	}
 
 	item, err = readIn(root, m.ID, store.Status(status))

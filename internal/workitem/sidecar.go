@@ -2,51 +2,44 @@ package workitem
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/store"
 )
 
-// resultSidecarName is the filename of a work item's result sidecar, written by
-// `mg done` next to the item's .md file (see Done). It records the completion
-// result (e.g. the merged branch) as JSON.
-func resultSidecarName(id string) string { return id + ".result.json" }
-
-// writeResultBeside merges resultJSON into any prior result and writes it as
-// <id>.result.json in srcDir, the directory the item currently sits in (see
-// Done for why the result lands before the guards run).
+// writeResultBeside merges resultJSON into any prior result and stores it as
+// the result of src, the record the item currently is (see Done for why the
+// result lands before the guards run).
 //
 // The prior result is the one the coming move would leave at the
-// destination: normally the copy travelling out of srcDir, or — when srcDir
-// has none — a copy already sitting in doneDir from an earlier completion.
-// Folding it in BEFORE writing means an irreconcilable pair fails with both
-// copies still on disk rather than half-reconciled.
-func writeResultBeside(srcDir, doneDir, id string, resultJSON json.RawMessage) error {
-	priorPath := filepath.Join(srcDir, resultSidecarName(id))
-	if _, err := os.Stat(priorPath); os.IsNotExist(err) {
-		priorPath = filepath.Join(doneDir, resultSidecarName(id))
+// destination: normally the copy travelling with src, or — when src has none —
+// a copy already attached to the item's done record from an earlier
+// completion (on the filesystem, a sidecar already sitting in done/). Folding
+// it in BEFORE writing means an irreconcilable pair fails with both copies
+// still stored rather than half-reconciled.
+func writeResultBeside(c store.Companions, src store.Ref, resultJSON json.RawMessage) error {
+	priorRef := src
+	prior, err := c.ReadResult(src)
+	if errors.Is(err, store.ErrNotFound) {
+		priorRef = store.Ref{ID: src.ID, Status: store.Done}
+		prior, err = c.ReadResult(priorRef)
 	}
-	sidecarBytes, err := mergeResultSidecar(priorPath, id, resultJSON)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		prior = nil
+	case err != nil:
+		return fmt.Errorf("reading result sidecar: %w", err)
+	}
+	sidecarBytes, err := mergeResultSidecar(prior, c.ResultWhere(priorRef), src.ID, resultJSON)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(srcDir, resultSidecarName(id)), sidecarBytes, 0o644); err != nil {
+	if err := c.WriteResult(src, sidecarBytes); err != nil {
 		return fmt.Errorf("writing result sidecar: %w", err)
 	}
 	return nil
-}
-
-// errResultsUnsupported refuses a --result on a backend with no companion
-// files. Refusing BEFORE the transition keeps the caller's payload theirs: the
-// alternative — complete the item and drop the result — is mg-9259's data loss
-// by another route.
-func errResultsUnsupported(id string) *mgerr.Error {
-	return mgerr.Usage("results_unsupported",
-		fmt.Sprintf("%s: this storage backend does not store result sidecars, so --result cannot be recorded. Nothing was changed.", id),
-		fmt.Sprintf("Run 'mg done %s' without --result, and record the result in the item's body ('mg edit %s --append-body-file -').", id, id))
 }
 
 // The result sidecar <id>.result.json moves from srcDir to dstDir with its item.
@@ -63,7 +56,8 @@ func errResultsUnsupported(id string) *mgerr.Error {
 // surfacing any failure loudly, so no call site in mg can forget it.
 
 // mergeResultSidecar combines a freshly supplied --result with a result already
-// on disk at priorPath, returning the bytes Done should write.
+// stored (prior, nil when there is none; priorWhere names it for the refusal),
+// returning the bytes Done should write.
 //
 // Done is the only transition that writes a sidecar as well as carrying one, and
 // until now the write was an unconditional overwrite: the fresh result simply
@@ -107,15 +101,11 @@ func errResultsUnsupported(id string) *mgerr.Error {
 // same trade: an error leaves both copies on disk and is recoverable by hand,
 // where a clobber is not. It costs a hand-reconcile in a case measured at 0 of
 // 1593 sidecars in the live store.
-func mergeResultSidecar(priorPath, id string, incoming json.RawMessage) ([]byte, error) {
-	prior, err := os.ReadFile(priorPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// Nothing to preserve — write the caller's bytes exactly as given,
-			// rather than round-tripping them through the marshaller.
-			return incoming, nil
-		}
-		return nil, err
+func mergeResultSidecar(prior []byte, priorWhere, id string, incoming json.RawMessage) ([]byte, error) {
+	if prior == nil {
+		// Nothing to preserve — write the caller's bytes exactly as given,
+		// rather than round-tripping them through the marshaller.
+		return incoming, nil
 	}
 
 	priorObj, priorOK := asJSONObject(prior)
@@ -127,7 +117,7 @@ func mergeResultSidecar(priorPath, id string, incoming json.RawMessage) ([]byte,
 		}
 		return nil, mgerr.Conflict("sidecar_unmergeable",
 			fmt.Sprintf("%s: cannot merge --result with the existing result because %s is not a JSON object; refusing to overwrite it.", id, which),
-			fmt.Sprintf("The existing result is at %s. Reconcile the two by hand, then re-run with the combined JSON.", priorPath))
+			fmt.Sprintf("The existing result is at %s. Reconcile the two by hand, then re-run with the combined JSON.", priorWhere))
 	}
 
 	for k, v := range incomingObj {
@@ -222,86 +212,76 @@ func (s StraySidecar) Redundant() bool { return s.AuthoritativeExists && s.Compa
 // Unreadable directories are skipped rather than failing the scan, matching
 // Resolve: a missing work/shelved/ must not hide strays elsewhere.
 func FindStraySidecars(root string) ([]StraySidecar, error) {
-	// Result sidecars are companion files: a backend that is not local has
-	// none, and so no strays.
-	if workDirOf(root) == "" {
-		return nil, nil
+	// The scan itself is the backend's (store.Companions.Results): on the
+	// filesystem it covers the active lifecycle dirs, every archive partition
+	// and the loose archive root — the same surface Resolve covers, so a stray
+	// cannot hide in a corner the resolver can already see.
+	c, err := companionsOf(root)
+	if err != nil {
+		return nil, err
 	}
-
-	// dirs to scan: the active lifecycle dirs, plus archive partitions and the
-	// loose archive root — the same surface Resolve covers, so a stray cannot
-	// hide in a corner the resolver can already see.
-	type scanDir struct{ path, location string }
-	scan := []scanDir{}
-	for _, state := range activeStates {
-		scan = append(scan, scanDir{statusDirOf(root, state), state})
-	}
-	archiveRoot := statusDirOf(root, "archived")
-	scan = append(scan, scanDir{archiveRoot, "archived"})
-	if entries, err := os.ReadDir(archiveRoot); err == nil {
-		for _, e := range entries {
-			if e.IsDir() {
-				scan = append(scan, scanDir{filepath.Join(archiveRoot, e.Name()), "archived"})
-			}
-		}
+	refs, err := c.Results()
+	if err != nil {
+		return nil, err
 	}
 
 	var strays []StraySidecar
-	for _, d := range scan {
-		entries, err := os.ReadDir(d.path)
+	for _, ref := range refs {
+		id := ref.ID
+		// Beside-ness is decided by the result sharing a RECORD location with
+		// one of the item's records, not by the resolver picking a winner.
+		// Archived twins of one ID can sit in two partitions (see the
+		// @partition qualifier), which makes the ID ambiguous to ResolveUnique
+		// — but a sidecar sharing a partition with one of those twins is still
+		// beside its item, not a stray. Checking co-location first is what
+		// keeps every archived twin's own sidecar from being reported as an
+		// orphan.
+		matches, err := Resolve(root, id)
 		if err != nil {
 			continue
 		}
-		for _, e := range entries {
-			if e.IsDir() || !strings.HasSuffix(e.Name(), ".result.json") {
-				continue
+		beside := false
+		for _, m := range matches {
+			if store.Status(m.Status) == ref.Status && m.Partition == ref.Partition {
+				beside = true
+				break
 			}
-			id := strings.TrimSuffix(e.Name(), ".result.json")
-			strayPath := filepath.Join(d.path, e.Name())
-
-			// Beside-ness is decided by the .md sharing this DIRECTORY, not by
-			// the resolver picking a winner. Archived twins of one ID can sit in
-			// two partitions (see the @partition qualifier), which makes the ID
-			// ambiguous to ResolveUnique — but a sidecar sharing a directory
-			// with one of those twins is still beside its item, not a stray.
-			// Checking co-location first is what keeps every archived twin's
-			// own sidecar from being reported as an orphan.
-			matches, err := Resolve(root, id)
-			if err != nil {
-				continue
-			}
-			beside := false
-			for _, m := range matches {
-				if filepath.Dir(m.Path) == d.path {
-					beside = true
-					break
-				}
-			}
-			if beside {
-				continue
-			}
-
-			s := StraySidecar{ID: id, Path: strayPath, Location: d.location}
-			if len(matches) != 1 {
-				// No item, or several equally plausible ones: nothing here is
-				// authoritative, so the stray is the only record. Report it
-				// rather than skipping — that is the load-bearing case.
-				strays = append(strays, s)
-				continue
-			}
-			itemDir := filepath.Dir(matches[0].Path)
-			s.ItemStatus = matches[0].Status
-			s.Authoritative = filepath.Join(itemDir, resultSidecarName(id))
-			// Presence and readability are separate questions. Stat answers
-			// "is there an authoritative copy at all"; a failure to READ either
-			// file is reported as RelationUnknown by the comparison, never as a
-			// difference and never as absence.
-			if _, err := os.Stat(s.Authoritative); err == nil {
-				s.AuthoritativeExists = true
-				s.Comparison = compareSidecarFiles(strayPath, s.Authoritative)
-			}
-			strays = append(strays, s)
 		}
+		if beside {
+			continue
+		}
+
+		s := StraySidecar{ID: id, Path: c.ResultWhere(ref), Location: string(ref.Status)}
+		if len(matches) != 1 {
+			// No item, or several equally plausible ones: nothing here is
+			// authoritative, so the stray is the only record. Report it
+			// rather than skipping — that is the load-bearing case.
+			strays = append(strays, s)
+			continue
+		}
+		auth := refOf(matches[0])
+		s.ItemStatus = matches[0].Status
+		s.Authoritative = c.ResultWhere(auth)
+		// Presence and readability are separate questions. "Is there an
+		// authoritative copy at all" is answered by NotFound; a failure to
+		// READ either copy is reported as RelationUnknown by the comparison,
+		// never as a difference and never as absence.
+		authBytes, aerr := c.ReadResult(auth)
+		if errors.Is(aerr, store.ErrNotFound) {
+			strays = append(strays, s)
+			continue
+		}
+		s.AuthoritativeExists = true
+		strayBytes, serr := c.ReadResult(ref)
+		switch {
+		case serr != nil:
+			s.Comparison = SidecarComparison{Relation: RelationUnknown, Note: "stray is unreadable: " + serr.Error()}
+		case aerr != nil:
+			s.Comparison = SidecarComparison{Relation: RelationUnknown, Note: "authoritative copy is unreadable: " + aerr.Error()}
+		default:
+			s.Comparison = compareSidecarBytes(strayBytes, authBytes)
+		}
+		strays = append(strays, s)
 	}
 	return strays, nil
 }

@@ -69,8 +69,8 @@ type Match struct {
 	// the claim PID). Empty for every other status.
 	Holder string
 
-	doc   *store.Doc // the record as Resolve read it
-	local bool       // Path is a real file on a store.Local backend
+	doc   *store.Doc       // the record as Resolve read it
+	comps store.Companions // where the record's result sidecar is kept
 }
 
 // State is the match's store.State, the EXPECT side of a Transition out of it.
@@ -132,12 +132,12 @@ func Resolve(root, id string) ([]Match, error) {
 			docs = []store.Doc{*d}
 		}
 	}
-	_, local := localOf(b)
+	comps := b.Companions()
 	matches := make([]Match, 0, len(docs))
 	for _, d := range docs {
 		m := matchOf(d)
 		m.ID = id
-		m.local = local
+		m.comps = comps
 		matches = append(matches, m)
 	}
 	return matches, nil

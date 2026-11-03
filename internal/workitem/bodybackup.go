@@ -2,13 +2,13 @@ package workitem
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/store"
 )
 
 // BODY BACKUPS — the recovery half of the record a replace-mode edit leaves.
@@ -51,12 +51,6 @@ import (
 // own read succeeded, which is the end mg-9fc8's corruption entered from. The
 // two are complementary and neither subsumes the other.
 
-// bodyBackupDirName is the directory backups live under. The leading dot keeps
-// it out of the way of anything globbing work/*/ for items or sidecars, and it
-// is not a lifecycle state: nothing in activeStates names it, so Resolve and
-// FindStraySidecars never descend into it.
-const bodyBackupDirName = ".bodybak"
-
 // bodyBackupKeep is how many prior bodies are retained per item. Ten covers the
 // read-modify-write loops that actually happen (an agent rewriting one item a
 // handful of times in a turn) and bounds the store: a body is a few KB, so the
@@ -83,16 +77,18 @@ type BodyBackup struct {
 	ID    string    // the work item the body belongs to
 	Stamp string    // filename timestamp, e.g. "20260729T161400.812Z" — what --from names
 	Hash  string    // hash prefix recorded in the filename
-	Path  string    // absolute path to the saved body
+	Path  string    // where the saved body is stored, for humans (fsstore: its absolute path)
 	Time  time.Time // Stamp parsed back to a time; zero if unparseable
 	Lines int       // line count of the saved body, for the listing
-	Bytes int64     // size on disk, for the listing
+	Bytes int64     // size, for the listing
+
+	ref  store.Ref // the record whose shelf holds it
+	name string    // its name on that shelf
 }
 
-// bodyBackupDirFor returns the directory holding a given item's backups.
-//
-// Backups are keyed by ID and live in ONE place per item, derived from where
-// the item's own .md sits:
+// Where saved bodies live is the backend's (store.Companions). On the
+// filesystem they are keyed by ID and live in ONE place per item, derived from
+// where the item's own record sits:
 //
 //	live (available/claimed/done/pending/shelved)  work/.bodybak/<id>/
 //	archived                                       work/archive/<partition>/.bodybak/<id>/
@@ -109,32 +105,41 @@ type BodyBackup struct {
 // the live tree". Backups follow the record into its partition so the archive
 // stays self-contained and work/.bodybak/ does not accumulate directories for
 // items nobody will edit again — that is where they go, and mg unarchive brings
-// them back. See archiveFile and Unarchive.
-//
-// Saved bodies are COMPANION files: they exist only on a backend whose items
-// are local files (store.Local), and both functions return "" on any other —
-// there, a replace-mode edit takes no backup and ListBodyBackups finds none.
-func bodyBackupDirFor(root, itemPath, status, id string) string {
-	work := workDirOf(root)
-	if work == "" {
-		return ""
-	}
-	if status == "archived" {
-		return filepath.Join(filepath.Dir(itemPath), bodyBackupDirName, id)
-	}
-	return filepath.Join(work, bodyBackupDirName, id)
+// them back. See archiveFile and Unarchive, which call moveBodyBackups.
+
+// bodyShelf is one item's saved bodies: what saving, pruning and listing need,
+// and nothing about where they are kept.
+type bodyShelf interface {
+	names() ([]string, error)
+	put(name string, body []byte) error
+	get(name string) ([]byte, error)
+	remove(name string) error
+	where() string
 }
 
-// liveBodyBackupParent is work/.bodybak/ — the parent holding one directory per
-// live item. Archive and Unarchive move a single child of it. "" on a backend
-// with no companion files.
-func liveBodyBackupParent(root string) string {
-	work := workDirOf(root)
-	if work == "" {
-		return ""
-	}
-	return filepath.Join(work, bodyBackupDirName)
+// storeShelf is a record's saved bodies in the backend's companion store.
+type storeShelf struct {
+	c   store.Companions
+	ref store.Ref
 }
+
+func (s storeShelf) names() ([]string, error)        { return s.c.Bodies(s.ref) }
+func (s storeShelf) put(name string, b []byte) error { return s.c.SaveBody(s.ref, name, b) }
+func (s storeShelf) get(name string) ([]byte, error) { return s.c.ReadBody(s.ref, name) }
+func (s storeShelf) remove(name string) error        { return s.c.RemoveBody(s.ref, name) }
+func (s storeShelf) where() string                   { return s.c.BodiesWhere(s.ref) }
+
+// shelfFor is ref's saved bodies.
+func shelfFor(root string, ref store.Ref) (storeShelf, error) {
+	c, err := companionsOf(root)
+	if err != nil {
+		return storeShelf{}, err
+	}
+	return storeShelf{c, ref}, nil
+}
+
+// bodyPath names one saved body for humans.
+func bodyPath(s bodyShelf, name string) string { return filepath.Join(s.where(), name) }
 
 // parseBackupName splits a backup filename into its stamp and hash prefix. The
 // stamp carries no "-", so the first one is the separator. A name that does not
@@ -157,7 +162,7 @@ func parseBackupName(name string) (stamp, hash string, ok bool) {
 }
 
 // nextBackupName picks a filename whose stamp sorts AFTER every backup already
-// in dir: now, or one millisecond past the newest existing stamp, whichever is
+// already saved: now, or one millisecond past the newest existing stamp, whichever is
 // later.
 //
 // The point is not to avoid clobbering a file — two saves in the same
@@ -169,13 +174,11 @@ func parseBackupName(name string) (stamp, hash string, ok bool) {
 // pruned on the spot, discarding the newest body instead of the oldest (mg-0c8c:
 // every save lands in one millisecond on a fast Linux runner). The same rule
 // keeps a clock stepped backwards from filing a new body under an old name.
-func nextBackupName(dir string, now time.Time, hash string) string {
+func nextBackupName(existing []string, now time.Time, hash string) string {
 	var newest string
-	if entries, err := os.ReadDir(dir); err == nil {
-		for _, e := range entries {
-			if stamp, _, ok := parseBackupName(e.Name()); ok && stamp > newest {
-				newest = stamp
-			}
+	for _, name := range existing {
+		if stamp, _, ok := parseBackupName(name); ok && stamp > newest {
+			newest = stamp
 		}
 	}
 	stamp := now.UTC().Format(bodyBackupStamp)
@@ -186,47 +189,41 @@ func nextBackupName(dir string, now time.Time, hash string) string {
 	return stamp + "-" + hash + ".md"
 }
 
-// saveBodyBackup writes body into dir under a fresh timestamped name and prunes
-// the directory back to bodyBackupKeep. It returns the path written.
+// saveBody writes body onto the shelf under a fresh timestamped name and
+// prunes it back to bodyBackupKeep. It returns where the body was written.
 //
 // The body is written VERBATIM — the same bytes `mg show ID --json` would have
 // emitted for it — so restoring is a byte-for-byte replay and not a rendering.
-func saveBodyBackup(dir, body string, now time.Time) (string, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+func saveBody(s bodyShelf, body string, now time.Time) (string, error) {
+	existing, err := s.names()
+	if err != nil {
 		return "", err
 	}
-	name := nextBackupName(dir, now, BodyHash(body)[:hashPrefixLen])
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+	name := nextBackupName(existing, now, BodyHash(body)[:hashPrefixLen])
+	if err := s.put(name, []byte(body)); err != nil {
 		return "", err
 	}
-	if err := pruneBodyBackups(dir, bodyBackupKeep); err != nil {
+	if err := pruneBodyBackups(s, bodyBackupKeep); err != nil {
 		return "", err
 	}
-	return path, nil
+	return bodyPath(s, name), nil
 }
 
-// pruneBodyBackups deletes all but the keep most recent backups in dir.
+// pruneBodyBackups deletes all but the keep most recent backups on the shelf.
 //
 // It runs on every save rather than in a periodic sweep: a bound enforced by a
 // sweep is a bound that holds only as often as the sweep runs, and there is no
-// sweep in this store to hang it off. Files that are not backups are left
+// sweep in this store to hang it off. Names that are not backups are left
 // alone — pruning is entitled to delete what this file wrote and nothing else.
-func pruneBodyBackups(dir string, keep int) error {
-	entries, err := os.ReadDir(dir)
+func pruneBodyBackups(s bodyShelf, keep int) error {
+	all, err := s.names()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
 	}
 	var names []string
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		if _, _, ok := parseBackupName(e.Name()); ok {
-			names = append(names, e.Name())
+	for _, n := range all {
+		if _, _, ok := parseBackupName(n); ok {
+			names = append(names, n)
 		}
 	}
 	if len(names) <= keep {
@@ -235,52 +232,30 @@ func pruneBodyBackups(dir string, keep int) error {
 	// Newest first, then drop everything past the keep-th.
 	sort.Sort(sort.Reverse(sort.StringSlice(names)))
 	for _, name := range names[keep:] {
-		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
+		if err := s.remove(name); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// moveBodyBackups moves <srcParent>/<id>/ into <dstParent>/<id>/, file by file,
-// and prunes the destination. It is a no-op when the item has no backups, so
-// callers can invoke it unconditionally after moving an .md.
+// moveBodyBackups carries an item's saved bodies from one record's shelf to
+// another's (archive, unarchive) through the backend, then prunes the
+// destination. It is a no-op when the item has no backups, so callers can
+// invoke it unconditionally after moving a record.
 //
-// File-by-file rather than one directory rename because the destination can
-// already exist: two archived twins of one short ID can share a partition, and
-// a rename onto a non-empty directory fails on every Unix. Merging and then
-// re-pruning keeps the per-item bound true after the move.
-func moveBodyBackups(root, srcParent, dstParent, id string) error {
-	if srcParent == "" || dstParent == "" {
-		return nil // no companion files on this backend
-	}
-	src := filepath.Join(srcParent, id)
-	entries, err := os.ReadDir(src)
+// The backend merges into a destination that already holds bodies — two
+// archived twins of one short ID can share a partition — and re-pruning keeps
+// the per-item bound true after the move.
+func moveBodyBackups(root string, from, to store.Ref) error {
+	c, err := companionsOf(root)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
 		return err
 	}
-	dst := filepath.Join(dstParent, id)
-	if err := os.MkdirAll(dst, 0o755); err != nil {
+	if err := c.MoveBodies(from, to); err != nil {
 		return err
 	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		if err := moveCompanion(root, filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
-			return err
-		}
-	}
-	if err := pruneBodyBackups(dst, bodyBackupKeep); err != nil {
-		return err
-	}
-	// Best effort: succeeds only once the directory is empty, and a leftover
-	// empty directory is not worth failing a completed archive over.
-	_ = os.Remove(src)
-	return nil
+	return pruneBodyBackups(storeShelf{c, to}, bodyBackupKeep)
 }
 
 // ListBodyBackups returns every saved prior body for an item, NEWEST FIRST.
@@ -294,25 +269,18 @@ func ListBodyBackups(root, id string) ([]BodyBackup, error) {
 	if err != nil {
 		return nil, err
 	}
-	dir := bodyBackupDirFor(root, m.Path, m.Status, m.ID)
-	if dir == "" {
-		return nil, nil
-	}
-
-	entries, err := os.ReadDir(dir)
+	shelf, err := shelfFor(root, refOf(m))
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
+		return nil, err
+	}
+	names, err := shelf.names()
+	if err != nil {
 		return nil, err
 	}
 
 	var backups []BodyBackup
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		stamp, hash, ok := parseBackupName(e.Name())
+	for _, name := range names {
+		stamp, hash, ok := parseBackupName(name)
 		if !ok {
 			continue
 		}
@@ -320,15 +288,15 @@ func ListBodyBackups(root, id string) ([]BodyBackup, error) {
 			ID:    m.ID,
 			Stamp: stamp,
 			Hash:  hash,
-			Path:  filepath.Join(dir, e.Name()),
+			Path:  bodyPath(shelf, name),
+			ref:   shelf.ref,
+			name:  name,
 		}
 		if t, err := time.Parse(bodyBackupStamp, stamp); err == nil {
 			b.Time = t
 		}
-		if info, err := e.Info(); err == nil {
-			b.Bytes = info.Size()
-		}
-		if data, err := os.ReadFile(b.Path); err == nil {
+		if data, err := shelf.get(name); err == nil {
+			b.Bytes = int64(len(data))
 			b.Lines = countBodyLines(string(data))
 		}
 		backups = append(backups, b)
@@ -367,7 +335,11 @@ func RestoreBody(root, id, from, ifUnchanged string) (*Item, *BodyBackup, error)
 		return nil, nil, err
 	}
 
-	data, err := os.ReadFile(chosen.Path)
+	shelf, err := shelfFor(root, chosen.ref)
+	if err != nil {
+		return nil, nil, err
+	}
+	data, err := shelf.get(chosen.name)
 	if err != nil {
 		return nil, nil, ioErr(fmt.Sprintf("%s: saved body %s could not be read: %s", id, chosen.Stamp, fsErrText(err)))
 	}
@@ -428,8 +400,8 @@ func backupStamps(backups []BodyBackup) []string {
 func errNoBodyBackup(root, id string) *mgerr.Error {
 	dir := "the store"
 	if m, err := ResolveUnique(root, id); err == nil {
-		if d := bodyBackupDirFor(root, m.Path, m.Status, m.ID); d != "" {
-			dir = d
+		if shelf, err := shelfFor(root, refOf(m)); err == nil {
+			dir = shelf.where()
 		}
 	}
 	return mgerr.NotFound("no_body_backup",
