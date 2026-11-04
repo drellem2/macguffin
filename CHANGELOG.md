@@ -23,6 +23,14 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- **A release can be published without GitHub Actions** (mg-38246).
+  `scripts/release-local.sh vX.Y.Z` runs `.goreleaser.yml` on this box against
+  an already-pushed tag and publishes through the GitHub API. It refuses when
+  HEAD is not the tag, the tag is not on origin, the tree is dirty, a release
+  for the tag already exists, or a `release.yml` run for it is unfinished.
+  `docs/release-process.md` now makes "the GitHub Release exists with its
+  assets" the acceptance check, not a green `release.yml` run.
+
 - Companion files go through the backend (#47, third step). The result
   sidecar, saved prior bodies and the sweep stamp are reached through a required
   `Backend.Companions()` (`store.Companions`, keyed by `store.Ref`), not through

@@ -10,6 +10,11 @@ sh scripts/test-build-noinstall.sh
 sh scripts/test-install-guard.sh
 sh scripts/test-install-auth.sh
 
+# The local release path (mg-38246): scripts/release-local.sh publishes a pushed
+# tag with goreleaser from this box, without Actions. Stub gh/goreleaser and a
+# bare temp origin; each refusal is paired with a passing control. ~1s.
+bash scripts/test-release-local.sh
+
 # Nothing in the repo may recursively delete the real home or the live store.
 # A test script did, on 2026-09-27, and took every work item with it (mg-9a40).
 sh scripts/test-no-live-store-rm.sh

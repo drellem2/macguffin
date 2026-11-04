@@ -17,4 +17,8 @@ fi
 git tag "$version"
 git push origin "$version"
 
-echo "Tagged and pushed $version — release workflow will build and publish."
+echo "Tagged and pushed $version."
+echo "release.yml may publish it if GitHub Actions runs; it is not required."
+echo "Check:   gh release view $version --repo drellem2/macguffin --json assets -q '.assets[].name'"
+echo "If no release appears, publish from a checkout of the tag:"
+echo "         scripts/release-local.sh $version    (see docs/release-process.md)"
