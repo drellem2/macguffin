@@ -109,7 +109,44 @@ func WithTags(tags []string) CreateOption {
 // matches the exact string it is given, so every 4-character ID ever minted
 // keeps resolving, and a store holds both widths side by side. A 4-char ID and
 // a 5-char ID are different strings and can never collide with each other.
+//
+// idHexLen is the DEFAULT width. MG_ID_HEX_LEN overrides it for minting (see
+// mintHexLen) — a store expected to hold far more items, e.g. one shared by
+// many users, can mint wider IDs. Because readers match exact strings, changing
+// the width at any time is safe: old and new IDs coexist.
 const idHexLen = 5
+
+// idHexLenEnv names the environment variable that sets the mint width.
+const idHexLenEnv = "MG_ID_HEX_LEN"
+
+// minIDHexLen and maxIDHexLen bound MG_ID_HEX_LEN. 4 is the narrowest width
+// mg has ever minted; 64 is the full hex length of a SHA-256 digest, the most
+// the hash can supply.
+const (
+	minIDHexLen = 4
+	maxIDHexLen = 64
+)
+
+// mintHexLen returns the width Create mints at: MG_ID_HEX_LEN when set, else
+// idHexLen. An invalid value is an ERROR, not a silent fallback to the
+// default: a store configured for 8-character IDs that quietly mints 5 would
+// lose exactly the headroom it was configured for, with nothing to show it.
+func mintHexLen() (int, error) {
+	v, ok := os.LookupEnv(idHexLenEnv)
+	if !ok || strings.TrimSpace(v) == "" {
+		return idHexLen, nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < minIDHexLen || n > maxIDHexLen {
+		return 0, &mgerr.Error{
+			Category: mgerr.CatUsage,
+			Code:     "invalid_id_hex_len",
+			Message:  fmt.Sprintf("%s=%q is not an integer in %d..%d.", idHexLenEnv, v, minIDHexLen, maxIDHexLen),
+			Hint:     fmt.Sprintf("Set %s to an integer from %d to %d, or unset it for the default width of %d.", idHexLenEnv, minIDHexLen, maxIDHexLen, idHexLen),
+		}
+	}
+	return n, nil
+}
 
 // maxMintAttempts bounds the remint loop in Create. Each attempt draws a fresh
 // ID from a 1,048,576-value space, so even a store holding tens of thousands
@@ -122,9 +159,11 @@ const maxMintAttempts = 64
 // 1-in-1,048,576 event.
 var nowFunc = func() time.Time { return time.Now().UTC() }
 
-// GenerateID produces a short hash ID with the given prefix (e.g. "mg-a3f0c").
+// GenerateID produces a short hash ID with the given prefix (e.g. "mg-a3f0c")
+// at the default width (idHexLen). It does not consult MG_ID_HEX_LEN; Create
+// does, and mints through generateID with the configured width.
 func GenerateID(prefix, title string, created time.Time) string {
-	return generateID(prefix, title, created, 0)
+	return generateID(prefix, title, created, 0, idHexLen)
 }
 
 // generateID is GenerateID with a collision-breaking nonce mixed into the hash
@@ -134,7 +173,11 @@ func GenerateID(prefix, title string, created time.Time) string {
 // perturbation. nonce==0 hashes exactly what it always has, so every ID ever
 // minted stays derivable: a 4-character ID minted before the widening is the
 // first 4 characters of what nonce 0 now returns for the same (title, created).
-func generateID(prefix, title string, created time.Time, nonce int) string {
+//
+// width is the number of hex characters kept. Widths differ only in how much of
+// the same digest is kept, so a narrower ID is a prefix of a wider one minted
+// from the same inputs.
+func generateID(prefix, title string, created time.Time, nonce, width int) string {
 	h := sha256.New()
 	h.Write([]byte(title))
 	h.Write([]byte(created.Format(time.RFC3339Nano)))
@@ -142,7 +185,7 @@ func generateID(prefix, title string, created time.Time, nonce int) string {
 		fmt.Fprintf(h, "\x00nonce=%d", nonce)
 	}
 	sum := h.Sum(nil)
-	return prefix + hex.EncodeToString(sum)[:idHexLen]
+	return prefix + hex.EncodeToString(sum)[:width]
 }
 
 // Create writes a new work item file. Items with no dependencies go to
@@ -167,6 +210,13 @@ func generateID(prefix, title string, created time.Time, nonce int) string {
 // filesystem, fsstore.Locate's store-wide scan and then an O_EXCL create.
 func Create(root, prefix, typ, title string, depends []string, opts ...CreateOption) (*Item, error) {
 	now := nowFunc()
+
+	// Resolved first, so an invalid MG_ID_HEX_LEN refuses before anything is
+	// read or written.
+	width, err := mintHexLen()
+	if err != nil {
+		return nil, err
+	}
 
 	// creator is the identity that RAN `mg new`, resolved exactly like the
 	// audit log's actor (events.go): MG_ACTOR, else POGO_AGENT_NAME, else the
@@ -212,7 +262,7 @@ func Create(root, prefix, typ, title string, depends []string, opts ...CreateOpt
 	}
 
 	for nonce := 0; nonce < maxMintAttempts; nonce++ {
-		id := generateID(prefix, title, now, nonce)
+		id := generateID(prefix, title, now, nonce, width)
 
 		item := &Item{
 			ID:      id,

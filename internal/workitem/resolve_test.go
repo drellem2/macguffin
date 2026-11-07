@@ -247,7 +247,7 @@ func TestCreate_RetryIsBounded(t *testing.T) {
 	// can hash to the same 2-byte ID, so this may be fewer than 64 files.
 	occupied := map[string]bool{}
 	for nonce := 0; nonce < maxMintAttempts; nonce++ {
-		id := generateID("mg-", title, fixedTime(), nonce)
+		id := generateID("mg-", title, fixedTime(), nonce, idHexLen)
 		if occupied[id] {
 			continue
 		}
@@ -284,12 +284,12 @@ func TestCreate_RetryIsBounded(t *testing.T) {
 // minted: nonce 0 must keep hashing exactly (title, created).
 func TestGenerateID_NonceZeroIsHistorical(t *testing.T) {
 	now := fixedTime()
-	if got, want := generateID("mg-", "t", now, 0), GenerateID("mg-", "t", now); got != want {
+	if got, want := generateID("mg-", "t", now, 0, idHexLen), GenerateID("mg-", "t", now); got != want {
 		t.Errorf("nonce 0 changed the historical id: %q != %q", got, want)
 	}
 	seen := map[string]bool{}
 	for nonce := 0; nonce < 8; nonce++ {
-		seen[generateID("mg-", "t", now, nonce)] = true
+		seen[generateID("mg-", "t", now, nonce, idHexLen)] = true
 	}
 	if len(seen) < 4 {
 		t.Errorf("nonce barely perturbs the hash: 8 nonces produced %d distinct ids", len(seen))

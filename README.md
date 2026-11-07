@@ -1051,6 +1051,30 @@ In practice this means a ticket assigned to `mayor`, a PM agent, or
 `human` will still typically be executed by a polecat once the assignee
 decides to dispatch it.
 
+### Item ids and their width
+
+A work item id is a prefix plus a short hex hash of the item's title and
+creation time: `mg-09de5`. `mg new` mints **5** hex characters by default
+(1,048,576 values; it was 4 before drellem2/macguffin#33).
+
+Set `MG_ID_HEX_LEN` to mint a different width — an integer from **4** to
+**64** (64 is the full SHA-256 digest). A store that will hold far more items,
+such as one shared by many users, can mint wider ids:
+
+```bash
+MG_ID_HEX_LEN=8 mg new "wide id"     # Created mg-47847719: wide id
+```
+
+An invalid value (non-integer, or outside 4..64) makes `mg new` fail with a
+usage error (`invalid_id_hex_len`, exit 2) and file nothing; it is never
+silently replaced by the default. An empty or unset `MG_ID_HEX_LEN` means the
+default of 5.
+
+Only minting has a width. Everything that reads an id — `mg show`,
+`depends`, successor/predecessor tags, mailbox names — matches the exact
+string, so changing the width at any time is safe: ids of different widths
+coexist in one store and can never collide with each other.
+
 ### Repo metadata
 
 `mg new` records a `repo` breadcrumb on the work item — the code repository
