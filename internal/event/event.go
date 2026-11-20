@@ -128,10 +128,18 @@ func Append(root string, eventType string, kvs map[string]string) (Entry, error)
 }
 
 // ListOpts controls filtering for List.
+//
+// Since and Until are instants, compared as times rather than as strings: a
+// lexical compare of RFC3339 text is only correct when both sides carry the
+// same offset, so a bound written with a non-UTC offset (or any value that is
+// not a timestamp at all) used to drop or keep events by accident. When either
+// bound is set, an event whose ts does not parse is excluded, since it cannot
+// be placed inside the window.
 type ListOpts struct {
-	Type  string // filter by event type (exact match)
-	Since string // filter events at or after this RFC3339 timestamp
-	Tail  int    // return only the last N entries (0 = all)
+	Type  string    // filter by event type (exact match)
+	Since time.Time // keep events at or after this instant (zero = no lower bound)
+	Until time.Time // keep events strictly before this instant (zero = no upper bound)
+	Tail  int       // return only the last N entries (0 = all)
 }
 
 // List reads events from <root>/events.jsonl with optional filtering.
@@ -154,8 +162,17 @@ func List(root string, opts ListOpts) ([]Entry, error) {
 		if opts.Type != "" && e.Type != opts.Type {
 			continue
 		}
-		if opts.Since != "" && e.Ts < opts.Since {
-			continue
+		if !opts.Since.IsZero() || !opts.Until.IsZero() {
+			ts, err := time.Parse(time.RFC3339Nano, e.Ts)
+			if err != nil {
+				continue
+			}
+			if !opts.Since.IsZero() && ts.Before(opts.Since) {
+				continue
+			}
+			if !opts.Until.IsZero() && !ts.Before(opts.Until) {
+				continue
+			}
 		}
 		entries = append(entries, e)
 	}

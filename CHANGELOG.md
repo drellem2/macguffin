@@ -23,6 +23,13 @@ derived at all — no git, no tags, or a build from a source tarball.
 
 ### Added
 
+- **`mg event list` answers "what was worked on between X and Y"**
+  (drellem2/macguffin#48). New `--until` (exclusive) and `--with-title`, which
+  adds each item's **current** title — looked up across every status including
+  archived, not the title the item had when the event was written; events still
+  carry no title. Example: `mg event list --type=work.done --since=2026-11-19
+  --until=2026-11-20 --with-title`.
+
 - **A release can be published without GitHub Actions** (mg-38246).
   `scripts/release-local.sh vX.Y.Z` runs `.goreleaser.yml` on this box against
   an already-pushed tag and publishes through the GitHub API. It refuses when
@@ -91,6 +98,17 @@ derived at all — no git, no tags, or a build from a source tarball.
   (drellem2/macguffin#32).
 
 ### Changed
+
+- **`mg event list --since` is parsed as a time, not compared as a string**
+  (drellem2/macguffin#48). It accepts RFC3339 with any offset, a bare
+  `YYYY-MM-DD`, or a duration (`24h`, `7d`), and `--until` takes the same forms.
+  Two deliberate behaviour changes: a bare date now means **local** midnight
+  (the old lexical compare made it effectively UTC midnight), and a value that
+  is none of those forms is now a usage error (exit 2) where it used to return
+  nothing or the wrong events silently. A bound with a non-UTC offset is now
+  correct: `--since=2026-11-21T00:00:00+05:00` (19:00Z) returns an event at
+  22:14:15Z, which the string compare dropped. With a bound set, an event whose
+  `ts` does not parse is excluded.
 
 - **A release no longer pushes the Homebrew cask to `drellem2/homebrew-tap`**
   (`skip_upload: true`, until the tap token is rotated — mg-f940). The tap

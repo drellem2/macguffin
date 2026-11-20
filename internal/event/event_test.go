@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestAppendAndList(t *testing.T) {
@@ -131,5 +133,95 @@ func TestLogPath(t *testing.T) {
 	want := filepath.Join(root, eventsFile)
 	if got != want {
 		t.Errorf("LogPath(%q) = %q, want %q", root, got, want)
+	}
+}
+
+// writeRaw seeds events.jsonl with exact lines, so a test controls ts.
+func writeRaw(t *testing.T, root string, lines ...string) {
+	t.Helper()
+	data := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(LogPath(root), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	ts, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ts
+}
+
+// TestListSince_NonUTCOffset is the positive control from drellem2/macguffin#48:
+// 2026-11-21T00:00:00+05:00 is 2026-11-20T19:00:00Z, so an event at 22:14:15Z
+// is inside the window. The old lexical compare ("2026-11-20..." <
+// "2026-11-21...") dropped it.
+func TestListSince_NonUTCOffset(t *testing.T) {
+	root := t.TempDir()
+	writeRaw(t, root,
+		`{"ts":"2026-11-20T18:59:59Z","type":"work.done","item_id":"mg-before"}`,
+		`{"ts":"2026-11-20T22:14:15Z","type":"work.done","item_id":"mg-after"}`,
+	)
+	entries, err := List(root, ListOpts{Since: mustTime(t, "2026-11-21T00:00:00+05:00")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Extra["item_id"] != "mg-after" {
+		t.Fatalf("want only mg-after (22:14:15Z >= 19:00Z), got %+v", entries)
+	}
+}
+
+// TestListUntil_Exclusive: --until keeps ts < until, so an event exactly at the
+// bound is excluded and adjacent windows never double-count.
+func TestListUntil_Exclusive(t *testing.T) {
+	root := t.TempDir()
+	writeRaw(t, root,
+		`{"ts":"2026-11-19T23:59:59Z","type":"a"}`,
+		`{"ts":"2026-11-20T00:00:00Z","type":"b"}`,
+		`{"ts":"2026-11-20T00:00:01Z","type":"c"}`,
+	)
+	entries, err := List(root, ListOpts{
+		Since: mustTime(t, "2026-11-19T00:00:00Z"),
+		Until: mustTime(t, "2026-11-20T00:00:00Z"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Type != "a" {
+		t.Fatalf("want only a, got %+v", entries)
+	}
+	// Positive control: the bound itself is kept by --since (inclusive).
+	entries, err = List(root, ListOpts{Since: mustTime(t, "2026-11-20T00:00:00Z")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[0].Type != "b" {
+		t.Fatalf("want b and c, got %+v", entries)
+	}
+}
+
+// TestListBounds_UnparsableTsExcluded: an event whose ts cannot be placed in
+// time is excluded once a bound is set, and still listed when none is.
+func TestListBounds_UnparsableTsExcluded(t *testing.T) {
+	root := t.TempDir()
+	writeRaw(t, root,
+		`{"ts":"not-a-time","type":"x"}`,
+		`{"ts":"2026-11-20T12:00:00Z","type":"y"}`,
+	)
+	entries, err := List(root, ListOpts{Since: mustTime(t, "2026-01-01T00:00:00Z")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Type != "y" {
+		t.Fatalf("want only y, got %+v", entries)
+	}
+	entries, err = List(root, ListOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("unbounded list should keep both, got %+v", entries)
 	}
 }

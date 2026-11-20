@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/drellem2/macguffin/internal/event"
 	"github.com/drellem2/macguffin/internal/mgerr"
+	"github.com/drellem2/macguffin/internal/workitem"
 	"github.com/spf13/cobra"
 )
 
@@ -94,6 +96,8 @@ Example:
 
 var eventListType string
 var eventListSince string
+var eventListUntil string
+var eventListWithTitle bool
 var eventListTail int
 var eventListJSON bool
 
@@ -107,6 +111,30 @@ Examples:
   mg event list --type=agent.start
   mg event list --tail=10
   mg event list --since=2026-01-01T00:00:00Z
+  mg event list --since=7d
+  mg event list --type=work.done --since=2026-11-19 --until=2026-11-20 --with-title
+
+TIME WINDOW: --since AND --until
+
+Both bounds are parsed as times and compared as instants, so the offset a
+bound is written in does not matter. Each accepts:
+
+  RFC3339       2026-11-21T00:00:00+05:00, 2026-11-20T19:00:00Z (any offset)
+  YYYY-MM-DD    a bare date means LOCAL midnight at the start of that day, the
+                same anchor as 'mg spend --window=today'
+  duration      24h, 30m, 7d: that long before now
+
+--since is inclusive (ts >= since); --until is EXCLUSIVE (ts < until), so
+--since=2026-11-19 --until=2026-11-20 is exactly the local day of the 19th.
+A value that is none of these is a usage error, not an empty result.
+
+TITLES: --with-title
+
+--with-title adds a 'title' field to every event that names an item
+('item_id'). It is the item's CURRENT title, looked up across every status
+including archived at the time you run the command; it is NOT the title the
+item had when the event was written, and events themselves carry no title. An
+event whose item can no longer be found gets no 'title' field.
 
 READING 'actor'
 
@@ -169,13 +197,29 @@ all; absent means "an older mg wrote this", which is itself unmeasurable.`,
 			return err
 		}
 
+		now := time.Now()
+		since, err := parseTimeBound("--since", eventListSince, now)
+		if err != nil {
+			return err
+		}
+		until, err := parseTimeBound("--until", eventListUntil, now)
+		if err != nil {
+			return err
+		}
+
 		entries, err := event.List(root, event.ListOpts{
 			Type:  eventListType,
-			Since: eventListSince,
+			Since: since,
+			Until: until,
 			Tail:  eventListTail,
 		})
 		if err != nil {
 			return err
+		}
+
+		var titles map[string]string
+		if eventListWithTitle {
+			titles = loadTitleIndex(root)
 		}
 
 		if info, statErr := event.Stat(root); statErr == nil && (!info.Exists || info.Size == 0) {
@@ -184,6 +228,16 @@ all; absent means "an older mg wrote this", which is itself unmeasurable.`,
 		}
 
 		for _, e := range entries {
+			if titles != nil {
+				if title, ok := titles[e.Extra["item_id"]]; ok && e.Extra["item_id"] != "" {
+					extra := make(map[string]string, len(e.Extra)+1)
+					for k, v := range e.Extra {
+						extra[k] = v
+					}
+					extra["title"] = title
+					e.Extra = extra
+				}
+			}
 			data, _ := json.Marshal(e)
 			fmt.Println(string(data))
 		}
@@ -193,7 +247,9 @@ all; absent means "an older mg wrote this", which is itself unmeasurable.`,
 
 func init() {
 	eventListCmd.Flags().StringVar(&eventListType, "type", "", "filter by event type")
-	eventListCmd.Flags().StringVar(&eventListSince, "since", "", "filter events at or after this RFC3339 timestamp")
+	eventListCmd.Flags().StringVar(&eventListSince, "since", "", "keep events at or after this time: RFC3339, YYYY-MM-DD (local midnight), or a duration ago (24h, 7d)")
+	eventListCmd.Flags().StringVar(&eventListUntil, "until", "", "keep events strictly BEFORE this time (exclusive); same forms as --since")
+	eventListCmd.Flags().BoolVar(&eventListWithTitle, "with-title", false, "add each item's CURRENT title (not the title at event time) to events that carry item_id")
 	eventListCmd.Flags().IntVar(&eventListTail, "tail", 0, "show only the last N entries")
 	// `event list` output is already unconditional NDJSON (one JSON object per
 	// line), so --json is accepted for consistency with list/spend/show and is
@@ -203,4 +259,51 @@ func init() {
 
 	eventCmd.AddCommand(eventAppendCmd)
 	eventCmd.AddCommand(eventListCmd)
+}
+
+// parseTimeBound turns a --since/--until value into an instant. It accepts
+// RFC3339 with any offset, a bare YYYY-MM-DD meaning local midnight at the
+// start of that day (the anchor 'mg spend --window' uses), or a duration such
+// as 24h or 7d meaning that long before now. Empty means no bound (zero time).
+// Anything else is a usage error: an unparsed bound used to be compared as a
+// string and silently matched nothing (drellem2/macguffin#48).
+func parseTimeBound(flag, value string, now time.Time) (time.Time, error) {
+	v := strings.TrimSpace(value)
+	if v == "" {
+		return time.Time{}, nil
+	}
+	if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+		return t, nil
+	}
+	if t, err := time.ParseInLocation("2006-01-02", v, now.Location()); err == nil {
+		return t, nil
+	}
+	if d, err := parseDuration(v); err == nil {
+		return now.Add(-d), nil
+	}
+	return time.Time{}, mgerr.Usage("invalid_value",
+		fmt.Sprintf("%s: %q is not a time: want RFC3339 (2026-11-21T00:00:00+05:00), YYYY-MM-DD (local midnight), or a duration (24h, 7d)", flag, value),
+		"")
+}
+
+// loadTitleIndex maps every work item id to its CURRENT title, across all
+// active statuses and the archive. Archived records are indexed first so that
+// an active record with the same id wins: the live title is the current one.
+func loadTitleIndex(root string) map[string]string {
+	idx := make(map[string]string)
+	if archived, err := workitem.ListArchived(root); err == nil {
+		for _, it := range archived {
+			idx[it.ID] = it.Title
+		}
+	}
+	for _, status := range []string{"available", "claimed", "done", "pending", "shelved"} {
+		items, err := workitem.ListByStatus(root, status)
+		if err != nil {
+			continue
+		}
+		for _, it := range items {
+			idx[it.ID] = it.Title
+		}
+	}
+	return idx
 }
