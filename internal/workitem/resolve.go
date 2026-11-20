@@ -39,6 +39,14 @@ import (
 // an ambiguity error — a healthy store has exactly one match.
 var activeStates = []string{"available", "claimed", "done", "pending", "shelved"}
 
+// ActiveStatuses returns the non-archive lifecycle directories under work/
+// (a fresh copy, so callers cannot mutate the shared list). Callers that index
+// every item — spend's item map, event list's title index — iterate this plus
+// ListArchived, so a new status is added in exactly one place.
+func ActiveStatuses() []string {
+	return append([]string(nil), activeStates...)
+}
+
 // liveStates are the statuses of a work item that is still part of the
 // workflow: something an agent can still claim, finish, or unshelve. "done" and
 // "archived" are terminal — historical records, not work. Precedence between

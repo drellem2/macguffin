@@ -277,7 +277,7 @@ func GrandTotal(root string, since time.Time) (Totals, error) {
 // joins.
 func loadItemMap(root string) (map[string]*workitem.Item, error) {
 	idx := make(map[string]*workitem.Item)
-	for _, status := range []string{"available", "claimed", "done", "pending", "shelved"} {
+	for _, status := range workitem.ActiveStatuses() {
 		items, err := workitem.ListByStatus(root, status)
 		if err != nil {
 			continue

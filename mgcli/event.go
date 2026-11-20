@@ -122,7 +122,8 @@ bound is written in does not matter. Each accepts:
   RFC3339       2026-11-21T00:00:00+05:00, 2026-11-20T19:00:00Z (any offset)
   YYYY-MM-DD    a bare date means LOCAL midnight at the start of that day, the
                 same anchor as 'mg spend --window=today'
-  duration      24h, 30m, 7d: that long before now
+  duration      24h, 30m, 7d: that long before now. No sign: -24h is a usage
+                error, because it would name a time in the future
 
 --since is inclusive (ts >= since); --until is EXCLUSIVE (ts < until), so
 --since=2026-11-19 --until=2026-11-20 is exactly the local day of the 19th.
@@ -133,8 +134,9 @@ TITLES: --with-title
 --with-title adds a 'title' field to every event that names an item
 ('item_id'). It is the item's CURRENT title, looked up across every status
 including archived at the time you run the command; it is NOT the title the
-item had when the event was written, and events themselves carry no title. An
-event whose item can no longer be found gets no 'title' field.
+item had when the event was written. An event that already carries a 'title'
+key keeps it unchanged; only events without one get the item's title. An event
+whose item can no longer be found gets no 'title' field.
 
 READING 'actor'
 
@@ -229,7 +231,10 @@ all; absent means "an older mg wrote this", which is itself unmeasurable.`,
 
 		for _, e := range entries {
 			if titles != nil {
-				if title, ok := titles[e.Extra["item_id"]]; ok && e.Extra["item_id"] != "" {
+				_, hasTitle := e.Extra["title"]
+				// An event that already carries a 'title' keeps it: --with-title
+				// adds the item's title only where there is none.
+				if title, ok := titles[e.Extra["item_id"]]; ok && e.Extra["item_id"] != "" && !hasTitle {
 					extra := make(map[string]string, len(e.Extra)+1)
 					for k, v := range e.Extra {
 						extra[k] = v
@@ -278,6 +283,15 @@ func parseTimeBound(flag, value string, now time.Time) (time.Time, error) {
 	if t, err := time.ParseInLocation("2006-01-02", v, now.Location()); err == nil {
 		return t, nil
 	}
+	// A leading '-' is refused outright. time.ParseDuration accepts "-24h",
+	// and now.Add(-(-24h)) is a bound in the FUTURE, which matched nothing and
+	// exited 0 while "-7d" was already an error: the same silent-empty class
+	// macguffin#48 removed. Durations count back from now; no sign is needed.
+	if strings.HasPrefix(v, "-") {
+		return time.Time{}, mgerr.Usage("invalid_value",
+			fmt.Sprintf("%s: %q: durations count back from now; write %s, not %s", flag, value, strings.TrimLeft(v, "-"), v),
+			"")
+	}
 	if d, err := parseDuration(v); err == nil {
 		return now.Add(-d), nil
 	}
@@ -296,7 +310,7 @@ func loadTitleIndex(root string) map[string]string {
 			idx[it.ID] = it.Title
 		}
 	}
-	for _, status := range []string{"available", "claimed", "done", "pending", "shelved"} {
+	for _, status := range workitem.ActiveStatuses() {
 		items, err := workitem.ListByStatus(root, status)
 		if err != nil {
 			continue

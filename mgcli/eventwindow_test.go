@@ -38,7 +38,7 @@ func TestParseTimeBound(t *testing.T) {
 		}
 	}
 
-	for _, bad := range []string{"yesterday", "2026-13-01", "2026-11-21 00:00", "7x"} {
+	for _, bad := range []string{"yesterday", "2026-13-01", "2026-11-21 00:00", "7x", "-24h", "-7d", "-30m", " -24h", "-0s"} {
 		if _, err := parseTimeBound("--until", bad, now); err == nil {
 			t.Errorf("parseTimeBound(%q) should be a usage error", bad)
 		} else if !strings.Contains(err.Error(), "--until") {
@@ -69,6 +69,7 @@ func TestEventList_WindowTitleAndUsage(t *testing.T) {
 		`{"ts":"2026-11-20T22:14:15Z","type":"work.done","item_id":"` + id + `"}`,
 		`{"ts":"2026-11-20T22:30:00Z","type":"work.done","item_id":"mg-gone0"}`,
 		`{"ts":"2026-11-20T23:00:00Z","type":"mail.read","mailbox":"mayor"}`,
+		`{"ts":"2026-11-20T22:20:00Z","type":"work.note","item_id":"` + id + `","title":"title written at event time"}`,
 	}
 	if err := os.WriteFile(filepath.Join(root, "events.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -87,18 +88,26 @@ func TestEventList_WindowTitleAndUsage(t *testing.T) {
 		}
 		got = append(got, m)
 	}
-	if len(got) != 2 {
-		t.Fatalf("want 2 events (22:14:15Z and 22:30Z; 18:59:59Z before since, 23:00Z at exclusive until), got:\n%s", out)
+	byTs := map[string]map[string]string{}
+	for _, m := range got {
+		byTs[m["ts"]] = m
 	}
-	if got[0]["ts"] != "2026-11-20T22:14:15Z" || got[0]["title"] != "current title" {
-		t.Errorf("first event should be 22:14:15Z with the CURRENT title, got %v", got[0])
+	if len(got) != 3 {
+		t.Fatalf("want 3 events (22:14:15Z, 22:20Z and 22:30Z; 18:59:59Z before since, 23:00Z at exclusive until), got:\n%s", out)
 	}
-	if _, ok := got[1]["title"]; ok {
-		t.Errorf("an item that cannot be found should get no title field, got %v", got[1])
+	if e := byTs["2026-11-20T22:14:15Z"]; e["title"] != "current title" {
+		t.Errorf("22:14:15Z should carry the CURRENT title, got %v", e)
+	}
+	// An event that already carries a 'title' keeps it (mg-730e9).
+	if e := byTs["2026-11-20T22:20:00Z"]; e["title"] != "title written at event time" {
+		t.Errorf("--with-title must not overwrite an existing 'title' key, got %v", e)
+	}
+	if _, ok := byTs["2026-11-20T22:30:00Z"]["title"]; ok {
+		t.Errorf("an item that cannot be found should get no title field, got %v", byTs["2026-11-20T22:30:00Z"])
 	}
 
 	// Without --with-title, no title field appears.
-	out, _ = mgArchive(t, bin, root, "event", "list", "--since=2026-11-20T22:00:00Z", "--until=2026-11-20T22:20:00Z")
+	out, _ = mgArchive(t, bin, root, "event", "list", "--since=2026-11-20T22:00:00Z", "--until=2026-11-20T22:19:00Z")
 	if strings.Contains(out, `"title"`) {
 		t.Errorf("title must only appear with --with-title, got:\n%s", out)
 	}
@@ -107,5 +116,22 @@ func TestEventList_WindowTitleAndUsage(t *testing.T) {
 	out, code = mgArchive(t, bin, root, "event", "list", "--since=yesterday")
 	if code != 2 {
 		t.Errorf("--since=yesterday: want exit 2 (usage), got %d\n%s", code, out)
+	}
+
+	// A signed duration is a usage error on both flags, the same outcome for
+	// -24h as for -7d (mg-730e9). -24h used to resolve to now+24h and print
+	// nothing at exit 0. Positive control: the unsigned form still succeeds.
+	for _, flag := range []string{"--since", "--until"} {
+		for _, v := range []string{"-24h", "-7d"} {
+			out, code = mgArchive(t, bin, root, "event", "list", flag+"="+v)
+			if code != 2 {
+				t.Errorf("%s=%s: want exit 2 (usage), got %d\n%s", flag, v, code, out)
+			} else if !strings.Contains(out, "durations count back from now") {
+				t.Errorf("%s=%s: error should explain the sign, got:\n%s", flag, v, out)
+			}
+		}
+	}
+	if out, code = mgArchive(t, bin, root, "event", "list", "--since=24h"); code != 0 {
+		t.Errorf("--since=24h (positive control): want exit 0, got %d\n%s", code, out)
 	}
 }
